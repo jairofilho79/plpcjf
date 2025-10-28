@@ -1,0 +1,417 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#007bff">
+  <title>Pesquisador de Louvores</title>
+  <link rel="manifest" href="/manifest.json">
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: Arial, sans-serif;
+    }
+
+    .sidebar {
+      height: 100%;
+      width: 0;
+      position: fixed;
+      z-index: 1;
+      top: 0;
+      left: 0;
+      background-color: #111;
+      overflow-x: hidden;
+      transition: 0.5s;
+      padding-top: 60px;
+    }
+
+    .sidebar a {
+      padding: 8px 8px 8px 32px;
+      text-decoration: none;
+      font-size: 25px;
+      color: #818181;
+      display: block;
+      transition: 0.3s;
+    }
+
+    .sidebar .closebtn {
+      position: absolute;
+      top: 0;
+      right: 25px;
+      font-size: 36px;
+      margin-left: 50px;
+    }
+
+    .openbtn {
+      font-size: 20px;
+      cursor: pointer;
+      background-color: #111;
+      color: white;
+      padding: 10px 15px;
+      border: none;
+      position: fixed;
+      top: 10px;
+      left: 10px;
+      z-index: 2;
+    }
+
+    .search-container {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      margin-top: 20px;
+      padding: 20px;
+    }
+
+    .search-input {
+      width: 85vw;
+      height: 10vh;
+      padding: 10px;
+      font-size: 18px;
+      border: 2px solid #ddd;
+      border-radius: 5px;
+    }
+
+    .input-options {
+      width: 85vw;
+      padding: 10px;
+      background-color: #f5f5f5;
+      border-radius: 5px;
+      margin-top: 10px;
+    }
+
+    .checkbox-container {
+      margin: 10px 0;
+    }
+
+    .pdf-viewer-select {
+      width: 85vw;
+      padding: 10px;
+      font-size: 16px;
+      border: 2px solid #ddd;
+      border-radius: 5px;
+      background-color: white;
+      margin-top: 10px;
+      cursor: pointer;
+    }
+
+    .pdf-viewer-select:focus {
+      outline: none;
+      border-color: #007bff;
+    }
+
+    .chip-carousel {
+      width: 85vw;
+      margin: 20px auto 0 auto;
+      padding: 10px;
+      background-color: #f8f9fa;
+      border-radius: 8px;
+      border: 1px solid #e9ecef;
+    }
+
+    .chip-carousel-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 10px;
+    }
+
+    .chip-carousel-title {
+      font-size: 16px;
+      font-weight: 600;
+      color: #495057;
+    }
+
+    .clear-carousel-btn {
+      background-color: #dc3545;
+      color: white;
+      border: none;
+      padding: 6px 12px;
+      border-radius: 4px;
+      font-size: 12px;
+      cursor: pointer;
+      transition: background-color 0.2s;
+    }
+
+    .clear-carousel-btn:hover {
+      background-color: #c82333;
+    }
+
+    .chips-container {
+      display: flex;
+      gap: 8px;
+      overflow-x: auto;
+      padding: 5px 0;
+      scrollbar-width: thin;
+      scrollbar-color: #ccc #f8f9fa;
+    }
+
+    .chips-container::-webkit-scrollbar {
+      height: 6px;
+    }
+
+    .chips-container::-webkit-scrollbar-track {
+      background: #f8f9fa;
+      border-radius: 3px;
+    }
+
+    .chips-container::-webkit-scrollbar-thumb {
+      background: #ccc;
+      border-radius: 3px;
+    }
+
+    .chip {
+      display: flex;
+      align-items: center;
+      background-color: #007bff;
+      color: white;
+      padding: 8px 12px;
+      border-radius: 20px;
+      font-size: 14px;
+      white-space: nowrap;
+      cursor: pointer;
+      transition: background-color 0.2s;
+      flex-shrink: 0;
+    }
+
+    .chip:hover {
+      background-color: #0056b3;
+    }
+
+    .chip-close {
+      margin-left: 8px;
+      background: none;
+      border: none;
+      color: white;
+      font-size: 16px;
+      cursor: pointer;
+      padding: 0;
+      width: 20px;
+      height: 20px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 50%;
+      transition: background-color 0.2s;
+    }
+
+    .chip-close:hover {
+      background-color: rgba(255, 255, 255, 0.2);
+    }
+
+    .louvor-card {
+      display: grid;
+      grid-template-columns: 1fr 30%;
+      width: 60vw;
+      height: 25vh;
+      padding: 1.5rem;
+      border: 1px solid #ccc;
+      border-radius: 8px;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+      transition: transform 0.2s;
+      background-color: #fff;
+    }
+
+    .louvor-card:hover {
+      transform: translateY(-2px);
+    }
+
+    .louvor-info {
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+    }
+
+    .add-to-carousel-btn {
+      background-color: #1e3a8a;
+      color: white;
+      border: none;
+      border-radius: 8px;
+      font-size: 24px;
+      cursor: pointer;
+      transition: background-color 0.2s;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 100%;
+      height: 100%;
+    }
+
+    .add-to-carousel-btn:hover {
+      background-color: #1e40af;
+    }
+
+    .add-to-carousel-btn:disabled {
+      background-color: #6c757d;
+      cursor: not-allowed;
+    }
+
+    @media screen and (max-width: 768px) {
+      .sidebar {
+        padding-top: 15px;
+      }
+
+      .sidebar a {
+        font-size: 18px;
+      }
+    }
+
+    @media screen and (max-width: 480px) {
+      .search-input {
+        height: 8vh;
+        font-size: 16px;
+      }
+    }
+  </style>
+</head>
+
+<body>
+  <!-- <div id="mySidebar" class="sidebar">
+    <a href="javascript:void(0)" class="closebtn" onclick="closeNav()">&times;</a>
+    <a href="#">Opção 1</a>
+    <a href="#">Opção 2</a>
+    <a href="#">Opção 3</a>
+  </div> -->
+
+  <!-- <button class="openbtn" onclick="openNav()">☰</button> -->
+
+  <!-- Progress Modal -->
+  <div id="installProgressModal" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.8); z-index: 9999; align-items: center; justify-content: center;">
+    <div style="background: white; padding: 30px; border-radius: 10px; max-width: 400px; text-align: center;">
+      <h3 style="margin-bottom: 20px;">Instalando aplicação offline...</h3>
+      <div style="background: #f0f0f0; border-radius: 5px; height: 20px; margin: 20px 0;">
+        <div id="installProgressBar" style="background: #007bff; height: 100%; border-radius: 5px; transition: width 0.3s; width: 0%"></div>
+      </div>
+      <p id="installProgressText" style="margin: 10px 0;">Preparando...</p>
+      <button id="cancelInstall" onclick="cancelInstall()" style="margin-top: 20px; padding: 10px 20px; background: #dc3545; color: white; border: none; border-radius: 5px; cursor: pointer;">Cancelar</button>
+    </div>
+  </div>
+
+  <!-- Update Banner -->
+  <div id="updateBanner" style="display: none; position: fixed; bottom: 0; left: 0; right: 0; background: #007bff; color: white; padding: 15px; text-align: center; z-index: 9998; box-shadow: 0 -2px 10px rgba(0,0,0,0.2);">
+    <span style="margin-right: 20px;">Nova versão disponível!</span>
+    <button onclick="updateApp()" style="padding: 8px 20px; background: white; color: #007bff; border: none; border-radius: 5px; cursor: pointer; font-weight: bold;">Atualizar Agora</button>
+  </div>
+
+  <div class="search-container">
+    <div style="position: relative; width: 85vw;">
+      <button onclick="clearSearch()" id="searchButtonClear"
+        style="position: absolute; left: 10px; top: 50%; transform: translateY(-50%); padding: 8px 15px; background: transparent; color: #111; border: 2px solid #111; border-radius: 5px; cursor: pointer; display: block; z-index: 2;">
+        Limpar
+      </button>
+      <input type="text" id="searchInput" class="search-input" placeholder="Pesquisar louvor..." onkeyup="handleInputValidation(event)" style="padding-left: 90px;" onkeyup="handleInputValidation(event)">
+      <button onclick="handleSearch()" id="searchButton"
+        style="position: absolute; right: 10px; top: 50%; transform: translateY(-50%); padding: 8px 15px; background: transparent; color: #111; border: 2px solid #111; border-radius: 5px; cursor: pointer; display: none;">
+        Pesquisar
+      </button>
+      <button disabled id="searchButtonDisabled"
+        style="position: absolute; right: 10px; top: 50%; transform: translateY(-50%); padding: 8px 15px; background: transparent; color: #777; border: 2px solid #999; border-radius: 5px; cursor: not-allowed; display: block;">
+        Digite...
+      </button>
+    </div>
+
+    <select id="pdfViewerSelect" class="pdf-viewer-select" onchange="handlePdfViewerChange(event)">
+      <option value="newtab">Abrir PDF em nova aba</option>
+      <option value="default">Abrir PDF no navegador</option>
+      <option value="share">Compartilhar (menu do sistema)</option>
+      <option value="save">Salvar/baixar para o dispositivo</option>
+    </select>
+
+    <!-- <div class="input-options">
+      <label class="checkbox-container">
+        <input type="checkbox" id="searchTitle" onchange="searchTitleHandler(event)"> Título
+      </label>
+      <label class="checkbox-container">
+        <input type="checkbox" id="searchNumberCol" onchange="searchNumberColHandler(event)"> Número
+      </label>
+    </div> -->
+  </div>
+
+  <div id="chipCarousel" class="chip-carousel" style="display: none;">
+    <div class="chip-carousel-header">
+      <div class="chip-carousel-title">Louvores Selecionados</div>
+      <button class="clear-carousel-btn" onclick="clearCarousel()">Limpar Todos</button>
+    </div>
+    <div class="chips-container" id="chipsContainer">
+      <!-- Chips serão adicionados aqui dinamicamente -->
+    </div>
+  </div>
+
+  <div id="searchResults"></div>
+
+  <script src="main.js"></script>
+  <script>
+    // Service Worker registration
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('/sw.js')
+          .then((registration) => {
+            console.log('SW registered:', registration);
+            
+            // Check for updates
+            registration.addEventListener('updatefound', () => {
+              const newWorker = registration.installing;
+              newWorker.addEventListener('statechange', () => {
+                if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
+                  // New SW installed and waiting
+                  document.getElementById('updateBanner').style.display = 'block';
+                }
+              });
+            });
+          })
+          .catch((error) => {
+            console.error('SW registration failed:', error);
+          });
+      });
+    }
+
+    // Listen for progress updates from SW
+    if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
+      navigator.serviceWorker.addEventListener('message', (event) => {
+        if (event.data.type === 'PROGRESS') {
+          updateInstallProgress(event.data.progress);
+        }
+      });
+    }
+
+    function updateInstallProgress(progress) {
+      const modal = document.getElementById('installProgressModal');
+      const bar = document.getElementById('installProgressBar');
+      const text = document.getElementById('installProgressText');
+      
+      if (progress.current < progress.total) {
+        modal.style.display = 'flex';
+        const percent = (progress.current / progress.total) * 100;
+        bar.style.width = percent + '%';
+        text.textContent = `Baixando PDFs: ${progress.current}/${progress.total}`;
+      } else {
+        modal.style.display = 'none';
+      }
+    }
+
+    function cancelInstall() {
+      // Cancel installation - just close modal
+      document.getElementById('installProgressModal').style.display = 'none';
+      console.log('Installation cancelled by user');
+    }
+
+    function updateApp() {
+      if (navigator.serviceWorker.controller) {
+        navigator.serviceWorker.controller.postMessage({ type: 'SKIP_WAITING' });
+        window.location.reload();
+      }
+    }
+
+    // Listen for controller change (app updated)
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      window.location.reload();
+    });
+  </script>
+</body>
+
+</html>
