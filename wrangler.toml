@@ -4,12 +4,8 @@ compatibility_date = "2024-01-01"
 
 # Configuração de ambientes
 [env.production]
-# Rotas para interceptar PDFs e manifest
-routes = [
-  { pattern = "plpcjf.org/assets/*.pdf", custom_domain = true },
-  { pattern = "plpcjf.org/louvores-manifest.json", custom_domain = true },
-  { pattern = "plpcjf.org/api/*", custom_domain = true }
-]
+# Rotas serão configuradas no Dashboard do Cloudflare
+# Não use rotas aqui para domínios customizados
 
 [[env.production.r2_buckets]]
 binding = "LOUVORES_BUCKET"
