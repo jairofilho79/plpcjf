@@ -143,9 +143,9 @@ const makeHTMLSearchCardResponse = (louvor) => {
   // Attach click handler to honor pdfViewerMode for share/save
   const link = card.querySelector('a.louvor-info');
   link.addEventListener('click', async (e) => {
+    const pdfPath = `assets/${pdfMapper(louvor.classificacao)}${louvor.pdf}`;
     if (pdfViewerMode === 'share' || pdfViewerMode === 'save') {
       e.preventDefault();
-      const pdfPath = `assets/${pdfMapper(louvor.classificacao)}${louvor.pdf}`;
       try {
         const blob = await fetchPdfAsBlob(pdfPath);
         if (pdfViewerMode === 'share') {
@@ -155,9 +155,14 @@ const makeHTMLSearchCardResponse = (louvor) => {
         }
       } catch (err) {
         console.error('Erro ao processar PDF:', err);
-        // Fallback: abrir em nova aba
         window.open(pdfPath, '_blank');
       }
+      return;
+    }
+    if (pdfViewerMode === 'newtab') {
+      e.preventDefault();
+      await openPdfNewTabOfflineFirst(`/${pdfPath}`, `${pdfMapper(louvor.classificacao).replace('/', '')}-${louvor.numero}.pdf`);
+      return;
     }
   });
   return card;
@@ -308,7 +313,7 @@ const openPdfFromChip = (louvor) => {
   const pdfPath = `assets/${pdfMapper(louvor.classificacao)}${louvor.pdf}`;
   
   if (pdfViewerMode === 'newtab') {
-    window.open(pdfPath, '_blank');
+    openPdfNewTabOfflineFirst(`/${pdfPath}`, `${pdfMapper(louvor.classificacao).replace('/', '')}-${louvor.numero}.pdf`);
     return;
   }
   if (pdfViewerMode === 'share') {
@@ -377,6 +382,28 @@ async function fetchPdfAsBlob(pdfPath) {
   const res = await fetch(pdfPath);
   if (!res.ok) throw new Error('Falha ao baixar PDF');
   return await res.blob();
+}
+
+// Open PDF in new tab, preferring cache via Blob URL for offline robustness
+async function openPdfNewTabOfflineFirst(relPath, filename = 'file.pdf') {
+  try {
+    const localUrl = new URL(relPath, window.location.origin).href;
+    const cached = await caches.match(localUrl);
+    if (cached) {
+      const blob = await cached.blob();
+      const blobUrl = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = blobUrl; a.target = '_blank'; a.rel = 'noopener'; a.download = filename;
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 60000);
+      return true;
+    }
+    window.open(localUrl, '_blank', 'noopener');
+    return false;
+  } catch (_) {
+    window.open(relPath, '_blank', 'noopener');
+    return false;
+  }
 }
 
 async function sharePdf(blob, filename, title) {

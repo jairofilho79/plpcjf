@@ -368,6 +368,16 @@
           navigator.serviceWorker.register('/sw.js')
             .then((registration) => {
               console.log('SW registered:', registration);
+              // After registration, request full PDF sync when controlled
+              if (navigator.serviceWorker.controller) {
+                navigator.serviceWorker.controller.postMessage({ type: 'SYNC_PDFS' });
+              } else {
+                navigator.serviceWorker.addEventListener('controllerchange', () => {
+                  if (navigator.serviceWorker.controller) {
+                    navigator.serviceWorker.controller.postMessage({ type: 'SYNC_PDFS' });
+                  }
+                }, { once: true });
+              }
               
               // Check for updates
               registration.addEventListener('updatefound', () => {
@@ -438,6 +448,12 @@
     function updateApp() {
       if (navigator.serviceWorker.controller) {
         navigator.serviceWorker.controller.postMessage({ type: 'SKIP_WAITING' });
+        // After skip waiting leads to control change, trigger sync again
+        navigator.serviceWorker.addEventListener('controllerchange', () => {
+          if (navigator.serviceWorker.controller) {
+            navigator.serviceWorker.controller.postMessage({ type: 'SYNC_PDFS' });
+          }
+        }, { once: true });
         window.location.reload();
       }
     }

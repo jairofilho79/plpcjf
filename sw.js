@@ -201,6 +201,20 @@ function getClassificationPath(classification) {
   return mapping[classification] || 'Avulsos/';
 }
 
+// Fetch manifest and ensure all PDFs are cached (idempotent)
+async function syncAllPdfs() {
+  try {
+    const resp = await fetch(LOUVORES_MANIFEST_URL);
+    if (!resp || !resp.ok) return;
+    const louvores = await resp.json();
+    if (!Array.isArray(louvores) || louvores.length === 0) return;
+    installProgress = { total: louvores.length, current: 0 };
+    await precachePdfs(louvores, 0);
+  } catch (e) {
+    console.warn('[SW] syncAllPdfs failed', e);
+  }
+}
+
 // Activate event - clean old caches
 self.addEventListener('activate', (event) => {
   // Apenas funciona em plpcjf.pages.dev
@@ -266,12 +280,8 @@ self.addEventListener('fetch', (event) => {
       // 3) fallback para domínio online com o mesmo pathname
       try {
         const fallbackUrl = new URL(url.pathname, 'https://plpcjf.org').href;
-        const fallbackReq = new Request(fallbackUrl, {
-          method: event.request.method,
-          headers: event.request.headers,
-          redirect: 'follow'
-        });
-        const resp2 = await fetch(fallbackReq);
+        // Do not construct a new Request from a navigation request; fetch directly
+        const resp2 = await fetch(fallbackUrl, { redirect: 'follow' });
         if (resp2 && resp2.ok) {
           const clone2 = resp2.clone();
           caches.open(RUNTIME_CACHE).then(c => c.put(event.request, clone2));
@@ -356,6 +366,9 @@ self.addEventListener('fetch', (event) => {
 self.addEventListener('message', (event) => {
   if (event.data && event.data.type === 'SKIP_WAITING') {
     self.skipWaiting();
+  }
+  if (event.data && event.data.type === 'SYNC_PDFS') {
+    event.waitUntil(syncAllPdfs());
   }
 });
 
