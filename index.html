@@ -298,6 +298,8 @@
     <button onclick="updateApp()" style="padding: 8px 20px; background: white; color: #007bff; border: none; border-radius: 5px; cursor: pointer; font-weight: bold;">Atualizar Agora</button>
   </div>
 
+  <h1 id="plpcHeader" style="text-align: center; margin-top: 16px; font-family: Arial, sans-serif;">PLPC</h1>
+
   <div class="search-container">
     <div style="position: relative; width: 85vw;">
       <button onclick="clearSearch()" id="searchButtonClear"
@@ -347,28 +349,16 @@
   <script src="louvores.js"></script>
   <script src="main.js"></script>
   <script>
-    // Service Worker registration - APENAS para plpcjf.pages.dev
+    // Service Worker registration (para plpcjf.org e ambientes locais)
     if ('serviceWorker' in navigator) {
-      const hostname = window.location.hostname;
-      
-      // Desregistrar SW se estiver em plpcjs.org (domínio online)
-      if (hostname === 'plpcjs.org') {
-        navigator.serviceWorker.getRegistrations().then(registrations => {
-          registrations.forEach(registration => {
-            console.log('[SW] Unregistering SW for online domain');
-            registration.unregister();
-          });
-        });
-        return; // Não registrar SW neste domínio
-      }
-      
-      // Registrar SW apenas para plpcjf.pages.dev (domínio offline)
-      if (hostname === 'plpcjf.pages.dev') {
-        window.addEventListener('load', () => {
-          navigator.serviceWorker.register('/sw.js')
-            .then((registration) => {
-              console.log('SW registered:', registration);
-              // After registration, request full PDF sync when controlled
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('/sw.js')
+          .then((registration) => {
+            console.log('SW registered:', registration);
+
+            // Sincronizar PDFs apenas para usuários permitidos
+            const allowSync = localStorage.getItem('ALLOW_PDF_SYNC') === '1';
+            if (allowSync) {
               if (navigator.serviceWorker.controller) {
                 navigator.serviceWorker.controller.postMessage({ type: 'SYNC_PDFS' });
               } else {
@@ -378,23 +368,22 @@
                   }
                 }, { once: true });
               }
-              
-              // Check for updates
-              registration.addEventListener('updatefound', () => {
-                const newWorker = registration.installing;
-                newWorker.addEventListener('statechange', () => {
-                  if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
-                    // New SW installed and waiting
-                    document.getElementById('updateBanner').style.display = 'block';
-                  }
-                });
+            }
+
+            // Check for updates
+            registration.addEventListener('updatefound', () => {
+              const newWorker = registration.installing;
+              newWorker.addEventListener('statechange', () => {
+                if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
+                  document.getElementById('updateBanner').style.display = 'block';
+                }
               });
-            })
-            .catch((error) => {
-              console.error('SW registration failed:', error);
             });
-        });
-      }
+          })
+          .catch((error) => {
+            console.error('SW registration failed:', error);
+          });
+      });
     }
 
     // Listen for progress updates and verification summary from SW
@@ -462,6 +451,63 @@
     navigator.serviceWorker.addEventListener('controllerchange', () => {
       window.location.reload();
     });
+
+    // ====== PLPC header hidden activation (7 taps in 10s) ======
+    (function setupPlpcHeaderActivation() {
+      const header = document.getElementById('plpcHeader');
+      if (!header) return;
+
+      let tapCount = 0;
+      let windowStart = 0;
+      const WINDOW_MS = 10000; // 10 seconds
+      const REQUIRED_TAPS = 7;
+
+      function resetWindow(now) {
+        tapCount = 0;
+        windowStart = now;
+      }
+
+      function showStartingOfflineModal() {
+        const modal = document.getElementById('installProgressModal');
+        const bar = document.getElementById('installProgressBar');
+        const text = document.getElementById('installProgressText');
+        if (bar) bar.style.width = '0%';
+        if (text) text.textContent = 'Começando processo de uso offline...';
+        if (modal) modal.style.display = 'flex';
+      }
+
+      function beginSyncIfPossible() {
+        if (navigator.serviceWorker && navigator.serviceWorker.controller) {
+          navigator.serviceWorker.controller.postMessage({ type: 'SYNC_PDFS' });
+        } else if (navigator.serviceWorker) {
+          navigator.serviceWorker.addEventListener('controllerchange', () => {
+            if (navigator.serviceWorker.controller) {
+              navigator.serviceWorker.controller.postMessage({ type: 'SYNC_PDFS' });
+            }
+          }, { once: true });
+        }
+      }
+
+      function onTap() {
+        const now = Date.now();
+        if (windowStart === 0 || (now - windowStart) > WINDOW_MS) {
+          resetWindow(now);
+        }
+        tapCount += 1;
+        if (tapCount >= REQUIRED_TAPS) {
+          // Enable offline sync
+          try {
+            localStorage.setItem('ALLOW_PDF_SYNC', '1');
+          } catch (_) {}
+          showStartingOfflineModal();
+          beginSyncIfPossible();
+          resetWindow(now);
+        }
+      }
+
+      header.addEventListener('click', onTap);
+      header.addEventListener('touchend', onTap, { passive: true });
+    })();
   </script>
 </body>
 

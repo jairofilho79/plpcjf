@@ -1,18 +1,12 @@
 // Service Worker for Louvores PWA
-const CACHE_NAME = 'pls-v1';
-const RUNTIME_CACHE = 'pls-runtime-v1';
+const CACHE_NAME = 'pls-v2';
+const RUNTIME_CACHE = 'pls-runtime-v2';
 const LOUVORES_MANIFEST_URL = '/louvores-manifest.json';
 
 let installProgress = { total: 0, current: 0 };
 
 // Install event - precache app shell and PDFs
 self.addEventListener('install', (event) => {
-  // Apenas funciona em plpcjf.pages.dev
-  if (self.location.hostname !== 'plpcjf.pages.dev') {
-    console.log('[SW] Skipping install - wrong domain');
-    return; // Não instalar em outros domínios
-  }
-  
   console.log('[SW] Installing service worker...');
   event.waitUntil(
     caches.open(CACHE_NAME)
@@ -23,7 +17,8 @@ self.addEventListener('install', (event) => {
           '/index.html',
           '/main.js',
           '/louvores.js',
-          '/manifest.json'
+          '/manifest.json',
+          '/louvores-manifest.json'
         ]);
       })
       .then(() => {
@@ -217,12 +212,6 @@ async function syncAllPdfs() {
 
 // Activate event - clean old caches
 self.addEventListener('activate', (event) => {
-  // Apenas funciona em plpcjf.pages.dev
-  if (self.location.hostname !== 'plpcjf.pages.dev') {
-    console.log('[SW] Skipping activate - wrong domain');
-    return; // Não ativar em outros domínios
-  }
-  
   console.log('[SW] Activating service worker...');
   event.waitUntil(
     caches.keys()
@@ -248,25 +237,52 @@ self.addEventListener('activate', (event) => {
 // Fetch event - serve cached content
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
-  
+
   // Skip cross-origin requests
   if (url.origin !== location.origin) {
     return;
   }
-  
-  // Apenas funciona em plpcjf.pages.dev
-  if (url.hostname !== 'plpcjf.pages.dev') {
-    return; // Não intercepta, deixa passar para network
-  }
-  
-  // For PDFs: usar a request original e aplicar fallback para plpcjf.org quando necessário
-  if (url.pathname.endsWith('.pdf')) {
-    event.respondWith((async () => {
-      // 1) cache primeiro
+
+  event.respondWith((async () => {
+    // Determine if this request comes from an offline client (/offline)
+    let isOfflineClient = false;
+    try {
+      if (event.clientId) {
+        const client = await self.clients.get(event.clientId);
+        if (client) {
+          const clientPath = new URL(client.url).pathname;
+          if (clientPath.startsWith('/offline')) {
+            isOfflineClient = true;
+          }
+        }
+      }
+    } catch (_) {}
+
+    // If navigating to /offline, always serve cached index.html
+    if (event.request.mode === 'navigate') {
+      if (url.pathname === '/offline') {
+        const cachedIndex = await caches.match('/index.html');
+        if (cachedIndex) return cachedIndex;
+        try {
+          const resp = await fetch('/index.html');
+          return resp;
+        } catch (_) {
+          return new Response('Offline', { status: 503 });
+        }
+      }
+    }
+
+    // In offline-client mode, enforce cache-only for all requests
+    if (isOfflineClient) {
       const cached = await caches.match(event.request);
       if (cached) return cached;
+      return new Response('Offline', { status: 503 });
+    }
 
-      // 2) tentar origin atual
+    // For PDFs with online fallback
+    if (url.pathname.endsWith('.pdf')) {
+      const cached = await caches.match(event.request);
+      if (cached) return cached;
       try {
         const resp = await fetch(event.request);
         const ct = (resp.headers.get('content-type') || '').toLowerCase();
@@ -276,11 +292,8 @@ self.addEventListener('fetch', (event) => {
           return resp;
         }
       } catch (_) {}
-
-      // 3) fallback para domínio online com o mesmo pathname
       try {
         const fallbackUrl = new URL(url.pathname, 'https://plpcjf.org').href;
-        // Do not construct a new Request from a navigation request; fetch directly
         const resp2 = await fetch(fallbackUrl, { redirect: 'follow' });
         if (resp2 && resp2.ok) {
           const clone2 = resp2.clone();
@@ -288,78 +301,44 @@ self.addEventListener('fetch', (event) => {
           return resp2;
         }
       } catch (_) {}
-
       return new Response('Offline', { status: 503 });
-    })());
-    return;
-  }
-  
-  // For app shell, use cache-first strategy
-  if (url.pathname === '/' || 
-      url.pathname === '/index.html' ||
-      url.pathname === '/main.js' ||
-      url.pathname === '/louvores.js' ||
-      url.pathname === '/manifest.json') {
-    event.respondWith(
-      caches.match(event.request)
-        .then(cachedResponse => {
-          if (cachedResponse) {
-            return cachedResponse;
-          }
-          // If not in cache, fetch from network and cache it
-          return fetch(event.request)
-            .then(response => {
-              if (!response || response.status !== 200) {
-                return response;
-              }
-              const responseClone = response.clone();
-              caches.open(RUNTIME_CACHE)
-                .then(cache => {
-                  cache.put(event.request, responseClone);
-                });
-              return response;
-            });
-        })
-        .catch(() => {
-          // If offline and not in cache, return offline page
-          return new Response('Offline', { status: 503 });
-        })
-    );
-    return;
-  }
-  
-  // For louvores manifest, check network first for updates
-  if (url.pathname === LOUVORES_MANIFEST_URL) {
-    event.respondWith(
-      fetch(event.request)
-        .then(networkResponse => {
-          const responseClone = networkResponse.clone();
-          caches.open(RUNTIME_CACHE)
-            .then(cache => cache.put(event.request, responseClone));
-          return networkResponse;
-        })
-        .catch(() => {
-          return caches.match(event.request);
-        })
-    );
-    return;
-  }
-  
-  // For other requests, try network with cache fallback
-  event.respondWith(
-    fetch(event.request)
-      .then(response => {
+    }
+
+    // App shell: cache-first
+    if (url.pathname === '/' ||
+        url.pathname === '/index.html' ||
+        url.pathname === '/main.js' ||
+        url.pathname === '/louvores.js' ||
+        url.pathname === '/manifest.json' ||
+        url.pathname === '/louvores-manifest.json') {
+      const cachedResponse = await caches.match(event.request);
+      if (cachedResponse) return cachedResponse;
+      try {
+        const response = await fetch(event.request);
         if (response && response.status === 200) {
           const responseClone = response.clone();
-          caches.open(RUNTIME_CACHE)
-            .then(cache => cache.put(event.request, responseClone));
+          caches.open(RUNTIME_CACHE).then(cache => cache.put(event.request, responseClone));
         }
         return response;
-      })
-      .catch(() => {
-        return caches.match(event.request);
-      })
-  );
+      } catch (_) {
+        return new Response('Offline', { status: 503 });
+      }
+    }
+
+    // Default: network with cache fallback
+    try {
+      const response = await fetch(event.request);
+      if (response && response.status === 200) {
+        const responseClone = response.clone();
+        caches.open(RUNTIME_CACHE).then(cache => cache.put(event.request, responseClone));
+      }
+      return response;
+    } catch (_) {
+      const cached = await caches.match(event.request);
+      if (cached) return cached;
+      return new Response('Offline', { status: 503 });
+    }
+  })());
 });
 
 // Message handler for progress updates
