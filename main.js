@@ -384,22 +384,12 @@ async function fetchPdfAsBlob(pdfPath) {
   return await res.blob();
 }
 
-// Open PDF in new tab, preferring cache via Blob URL for offline robustness
+// Open PDF using normal URL; Service Worker will serve from cache when available
 async function openPdfNewTabOfflineFirst(relPath, filename = 'file.pdf') {
   try {
     const localUrl = new URL(relPath, window.location.origin).href;
-    const cached = await caches.match(localUrl);
-    if (cached) {
-      const blob = await cached.blob();
-      const blobUrl = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = blobUrl; a.target = '_blank'; a.rel = 'noopener'; a.download = filename;
-      document.body.appendChild(a); a.click(); document.body.removeChild(a);
-      setTimeout(() => URL.revokeObjectURL(blobUrl), 60000);
-      return true;
-    }
     window.open(localUrl, '_blank', 'noopener');
-    return false;
+    return true;
   } catch (_) {
     window.open(relPath, '_blank', 'noopener');
     return false;
