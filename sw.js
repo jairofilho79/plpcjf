@@ -65,15 +65,64 @@ self.addEventListener('install', (event) => {
   );
 });
 
-// Helper to precache PDFs in batches
+// Helper to precache PDFs in batches, com fallback para domínio online e
+// contagem de sucessos reais
 async function precachePdfs(louvores, startIndex) {
   const BATCH_SIZE = 10;
   const endIndex = Math.min(startIndex + BATCH_SIZE, louvores.length);
-  
+
   console.log(`[SW] Precaching batch ${startIndex + 1}-${endIndex} of ${louvores.length}`);
-  
-  // Update progress and notify clients
-  installProgress.current = endIndex;
+
+  const batch = louvores.slice(startIndex, endIndex);
+
+  let successesThisBatch = 0;
+  const cache = await caches.open(CACHE_NAME);
+
+  await Promise.allSettled(
+    batch.map(async (louvor) => {
+      const classificationPath = getClassificationPath(louvor.classificacao);
+      const relPath = `/assets/${classificationPath}${louvor.pdf}`;
+
+      const localUrl = new URL(relPath, self.location.origin).href;
+      const remoteUrl = new URL(relPath, 'https://plpcjf.org').href;
+
+      // Tenta baixar localmente primeiro
+      let response = null;
+      try {
+        const r = await fetch(localUrl, { redirect: 'follow' });
+        const ct = (r.headers.get('content-type') || '').toLowerCase();
+        if (r.ok && !ct.includes('text/html')) {
+          response = r;
+        }
+      } catch (_) {}
+
+      // Fallback para domínio online
+      if (!response) {
+        try {
+          const r2 = await fetch(remoteUrl, { redirect: 'follow' });
+          const ct2 = (r2.headers.get('content-type') || '').toLowerCase();
+          if (r2.ok && !ct2.includes('text/html')) {
+            response = r2;
+          }
+        } catch (e2) {
+          console.warn('[SW] Fallback failed for', relPath, e2);
+        }
+      }
+
+      if (response) {
+        try {
+          // Cachear usando a URL local como chave, para que event.request funcione
+          await cache.put(localUrl, response.clone());
+          successesThisBatch += 1;
+        } catch (e3) {
+          console.warn('[SW] Failed to cache response for', relPath, e3);
+        }
+      }
+    })
+  );
+
+  // Atualiza progresso com base em sucessos reais
+  installProgress.current += successesThisBatch;
   const clients = await self.clients.matchAll();
   clients.forEach(client => {
     client.postMessage({
@@ -81,38 +130,9 @@ async function precachePdfs(louvores, startIndex) {
       progress: installProgress
     });
   });
-  
-  // Cache batch
-  const batch = louvores.slice(startIndex, endIndex);
-  const pdfPaths = batch.map(louvor => {
-    const classificationPath = getClassificationPath(louvor.classificacao);
-    const path = `/assets/${classificationPath}${louvor.pdf}`;
-    // Decodificar URL para garantir consistência (caso já venha codificada)
-    try {
-      return decodeURIComponent(path);
-    } catch {
-      return path; // Se já estiver decodificada ou erro, usar original
-    }
-  });
-  
-  try {
-    const cache = await caches.open(CACHE_NAME);
-    const results = await Promise.allSettled(
-      pdfPaths.map(url => {
-        // Criar URL absoluta com origin
-        const absoluteUrl = new URL(url, self.location.origin).href;
-        return cache.add(absoluteUrl).catch(err => {
-          console.warn(`[SW] Failed to cache ${absoluteUrl}:`, err);
-          return null;
-        });
-      })
-    );
-    
-    console.log(`[SW] Cached batch ${startIndex + 1}-${endIndex}`);
-  } catch (error) {
-    console.error(`[SW] Error caching batch ${startIndex + 1}-${endIndex}:`, error);
-  }
-  
+
+  console.log(`[SW] Cached batch ${startIndex + 1}-${endIndex}`);
+
   // Continue with next batch if needed
   if (endIndex < louvores.length) {
     return new Promise(resolve => {
@@ -121,8 +141,54 @@ async function precachePdfs(louvores, startIndex) {
       }, 100);
     });
   }
-  
+
+  // Após finalizar todos os lotes, executa verificação do cache
+  try {
+    await verifyCachedPdfs(louvores);
+  } catch (e) {
+    console.warn('[SW] verifyCachedPdfs failed', e);
+  }
+
   return Promise.resolve();
+}
+
+// Verifica presença dos PDFs no cache em lotes de 10 e envia resumo ao cliente
+async function verifyCachedPdfs(louvores) {
+  const cache = await caches.open(CACHE_NAME);
+  const BATCH_SIZE = 10;
+  let verified = 0;
+  let present = 0;
+  const missingSamples = [];
+
+  for (let i = 0; i < louvores.length; i += BATCH_SIZE) {
+    const slice = louvores.slice(i, i + BATCH_SIZE);
+    await Promise.allSettled(
+      slice.map(async (louvor) => {
+        const classificationPath = getClassificationPath(louvor.classificacao);
+        const relPath = `/assets/${classificationPath}${louvor.pdf}`;
+        const localUrl = new URL(relPath, self.location.origin).href;
+        const match = await cache.match(localUrl);
+        verified += 1;
+        if (match) {
+          present += 1;
+        } else if (missingSamples.length < 5) {
+          missingSamples.push(relPath);
+        }
+      })
+    );
+  }
+
+  const clients = await self.clients.matchAll();
+  clients.forEach(client => {
+    client.postMessage({
+      type: 'VERIFY_SUMMARY',
+      summary: {
+        present,
+        total: verified,
+        missingSamples
+      }
+    });
+  });
 }
 
 // Get classification folder path
@@ -179,44 +245,43 @@ self.addEventListener('fetch', (event) => {
     return; // Não intercepta, deixa passar para network
   }
   
-  // For PDFs: decodificar URL antes de processar para evitar problemas com espaços e caracteres especiais
+  // For PDFs: usar a request original e aplicar fallback para plpcjf.org quando necessário
   if (url.pathname.endsWith('.pdf')) {
-    try {
-      // Decodificar URL para garantir consistência com o Worker
-      const decodedPathname = decodeURIComponent(url.pathname);
-      const decodedUrl = new URL(decodedPathname, url.origin);
-      const decodedRequest = new Request(decodedUrl, event.request);
-      
-      event.respondWith(
-        caches.match(decodedRequest) // Buscar no cache com URL decodificada
-          .then(cachedResponse => {
-            if (cachedResponse) {
-              return cachedResponse;
-            }
-            // Se não tem cache, buscar do network com URL decodificada
-            return fetch(decodedRequest)
-              .then(response => {
-                if (!response || response.status !== 200) {
-                  return response;
-                }
-                const responseClone = response.clone();
-                caches.open(RUNTIME_CACHE)
-                  .then(cache => {
-                    cache.put(decodedRequest, responseClone); // Cachear com URL decodificada
-                  });
-                return response;
-              });
-          })
-          .catch(() => {
-            // If offline and not in cache, return offline page
-            return new Response('Offline', { status: 503 });
-          })
-      );
-      return;
-    } catch (error) {
-      // Se houver erro na decodificação, usar requisição original
-      console.warn('[SW] Error decoding URL, using original:', error);
-    }
+    event.respondWith((async () => {
+      // 1) cache primeiro
+      const cached = await caches.match(event.request);
+      if (cached) return cached;
+
+      // 2) tentar origin atual
+      try {
+        const resp = await fetch(event.request);
+        const ct = (resp.headers.get('content-type') || '').toLowerCase();
+        if (resp.ok && !ct.includes('text/html')) {
+          const clone = resp.clone();
+          caches.open(RUNTIME_CACHE).then(c => c.put(event.request, clone));
+          return resp;
+        }
+      } catch (_) {}
+
+      // 3) fallback para domínio online com o mesmo pathname
+      try {
+        const fallbackUrl = new URL(url.pathname, 'https://plpcjf.org').href;
+        const fallbackReq = new Request(fallbackUrl, {
+          method: event.request.method,
+          headers: event.request.headers,
+          redirect: 'follow'
+        });
+        const resp2 = await fetch(fallbackReq);
+        if (resp2 && resp2.ok) {
+          const clone2 = resp2.clone();
+          caches.open(RUNTIME_CACHE).then(c => c.put(event.request, clone2));
+          return resp2;
+        }
+      } catch (_) {}
+
+      return new Response('Offline', { status: 503 });
+    })());
+    return;
   }
   
   // For app shell, use cache-first strategy

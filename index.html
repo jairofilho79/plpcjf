@@ -387,11 +387,14 @@
       }
     }
 
-    // Listen for progress updates from SW
-    if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
+    // Listen for progress updates and verification summary from SW
+    if ('serviceWorker' in navigator) {
       navigator.serviceWorker.addEventListener('message', (event) => {
-        if (event.data.type === 'PROGRESS') {
+        if (event.data && event.data.type === 'PROGRESS') {
           updateInstallProgress(event.data.progress);
+        }
+        if (event.data && event.data.type === 'VERIFY_SUMMARY') {
+          showVerifySummary(event.data.summary);
         }
       });
     }
@@ -409,6 +412,21 @@
       } else {
         modal.style.display = 'none';
       }
+    }
+
+    function showVerifySummary(summary) {
+      const modal = document.getElementById('installProgressModal');
+      const bar = document.getElementById('installProgressBar');
+      const text = document.getElementById('installProgressText');
+      modal.style.display = 'flex';
+      bar.style.width = '100%';
+      const failed = Math.max(0, (summary.total || 0) - (summary.present || 0));
+      const samples = Array.isArray(summary.missingSamples) && summary.missingSamples.length > 0
+        ? `\nExemplos ausentes: ${summary.missingSamples.join(', ')}`
+        : '';
+      text.textContent = `Disponíveis offline: ${summary.present}/${summary.total}. Falhas: ${failed}.` + samples;
+      // Oculta após alguns segundos para UX melhor
+      setTimeout(() => { modal.style.display = 'none'; }, 4000);
     }
 
     function cancelInstall() {
