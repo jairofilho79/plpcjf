@@ -438,7 +438,8 @@
         navigator.serviceWorker.controller.postMessage({ type: 'SKIP_WAITING' });
         // After skip waiting leads to control change, trigger sync again
         navigator.serviceWorker.addEventListener('controllerchange', () => {
-          if (navigator.serviceWorker.controller) {
+          const allowSync = localStorage.getItem('ALLOW_PDF_SYNC') === '1';
+          if (allowSync && navigator.serviceWorker.controller) {
             navigator.serviceWorker.controller.postMessage({ type: 'SYNC_PDFS' });
           }
         }, { once: true });

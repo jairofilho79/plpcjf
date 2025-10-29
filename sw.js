@@ -22,35 +22,6 @@ self.addEventListener('install', (event) => {
         ]);
       })
       .then(() => {
-        // Try to fetch manifest and precache PDFs
-        // If manifest not available, skip precaching (fallback to louvores.js)
-        return fetch(LOUVORES_MANIFEST_URL)
-          .then(response => {
-            if (response.ok) {
-              return response.json();
-            }
-            console.warn('[SW] Manifest not found, skipping PDF precache');
-            return null;
-          })
-          .then(data => {
-            if (data && data.length > 0) {
-              const louvores = data;
-              installProgress.total = louvores.length;
-              console.log(`[SW] Starting precache of ${louvores.length} PDFs...`);
-              
-              // Precache PDFs in batches to avoid timeout
-              return precachePdfs(louvores, 0);
-            } else {
-              console.log('[SW] No manifest data, skipping PDF precache');
-              return Promise.resolve();
-            }
-          })
-          .catch(error => {
-            console.warn('[SW] Failed to fetch manifest:', error);
-            return Promise.resolve(); // Continue without precache
-          });
-      })
-      .then(() => {
         console.log('[SW] Precache complete');
         return self.skipWaiting();
       })
