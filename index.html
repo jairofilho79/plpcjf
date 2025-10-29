@@ -344,30 +344,47 @@
 
   <div id="searchResults"></div>
 
+  <script src="louvores.js"></script>
   <script src="main.js"></script>
   <script>
-    // Service Worker registration
+    // Service Worker registration - APENAS para plpcjf.pages.dev
     if ('serviceWorker' in navigator) {
-      window.addEventListener('load', () => {
-        navigator.serviceWorker.register('/sw.js')
-          .then((registration) => {
-            console.log('SW registered:', registration);
-            
-            // Check for updates
-            registration.addEventListener('updatefound', () => {
-              const newWorker = registration.installing;
-              newWorker.addEventListener('statechange', () => {
-                if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
-                  // New SW installed and waiting
-                  document.getElementById('updateBanner').style.display = 'block';
-                }
-              });
-            });
-          })
-          .catch((error) => {
-            console.error('SW registration failed:', error);
+      const hostname = window.location.hostname;
+      
+      // Desregistrar SW se estiver em plpcjs.org (domínio online)
+      if (hostname === 'plpcjs.org') {
+        navigator.serviceWorker.getRegistrations().then(registrations => {
+          registrations.forEach(registration => {
+            console.log('[SW] Unregistering SW for online domain');
+            registration.unregister();
           });
-      });
+        });
+        return; // Não registrar SW neste domínio
+      }
+      
+      // Registrar SW apenas para plpcjf.pages.dev (domínio offline)
+      if (hostname === 'plpcjf.pages.dev') {
+        window.addEventListener('load', () => {
+          navigator.serviceWorker.register('/sw.js')
+            .then((registration) => {
+              console.log('SW registered:', registration);
+              
+              // Check for updates
+              registration.addEventListener('updatefound', () => {
+                const newWorker = registration.installing;
+                newWorker.addEventListener('statechange', () => {
+                  if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
+                    // New SW installed and waiting
+                    document.getElementById('updateBanner').style.display = 'block';
+                  }
+                });
+              });
+            })
+            .catch((error) => {
+              console.error('SW registration failed:', error);
+            });
+        });
+      }
     }
 
     // Listen for progress updates from SW

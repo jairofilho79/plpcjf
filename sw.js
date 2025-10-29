@@ -7,6 +7,12 @@ let installProgress = { total: 0, current: 0 };
 
 // Install event - precache app shell and PDFs
 self.addEventListener('install', (event) => {
+  // Apenas funciona em plpcjf.pages.dev
+  if (self.location.hostname !== 'plpcjf.pages.dev') {
+    console.log('[SW] Skipping install - wrong domain');
+    return; // Não instalar em outros domínios
+  }
+  
   console.log('[SW] Installing service worker...');
   event.waitUntil(
     caches.open(CACHE_NAME)
@@ -16,20 +22,37 @@ self.addEventListener('install', (event) => {
           '/',
           '/index.html',
           '/main.js',
+          '/louvores.js',
           '/manifest.json'
         ]);
       })
       .then(() => {
-        // Fetch manifest and precache all PDFs
+        // Try to fetch manifest and precache PDFs
+        // If manifest not available, skip precaching (fallback to louvores.js)
         return fetch(LOUVORES_MANIFEST_URL)
-          .then(response => response.json())
+          .then(response => {
+            if (response.ok) {
+              return response.json();
+            }
+            console.warn('[SW] Manifest not found, skipping PDF precache');
+            return null;
+          })
           .then(data => {
-            const louvores = data;
-            installProgress.total = louvores.length;
-            console.log(`[SW] Starting precache of ${louvores.length} PDFs...`);
-            
-            // Precache PDFs in batches to avoid timeout
-            return precachePdfs(louvores, 0);
+            if (data && data.length > 0) {
+              const louvores = data;
+              installProgress.total = louvores.length;
+              console.log(`[SW] Starting precache of ${louvores.length} PDFs...`);
+              
+              // Precache PDFs in batches to avoid timeout
+              return precachePdfs(louvores, 0);
+            } else {
+              console.log('[SW] No manifest data, skipping PDF precache');
+              return Promise.resolve();
+            }
+          })
+          .catch(error => {
+            console.warn('[SW] Failed to fetch manifest:', error);
+            return Promise.resolve(); // Continue without precache
           });
       })
       .then(() => {
@@ -63,16 +86,26 @@ async function precachePdfs(louvores, startIndex) {
   const batch = louvores.slice(startIndex, endIndex);
   const pdfPaths = batch.map(louvor => {
     const classificationPath = getClassificationPath(louvor.classificacao);
-    return `/assets/${classificationPath}${louvor.pdf}`;
+    const path = `/assets/${classificationPath}${louvor.pdf}`;
+    // Decodificar URL para garantir consistência (caso já venha codificada)
+    try {
+      return decodeURIComponent(path);
+    } catch {
+      return path; // Se já estiver decodificada ou erro, usar original
+    }
   });
   
   try {
     const cache = await caches.open(CACHE_NAME);
     const results = await Promise.allSettled(
-      pdfPaths.map(url => cache.add(url).catch(err => {
-        console.warn(`[SW] Failed to cache ${url}:`, err);
-        return null;
-      }))
+      pdfPaths.map(url => {
+        // Criar URL absoluta com origin
+        const absoluteUrl = new URL(url, self.location.origin).href;
+        return cache.add(absoluteUrl).catch(err => {
+          console.warn(`[SW] Failed to cache ${absoluteUrl}:`, err);
+          return null;
+        });
+      })
     );
     
     console.log(`[SW] Cached batch ${startIndex + 1}-${endIndex}`);
@@ -104,6 +137,12 @@ function getClassificationPath(classification) {
 
 // Activate event - clean old caches
 self.addEventListener('activate', (event) => {
+  // Apenas funciona em plpcjf.pages.dev
+  if (self.location.hostname !== 'plpcjf.pages.dev') {
+    console.log('[SW] Skipping activate - wrong domain');
+    return; // Não ativar em outros domínios
+  }
+  
   console.log('[SW] Activating service worker...');
   event.waitUntil(
     caches.keys()
@@ -135,11 +174,56 @@ self.addEventListener('fetch', (event) => {
     return;
   }
   
-  // For PDFs and app shell, use cache-first strategy
-  if (url.pathname.endsWith('.pdf') || 
-      url.pathname === '/' || 
+  // Apenas funciona em plpcjf.pages.dev
+  if (url.hostname !== 'plpcjf.pages.dev') {
+    return; // Não intercepta, deixa passar para network
+  }
+  
+  // For PDFs: decodificar URL antes de processar para evitar problemas com espaços e caracteres especiais
+  if (url.pathname.endsWith('.pdf')) {
+    try {
+      // Decodificar URL para garantir consistência com o Worker
+      const decodedPathname = decodeURIComponent(url.pathname);
+      const decodedUrl = new URL(decodedPathname, url.origin);
+      const decodedRequest = new Request(decodedUrl, event.request);
+      
+      event.respondWith(
+        caches.match(decodedRequest) // Buscar no cache com URL decodificada
+          .then(cachedResponse => {
+            if (cachedResponse) {
+              return cachedResponse;
+            }
+            // Se não tem cache, buscar do network com URL decodificada
+            return fetch(decodedRequest)
+              .then(response => {
+                if (!response || response.status !== 200) {
+                  return response;
+                }
+                const responseClone = response.clone();
+                caches.open(RUNTIME_CACHE)
+                  .then(cache => {
+                    cache.put(decodedRequest, responseClone); // Cachear com URL decodificada
+                  });
+                return response;
+              });
+          })
+          .catch(() => {
+            // If offline and not in cache, return offline page
+            return new Response('Offline', { status: 503 });
+          })
+      );
+      return;
+    } catch (error) {
+      // Se houver erro na decodificação, usar requisição original
+      console.warn('[SW] Error decoding URL, using original:', error);
+    }
+  }
+  
+  // For app shell, use cache-first strategy
+  if (url.pathname === '/' || 
       url.pathname === '/index.html' ||
       url.pathname === '/main.js' ||
+      url.pathname === '/louvores.js' ||
       url.pathname === '/manifest.json') {
     event.respondWith(
       caches.match(event.request)
