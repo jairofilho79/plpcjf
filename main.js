@@ -160,6 +160,12 @@ const makeHTMLSearchCardResponse = (louvor) => {
       }
       return;
     }
+    if (pdfViewerMode === 'online') {
+      e.preventDefault();
+      const readerUrl = buildOnlineReaderUrl(pdfPath);
+      window.location.href = readerUrl;
+      return;
+    }
     if (pdfViewerMode === 'newtab') {
       e.preventDefault();
       await openPdfNewTabOfflineFirst(`/${pdfPath}`, `${pdfMapper(louvor.classificacao).replace('/', '')}-${louvor.numero}.pdf`);
@@ -242,7 +248,7 @@ const handlePdfViewerChange = (event) => {
 (() => {
   const savedMode = localStorage.getItem('pdfViewerMode');
   if (savedMode) {
-    pdfViewerMode = savedMode;
+    pdfViewerMode = savedMode === 'default' ? 'online' : savedMode;
     document.getElementById('pdfViewerSelect').value = savedMode;
   }
 })()
@@ -345,6 +351,11 @@ const openPdfFromChip = (louvor) => {
     openPdfNewTabOfflineFirst(`/${pdfPath}`, `${pdfMapper(louvor.classificacao).replace('/', '')}-${louvor.numero}.pdf`);
     return;
   }
+  if (pdfViewerMode === 'online') {
+    const readerUrl = buildOnlineReaderUrl(pdfPath);
+    window.location.href = readerUrl;
+    return;
+  }
   if (pdfViewerMode === 'share') {
     fetchPdfAsBlob(pdfPath)
       .then(blob => sharePdf(blob, louvor.pdf, louvor.nome))
@@ -423,6 +434,12 @@ async function openPdfNewTabOfflineFirst(relPath, filename = 'file.pdf') {
     window.open(relPath, '_blank', 'noopener');
     return false;
   }
+}
+
+function buildOnlineReaderUrl(pdfPath) {
+  const absolutePdfUrl = new URL(pdfPath, window.location.origin).href;
+  const encoded = encodeURIComponent(absolutePdfUrl);
+  return `https://coletaneadigitalicm.github.io/leitor-pdf/?url=${encoded}`;
 }
 
 async function sharePdf(blob, filename, title) {
