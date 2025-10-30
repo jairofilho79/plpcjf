@@ -96,6 +96,7 @@ const makeHTMLSearchCardResponse = (louvor) => {
   
   // Determine target attribute based on PDF viewer mode
   const targetAttr = pdfViewerMode === 'newtab' ? 'target="_blank"' : '';
+  const relPath = getPdfRelPath(louvor);
   
   // Check if this louvor is already in the carousel
   const isInCarousel = carouselLouvores.some(item => 
@@ -105,7 +106,7 @@ const makeHTMLSearchCardResponse = (louvor) => {
   );
   
   card.innerHTML = `
-    <a href="assets/${pdfMapper(louvor['classificacao'])}${louvor['pdf']}" ${targetAttr} class="louvor-info" style="text-decoration: none; color: inherit;">
+    <a href="${relPath}" ${targetAttr} class="louvor-info" style="text-decoration: none; color: inherit;">
       <div style="
         font-size: clamp(1rem, 2vw, 1.5rem);
         font-weight: 500;
@@ -143,7 +144,7 @@ const makeHTMLSearchCardResponse = (louvor) => {
   // Attach click handler to honor pdfViewerMode for share/save
   const link = card.querySelector('a.louvor-info');
   link.addEventListener('click', async (e) => {
-    const pdfPath = `assets/${pdfMapper(louvor.classificacao)}${louvor.pdf}`;
+    const pdfPath = getPdfRelPath(louvor);
     if (pdfViewerMode === 'share' || pdfViewerMode === 'save') {
       e.preventDefault();
       try {
@@ -181,6 +182,34 @@ const pdfMapper = (v) => {
 
   if(dic[v]) return dic[v];
   return 'Avulsos/'
+}
+
+// Retorna caminho relativo sem barra inicial, ex: "assets/ColAdultos/arquivo.pdf"
+function getPdfRelPath(louvor) {
+  try {
+    const raw = louvor && (louvor.pdfId || louvor['pdfId']);
+    if (raw && typeof raw === 'string') {
+      let decoded = '';
+      try {
+        decoded = atob(raw).trim();
+      } catch (_) {
+        decoded = '';
+      }
+      if (decoded) {
+        // normaliza removendo barras iniciais
+        let path = decoded.replace(/^\/+/, '');
+        // assegura prefixo assets/
+        if (path.toLowerCase().startsWith('assets/')) {
+          return path;
+        }
+        if (/\.pdf$/i.test(path) && path.includes('/')) {
+          return `assets/${path}`;
+        }
+      }
+    }
+  } catch (_) {}
+  // fallback atual
+  return `assets/${pdfMapper(louvor.classificacao)}${louvor.pdf}`;
 }
 
 const classificacaoEnum = {
@@ -310,7 +339,7 @@ const updateCardButtons = () => {
 }
 
 const openPdfFromChip = (louvor) => {
-  const pdfPath = `assets/${pdfMapper(louvor.classificacao)}${louvor.pdf}`;
+  const pdfPath = getPdfRelPath(louvor);
   
   if (pdfViewerMode === 'newtab') {
     openPdfNewTabOfflineFirst(`/${pdfPath}`, `${pdfMapper(louvor.classificacao).replace('/', '')}-${louvor.numero}.pdf`);

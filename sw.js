@@ -46,8 +46,7 @@ async function precachePdfs(louvores, startIndex) {
 
   await Promise.allSettled(
     batch.map(async (louvor) => {
-      const classificationPath = getClassificationPath(louvor.classificacao);
-      const relPath = `/assets/${classificationPath}${louvor.pdf}`;
+      const relPath = getLouvorRelPath(louvor);
 
       const localUrl = new URL(relPath, self.location.origin).href;
       const remoteUrl = new URL(relPath, 'https://plpcjf.org').href;
@@ -130,8 +129,7 @@ async function verifyCachedPdfs(louvores) {
     const slice = louvores.slice(i, i + BATCH_SIZE);
     await Promise.allSettled(
       slice.map(async (louvor) => {
-        const classificationPath = getClassificationPath(louvor.classificacao);
-        const relPath = `/assets/${classificationPath}${louvor.pdf}`;
+        const relPath = getLouvorRelPath(louvor);
         const localUrl = new URL(relPath, self.location.origin).href;
         const match = await cache.match(localUrl);
         verified += 1;
@@ -165,6 +163,31 @@ function getClassificationPath(classification) {
     'Adicionados': 'Adicionados/',
   };
   return mapping[classification] || 'Avulsos/';
+}
+
+// Retorna caminho com barra inicial, ex: "/assets/ColAdultos/arquivo.pdf"
+function getLouvorRelPath(louvor) {
+  try {
+    const raw = louvor && (louvor.pdfId || louvor['pdfId']);
+    if (raw && typeof raw === 'string') {
+      let decoded = '';
+      try {
+        decoded = atob(raw).trim();
+      } catch (_) {
+        decoded = '';
+      }
+      if (decoded) {
+        let path = decoded.replace(/^\/+/, '');
+        if (path.toLowerCase().startsWith('assets/')) {
+          return `/${path}`;
+        }
+        if (/\.pdf$/i.test(path) && path.includes('/')) {
+          return `/assets/${path}`;
+        }
+      }
+    }
+  } catch (_) {}
+  return `/assets/${getClassificationPath(louvor.classificacao)}${louvor.pdf}`;
 }
 
 // Fetch manifest and ensure all PDFs are cached (idempotent)
