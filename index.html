@@ -378,6 +378,29 @@
                 }
               });
             });
+
+            // Optional: Register Periodic Background Sync when allowed
+            if (navigator.serviceWorker && navigator.serviceWorker.ready) {
+              navigator.serviceWorker.ready
+                .then(async (reg) => {
+                  const allowSync = localStorage.getItem('ALLOW_PDF_SYNC') === '1';
+                  if (!allowSync) return;
+                  if ('periodicSync' in reg) {
+                    try {
+                      const status = await navigator.permissions.query({ name: 'periodic-background-sync' });
+                      if (status.state === 'granted' || status.state === 'prompt') {
+                        const tags = await reg.periodicSync.getTags();
+                        if (!tags.includes('sync-pdfs')) {
+                          await reg.periodicSync.register('sync-pdfs', { minInterval: 24 * 60 * 60 * 1000 });
+                          console.log('[UI] Periodic background sync registered');
+                        }
+                      }
+                    } catch (e) {
+                      console.log('[UI] Periodic background sync not available', e);
+                    }
+                  }
+                });
+            }
           })
           .catch((error) => {
             console.error('SW registration failed:', error);

@@ -5,6 +5,40 @@ const LOUVORES_MANIFEST_URL = '/louvores-manifest.json';
 
 let installProgress = { total: 0, current: 0 };
 
+// === Sync metadata and guards ===
+const META_BUCKET = 'pls-meta-v1';
+const META_KEYS = {
+  manifestHash: '/__meta__/manifest-hash',
+  lastSyncAt: '/__meta__/last-sync-at',
+  lastSummary: '/__meta__/last-summary'
+};
+
+let isSyncInProgress = false;
+
+async function openMetaCache() {
+  return caches.open(META_BUCKET);
+}
+
+async function getMeta(key) {
+  const c = await openMetaCache();
+  const res = await c.match(key);
+  if (!res) return null;
+  const text = await res.text();
+  try { return JSON.parse(text); } catch (_) { return text; }
+}
+
+async function setMeta(key, value) {
+  const c = await openMetaCache();
+  const body = typeof value === 'string' ? value : JSON.stringify(value);
+  await c.put(key, new Response(body, { headers: { 'content-type': 'application/json' } }));
+}
+
+async function sha256Hex(str) {
+  const enc = new TextEncoder().encode(str);
+  const buf = await crypto.subtle.digest('SHA-256', enc);
+  return [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
 // Install event - precache app shell and PDFs
 self.addEventListener('install', (event) => {
   console.log('[SW] Installing service worker...');
@@ -142,17 +176,17 @@ async function verifyCachedPdfs(louvores) {
     );
   }
 
+  const summary = { present, total: verified, missingSamples };
+
   const clients = await self.clients.matchAll();
   clients.forEach(client => {
     client.postMessage({
       type: 'VERIFY_SUMMARY',
-      summary: {
-        present,
-        total: verified,
-        missingSamples
-      }
+      summary
     });
   });
+
+  return summary;
 }
 
 // Get classification folder path
@@ -192,15 +226,59 @@ function getLouvorRelPath(louvor) {
 
 // Fetch manifest and ensure all PDFs are cached (idempotent)
 async function syncAllPdfs() {
+  if (isSyncInProgress) {
+    console.log('[SW] Sync requested but already in progress; ignoring.');
+    return;
+  }
+  isSyncInProgress = true;
   try {
-    const resp = await fetch(LOUVORES_MANIFEST_URL);
-    if (!resp || !resp.ok) return;
-    const louvores = await resp.json();
-    if (!Array.isArray(louvores) || louvores.length === 0) return;
+    // 1) Fetch manifest text for hashing and JSON for data
+    const resp = await fetch(LOUVORES_MANIFEST_URL, { cache: 'no-cache' });
+    if (!resp || !resp.ok) {
+      console.warn('[SW] Manifest fetch failed');
+      return;
+    }
+    const manifestText = await resp.text();
+    const manifestHash = await sha256Hex(manifestText);
+
+    let louvores;
+    try {
+      louvores = JSON.parse(manifestText);
+    } catch (e) {
+      console.warn('[SW] Manifest JSON parse failed', e);
+      return;
+    }
+    if (!Array.isArray(louvores) || louvores.length === 0) {
+      console.warn('[SW] Manifest is empty or invalid');
+      return;
+    }
+
+    // 2) Verify current cache state
+    const summaryBefore = await verifyCachedPdfs(louvores).catch(() => null);
+
+    // 3) Short-circuit if manifest unchanged and all present
+    const storedHash = await getMeta(META_KEYS.manifestHash);
+    const allPresent = summaryBefore && summaryBefore.present === summaryBefore.total;
+
+    if (storedHash === manifestHash && allPresent) {
+      console.log('[SW] Sync skipped (manifest unchanged and all items present).');
+      return;
+    }
+
+    // 4) Perform precache and re-verify
     installProgress = { total: louvores.length, current: 0 };
     await precachePdfs(louvores, 0);
+
+    const summaryAfter = await verifyCachedPdfs(louvores).catch(() => null);
+
+    // 5) Persist metadata
+    await setMeta(META_KEYS.manifestHash, manifestHash);
+    await setMeta(META_KEYS.lastSyncAt, new Date().toISOString());
+    if (summaryAfter) await setMeta(META_KEYS.lastSummary, summaryAfter);
   } catch (e) {
     console.warn('[SW] syncAllPdfs failed', e);
+  } finally {
+    isSyncInProgress = false;
   }
 }
 
@@ -346,4 +424,11 @@ self.addEventListener('message', (event) => {
 });
 
 console.log('[SW] Service worker script loaded');
+
+// Optional: Periodic Background Sync handler
+self.addEventListener('periodicsync', (event) => {
+  if (event.tag === 'sync-pdfs') {
+    event.waitUntil(syncAllPdfs());
+  }
+});
 
