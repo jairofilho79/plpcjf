@@ -25,6 +25,47 @@ let louvores = [];
   }
 })();
 
+// Category filter state management
+const CATEGORY_OPTIONS = ['Partitura', 'Cifra', 'Cifra nível I', 'Cifra nível II', 'Gestos em Gravura'];
+const FILTER_STORAGE_KEY = 'categoryFilters';
+
+let selectedCategories = [];
+
+function getSelectedCategories() {
+  const checkboxes = document.querySelectorAll('.category-filter');
+  const selected = [];
+  checkboxes.forEach(cb => {
+    if (cb.checked) {
+      selected.push(cb.value);
+    }
+  });
+  return selected;
+}
+
+function saveFiltersToStorage() {
+  try {
+    localStorage.setItem(FILTER_STORAGE_KEY, JSON.stringify(selectedCategories));
+  } catch (e) {
+    console.warn('Não foi possível salvar os filtros no localStorage:', e);
+  }
+}
+
+function loadFiltersFromStorage() {
+  try {
+    const saved = localStorage.getItem(FILTER_STORAGE_KEY);
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      if (Array.isArray(parsed)) {
+        return parsed;
+      }
+    }
+  } catch (e) {
+    console.warn('Não foi possível ler os filtros do localStorage:', e);
+  }
+  // Return all categories by default
+  return CATEGORY_OPTIONS;
+}
+
 const handleInputValidation = (event) => {
   const searchInput = document.getElementById("searchInput");
   const searchButton = document.getElementById("searchButton");
@@ -55,12 +96,27 @@ const handleSearch = () => {
     return;
   }
   const search = document.getElementById("searchInput").value.trim();
+  
+  // Get currently selected categories
+  const activeCategories = getSelectedCategories();
+  const allCategoriesSelected = activeCategories.length === CATEGORY_OPTIONS.length;
+  
+  // Apply category filter with OR logic
+  let filteredLouvores = louvores;
+  if (!allCategoriesSelected && activeCategories.length > 0) {
+    filteredLouvores = louvores.filter(louvor => {
+      if (!louvor.categoria) return false;
+      return activeCategories.includes(louvor.categoria);
+    });
+  }
+  
+  // Apply search filter
   if(!isNaN(Number(search))) {
-    makeHTMLSearchResponse(louvores.filter(louvor => Number(louvor.numero) === Number(search)));
+    makeHTMLSearchResponse(filteredLouvores.filter(louvor => Number(louvor.numero) === Number(search)));
     return
   }
   const searchT = normalizeSearchString(search);
-  makeHTMLSearchResponse(louvores.filter(louvor => {
+  makeHTMLSearchResponse(filteredLouvores.filter(louvor => {
     const titulo = normalizeSearchString(louvor.nome);
     return titulo.includes(searchT);
   }));
@@ -95,7 +151,7 @@ const makeHTMLSearchCardResponse = (louvor) => {
   card.className = "louvor-card";
   
   // Determine target attribute based on PDF viewer mode
-  const targetAttr = pdfViewerMode === 'newtab' ? 'target="_blank"' : '';
+  const targetAttr = (pdfViewerMode === 'newtab' || pdfViewerMode === 'online') ? 'target="_blank"' : '';
   const relPath = getPdfRelPath(louvor);
   
   // Check if this louvor is already in the carousel
@@ -163,7 +219,7 @@ const makeHTMLSearchCardResponse = (louvor) => {
     if (pdfViewerMode === 'online') {
       e.preventDefault();
       const readerUrl = buildOnlineReaderUrl(pdfPath);
-      window.location.href = readerUrl;
+      window.open(readerUrl, '_blank', 'noopener');
       return;
     }
     if (pdfViewerMode === 'newtab') {
@@ -256,7 +312,7 @@ const enumMapper = (v) => {
 }
 
 // PDF Viewer functionality
-let pdfViewerMode = 'newtab'; // Default to new tab
+let pdfViewerMode = 'online'; // Default to online reader
 
 const handlePdfViewerChange = (event) => {
   pdfViewerMode = event.target.value;
@@ -269,8 +325,83 @@ const handlePdfViewerChange = (event) => {
   if (savedMode) {
     pdfViewerMode = savedMode === 'default' ? 'online' : savedMode;
     document.getElementById('pdfViewerSelect').value = savedMode;
+  } else {
+    // Set default to online if no saved preference
+    pdfViewerMode = 'online';
+    document.getElementById('pdfViewerSelect').value = 'online';
   }
 })()
+
+// Initialize category filters from localStorage
+function initializeCategoryFilters() {
+  selectedCategories = loadFiltersFromStorage();
+  const checkboxes = document.querySelectorAll('.category-filter');
+  checkboxes.forEach(cb => {
+    cb.checked = selectedCategories.includes(cb.value);
+  });
+  updateTodosCheckboxState();
+}
+
+// Update "Todos" checkbox state (checked, unchecked, or indeterminate)
+function updateTodosCheckboxState() {
+  const todosCheckbox = document.getElementById('filterTodos');
+  const categoryCheckboxes = document.querySelectorAll('.category-filter');
+  const checkedCount = document.querySelectorAll('.category-filter:checked').length;
+  const totalCount = categoryCheckboxes.length;
+  
+  if (checkedCount === totalCount) {
+    // All checked
+    todosCheckbox.checked = true;
+    todosCheckbox.indeterminate = false;
+  } else if (checkedCount === 0) {
+    // None checked
+    todosCheckbox.checked = false;
+    todosCheckbox.indeterminate = false;
+  } else {
+    // Some checked
+    todosCheckbox.checked = false;
+    todosCheckbox.indeterminate = true;
+  }
+}
+
+// Handle individual category checkbox changes
+function handleCategoryFilterChange(event) {
+  const checkbox = event.target;
+  
+  selectedCategories = getSelectedCategories();
+  saveFiltersToStorage();
+  updateTodosCheckboxState();
+  
+  // If there's a search active, re-run it
+  const searchInput = document.getElementById('searchInput');
+  if (searchInput.value.trim() !== '') {
+    handleSearch();
+  }
+}
+
+// Handle "Todos" checkbox change
+function handleTodosCheckboxChange(event) {
+  const todosCheckbox = event.target;
+  const categoryCheckboxes = document.querySelectorAll('.category-filter');
+  
+  if (todosCheckbox.checked) {
+    // Check all
+    categoryCheckboxes.forEach(cb => cb.checked = true);
+  } else {
+    // Uncheck all
+    categoryCheckboxes.forEach(cb => cb.checked = false);
+  }
+  
+  selectedCategories = getSelectedCategories();
+  saveFiltersToStorage();
+  updateTodosCheckboxState();
+  
+  // If there's a search active, re-run it
+  const searchInput = document.getElementById('searchInput');
+  if (searchInput.value.trim() !== '') {
+    handleSearch();
+  }
+}
 
 // Carousel functionality
 let carouselLouvores = [];
@@ -372,7 +503,7 @@ const openPdfFromChip = (louvor) => {
   }
   if (pdfViewerMode === 'online') {
     const readerUrl = buildOnlineReaderUrl(pdfPath);
-    window.location.href = readerUrl;
+    window.open(readerUrl, '_blank', 'noopener');
     return;
   }
   if (pdfViewerMode === 'share') {
@@ -494,4 +625,11 @@ async function savePdf(blob, filename) {
   const a = document.createElement('a');
   a.href = url; a.download = filename; a.click();
   URL.revokeObjectURL(url);
+}
+
+// Run initialization when DOM is ready
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', initializeCategoryFilters);
+} else {
+  initializeCategoryFilters();
 }

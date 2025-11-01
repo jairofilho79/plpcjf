@@ -86,8 +86,38 @@
       margin-top: 10px;
     }
 
+    .filter-container {
+      width: 85vw;
+      padding: 15px;
+      background-color: #f5f5f5;
+      border-radius: 8px;
+      margin-top: 10px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 15px;
+      align-items: center;
+      justify-content: center;
+    }
+
     .checkbox-container {
-      margin: 10px 0;
+      margin: 5px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      font-size: 14px;
+    }
+
+    .checkbox-container input[type="checkbox"] {
+      cursor: pointer;
+      width: 18px;
+      height: 18px;
+      accent-color: #007bff;
+    }
+
+    .checkbox-container input[type="checkbox"]:indeterminate {
+      background-color: #007bff;
+      border-color: #007bff;
     }
 
     .pdf-viewer-select {
@@ -266,6 +296,16 @@
         height: 8vh;
         font-size: 16px;
       }
+
+      .filter-container {
+        padding: 10px;
+        gap: 10px;
+      }
+
+      .checkbox-container {
+        font-size: 13px;
+        margin: 3px;
+      }
     }
   </style>
 </head>
@@ -317,9 +357,30 @@
       </button>
     </div>
 
+    <div class="filter-container" id="categoryFilterContainer">
+      <label class="checkbox-container">
+        <input type="checkbox" id="filterTodos" onchange="handleTodosCheckboxChange(event)" checked> <span style="font-weight: bold;">Todos</span>
+      </label>
+      <label class="checkbox-container">
+        <input type="checkbox" class="category-filter" value="Partitura" onchange="handleCategoryFilterChange(event)" checked> Partitura
+      </label>
+      <label class="checkbox-container">
+        <input type="checkbox" class="category-filter" value="Cifra" onchange="handleCategoryFilterChange(event)" checked> Cifra
+      </label>
+      <label class="checkbox-container">
+        <input type="checkbox" class="category-filter" value="Cifra nível I" onchange="handleCategoryFilterChange(event)" checked> Cifra nível I
+      </label>
+      <label class="checkbox-container">
+        <input type="checkbox" class="category-filter" value="Cifra nível II" onchange="handleCategoryFilterChange(event)" checked> Cifra nível II
+      </label>
+      <label class="checkbox-container">
+        <input type="checkbox" class="category-filter" value="Gestos em Gravura" onchange="handleCategoryFilterChange(event)" checked> Gestos em Gravura
+      </label>
+    </div>
+
     <select id="pdfViewerSelect" class="pdf-viewer-select" onchange="handlePdfViewerChange(event)">
-      <option value="newtab">Abrir PDF em nova aba</option>
       <option value="online">Leitor Online</option>
+      <option value="newtab">Abrir PDF em nova aba</option>
       <option value="share">Compartilhar (menu do sistema)</option>
       <option value="save">Salvar/baixar para o dispositivo</option>
     </select>
