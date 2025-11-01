@@ -204,6 +204,14 @@ function getPdfRelPath(louvor) {
       if (decoded) {
         // normaliza removendo barras iniciais
         let path = decoded.replace(/^\/+/, '');
+        // Decodifica caracteres URI-encoded se necessário (para evitar dupla codificação)
+        try {
+          if (path.includes('%')) {
+            path = decodeURIComponent(path);
+          }
+        } catch (_) {
+          // Se decodeURIComponent falhar, mantém o path original
+        }
         // assegura prefixo assets/
         if (path.toLowerCase().startsWith('assets/')) {
           return path;
