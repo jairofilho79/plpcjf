@@ -199,6 +199,17 @@ function getClassificationPath(classification) {
   return mapping[classification] || 'Avulsos/';
 }
 
+// Função helper para decodificar base64 para UTF-8 corretamente
+function atobUTF8(base64) {
+  const binaryString = atob(base64);
+  const bytes = new Uint8Array(binaryString.length);
+  for (let i = 0; i < binaryString.length; i++) {
+    bytes[i] = binaryString.charCodeAt(i);
+  }
+  const decoder = new TextDecoder('utf-8');
+  return decoder.decode(bytes);
+}
+
 // Retorna caminho com barra inicial, ex: "/assets/ColAdultos/arquivo.pdf"
 function getLouvorRelPath(louvor) {
   try {
@@ -206,7 +217,7 @@ function getLouvorRelPath(louvor) {
     if (raw && typeof raw === 'string') {
       let decoded = '';
       try {
-        decoded = atob(raw).trim();
+        decoded = atobUTF8(raw).trim();
       } catch (_) {
         decoded = '';
       }
