@@ -1,16 +1,23 @@
-name = "louvores-worker"
-main = "worker/index.js"
+name = "plpcjf"
 compatibility_date = "2024-01-01"
+pages_build_output_dir = ".svelte-kit/cloudflare"
+compatibility_flags = ["nodejs_compat"]
 
 # Configuração de ambientes
-[env.production]
-# Rotas serão configuradas no Dashboard do Cloudflare
-# Não use rotas aqui para domínios customizados
+# Desenvolvimento - usa o bucket remoto (não local)
+[[r2_buckets]]
+binding = "LOUVORES_BUCKET"
+bucket_name = "pls-louvores"
+preview_bucket_name = "pls-louvores"
 
+# Produção
+[env.production]
+compatibility_flags = ["nodejs_compat"]
 [[env.production.r2_buckets]]
 binding = "LOUVORES_BUCKET"
 bucket_name = "pls-louvores"
 
 # JWT_SECRET será configurado via wrangler secret (NÃO coloque aqui!)
-# Use: wrangler secret put JWT_SECRET --env production
+# Use: wrangler secret put JWT_SECRET (para dev)
+# Use: wrangler secret put JWT_SECRET --env production (para produção)
 

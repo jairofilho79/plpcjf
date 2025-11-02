@@ -1,0 +1,31 @@
+@import 'tailwindcss/base';
+@import 'tailwindcss/components';
+@import 'tailwindcss/utilities';
+
+@layer base {
+  :root {
+    --background-color: #4B2D2B;
+    --card-color: #FFF8E1;
+    --card-bg: #f8f9fa;
+    --title-color: #6A2F2F;
+    --gold-color: #D4AF37;
+    --placeholder-color: #F0E68C;
+    --btn-background-color: #6A3B39;
+    --text-light: #ffffff;
+    --text-dark: #2c3e50;
+    --badge-blue-bg: #5a7a9c;
+    --badge-gray-bg: #9ca3af;
+    --shadow-md: 0 4px 6px rgba(0,0,0,0.1);
+    --shadow-lg: 0 10px 15px rgba(0,0,0,0.2);
+  }
+  
+  body {
+    @apply font-sans bg-card-bg text-text-dark;
+  }
+  
+  h1, h2, h3 {
+    @apply font-garamond font-bold tracking-wide;
+    text-shadow: 1px 1px 2px rgba(0,0,0,0.1);
+  }
+}
+
