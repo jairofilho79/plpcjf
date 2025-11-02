@@ -1,5 +1,5 @@
 <script>
-  import { X } from 'lucide-svelte';
+  import { X, Trash2 } from 'lucide-svelte';
   import { carousel } from '$lib/stores/carousel';
   import { pdfViewer } from '$lib/stores/pdfViewer';
   import { enumMapper } from '$lib/utils/enumMapper';
@@ -55,33 +55,65 @@
     if (event.target.closest('button')) return;
     openPdfFromChip(louvor);
   }
+  
+  function getCategoryIcon(category) {
+    if (!category) return null;
+    if (category === 'Partitura') {
+      return 'M7 21h10M7 21V5a2 2 0 012-2h6a2 2 0 012 2v16M7 21H5a2 2 0 01-2-2V9a2 2 0 012-2h2m10 4h2a2 2 0 012 2v10a2 2 0 01-2 2h-2m-4-4V9a2 2 0 012-2h2M9 9h2m-2 4h2m-2 4h2';
+    }
+    if (category === 'Cifra' || category.includes('Cifra nível')) {
+      return 'M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z';
+    }
+    if (category === 'Gestos em Gravura') {
+      return 'M10.05 4.575a1.575 1.575 0 1 0-3.15 0v3m3.15-3v-1.5a1.575 1.575 0 0 1 3.15 0v1.5m-3.15 0 .075 5.925m3.075.75V4.575m0 0a1.575 1.575 0 0 1 3.15 0V15M6.9 7.575a1.575 1.575 0 1 0-3.15 0v8.175a6.75 6.75 0 0 0 6.75 6.75h2.018a5.25 5.25 0 0 0 3.712-1.538l1.732-1.732a5.25 5.25 0 0 0 1.538-3.712l.003-2.024a.668.668 0 0 1 .198-.471 1.575 1.575 0 1 0-2.228-2.228 3.818 3.818 0 0 0-1.12 2.687M6.9 7.575V12m6.27 4.318A4.49 4.49 0 0 1 16.35 15m.002 0h-.002';
+    }
+    return null;
+  }
 </script>
 
 {#if $carousel.length > 0}
-  <div class="w-full max-w-4xl mx-auto p-4 bg-gray-50 rounded-lg border border-gray-200 shadow-sm">
-    <div class="flex justify-between items-center mb-3">
-      <h3 class="text-base font-semibold text-gray-700">Louvores Selecionados</h3>
-      <button
-        on:click={() => carousel.clearCarousel()}
-        class="bg-red-600 text-white border-none px-3 py-1.5 rounded text-xs cursor-pointer hover:bg-red-700 transition-colors"
-      >
-        Limpar Todos
-      </button>
-    </div>
+  <div class="w-full max-w-4xl mx-auto p-4 bg-card-color rounded-lg border-2 relative carousel-container">
+    <span class="container-tag">Playlist</span>
+    <button
+      on:click={() => carousel.clearCarousel()}
+      class="clear-button-tag"
+      title="Limpar todos"
+    >
+      <Trash2 class="w-3 h-3" />
+      <span>Limpar</span>
+    </button>
     
-    <div class="flex gap-2 overflow-x-auto pb-2">
+    <div class="flex gap-2 overflow-x-auto carousel-chips-list">
       {#each $carousel as louvor}
+        {@const categoryIcon = getCategoryIcon(louvor.categoria)}
         <div
           on:click={(e) => handleChipClick(e, louvor)}
-          class="chip flex items-center bg-btn-background-color text-white px-4 py-2 rounded-full text-sm whitespace-nowrap cursor-pointer transition-colors hover:bg-btn-background-color/90 flex-shrink-0"
+          class="carousel-chip"
         >
-          <span>#{enumMapper(louvor.numero) || 'N/A'} - {louvor.nome || 'Sem título'}</span>
+          <div class="chip-content">
+            <div class="chip-title">
+              <strong>#{enumMapper(louvor.numero) || 'N/A'}</strong> - {louvor.nome || 'Sem título'}
+            </div>
+            <div class="chip-subtitles">
+              <div class="chip-classification">
+                {enumMapper(louvor.classificacao) || 'Sem classificação'}
+              </div>
+              <div class="chip-category">
+                {#if categoryIcon}
+                  <svg class="category-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d={categoryIcon} />
+                  </svg>
+                {/if}
+                <span>{louvor.categoria || 'Sem categoria'}</span>
+              </div>
+            </div>
+          </div>
           <button
             on:click|stopPropagation={() => carousel.removeLouvor(louvor.numero, louvor.nome, louvor.classificacao)}
-            class="ml-2 bg-transparent border-none text-white text-xl cursor-pointer p-0 w-5 h-5 flex items-center justify-center rounded-full hover:bg-white/20 transition-colors"
+            class="chip-remove-button"
             title="Remover"
           >
-            <X class="w-4 h-4" />
+            <X class="w-3 h-3" />
           </button>
         </div>
       {/each}
@@ -90,22 +122,171 @@
 {/if}
 
 <style>
-  .chip {
-    scrollbar-width: thin;
-    scrollbar-color: #ccc #f8f9fa;
+  .carousel-container {
+    position: relative;
+    border-color: var(--gold-color);
   }
   
-  .chip::-webkit-scrollbar {
+  .container-tag {
+    position: absolute;
+    top: -0.875rem;
+    left: 0.75rem;
+    background-color: var(--card-color);
+    color: var(--text-dark);
+    font-size: 0.75rem;
+    font-weight: 600;
+    padding: 0.25rem 0.5rem;
+    border-radius: 0.25rem;
+    border: 2px solid var(--gold-color);
+    z-index: 10;
+    line-height: 1;
+  }
+  
+  .clear-button-tag {
+    position: absolute;
+    top: -0.875rem;
+    right: 0.75rem;
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+    background-color: var(--title-color);
+    color: var(--placeholder-color);
+    font-size: 0.75rem;
+    font-weight: 600;
+    padding: 0.25rem 0.5rem;
+    border-radius: 0.25rem;
+    border: 2px solid rgba(0,0,0,0.2);
+    cursor: pointer;
+    transition: all 0.2s ease;
+    line-height: 1;
+    z-index: 10;
+  }
+  
+  .clear-button-tag:hover {
+    background-color: var(--title-color);
+    opacity: 0.9;
+    transform: translateY(-1px);
+  }
+  
+  .carousel-chips-list {
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding: 5px 0;
+    scrollbar-width: thin;
+    scrollbar-color: var(--gold-color) transparent;
+  }
+  
+  .carousel-chip {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    min-width: fit-content;
+    max-width: 200px;
+    padding: 0.5rem 0.75rem;
+    background-color: var(--title-color);
+    border: 2px solid var(--gold-color);
+    border-radius: 1.25rem;
+    box-shadow: var(--shadow-md);
+    transition: all 0.2s ease;
+    cursor: pointer;
+    flex-shrink: 0;
+  }
+  
+  .carousel-chip:hover {
+    box-shadow: var(--shadow-lg);
+    transform: translateY(-1px);
+  }
+  
+  .chip-content {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    gap: 0.125rem;
+  }
+  
+  .chip-title {
+    font-size: 0.875rem;
+    font-family: 'Garamond', serif;
+    font-weight: 700;
+    color: var(--text-light);
+    line-height: 1.2;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  
+  .chip-subtitles {
+    display: flex;
+    flex-direction: row;
+    gap: 0.375rem;
+    align-items: center;
+  }
+  
+  .chip-subtitles::after {
+    content: '';
+    width: 1px;
+    height: 0.75rem;
+    background-color: var(--text-light);
+    opacity: 0.3;
+  }
+  
+  .chip-classification {
+    font-size: 0.7rem;
+    color: var(--text-light);
+    opacity: 0.85;
+    line-height: 1.2;
+    white-space: nowrap;
+  }
+  
+  .chip-category {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+    font-size: 0.7rem;
+    color: var(--text-light);
+    opacity: 0.85;
+    line-height: 1.2;
+    white-space: nowrap;
+  }
+  
+  .category-icon {
+    width: 0.75rem;
+    height: 0.75rem;
+    color: var(--text-light);
+    flex-shrink: 0;
+  }
+  
+  .chip-remove-button {
+    background-color: var(--card-color);
+    color: var(--text-dark);
+    border: none;
+    border-radius: 50%;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    width: 1.25rem;
+    height: 1.25rem;
+    flex-shrink: 0;
+  }
+  
+  .chip-remove-button:hover {
+    background-color: var(--gold-light);
+    transform: scale(1.1);
+  }
+  
+  .carousel-chips-list::-webkit-scrollbar {
     height: 6px;
   }
   
-  .chip::-webkit-scrollbar-track {
-    background: #f8f9fa;
-    border-radius: 3px;
+  .carousel-chips-list::-webkit-scrollbar-track {
+    background: transparent;
   }
   
-  .chip::-webkit-scrollbar-thumb {
-    background: #ccc;
+  .carousel-chips-list::-webkit-scrollbar-thumb {
+    background: var(--gold-color);
     border-radius: 3px;
   }
 </style>

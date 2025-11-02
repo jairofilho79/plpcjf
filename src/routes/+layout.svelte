@@ -104,6 +104,8 @@
     }
     
     // PLPC header hidden activation (7 taps in 10s)
+    // DESABILITADO - Será reabilitado em breve
+    /*
     const header = document.querySelector('.plpc-header');
     if (header) {
       let tapCount = 0;
@@ -134,18 +136,22 @@
       header.addEventListener('click', onTap);
       header.addEventListener('touchend', onTap, { passive: true });
     }
+    */
   });
 </script>
 
 <!-- Toolbar fixa no topo -->
-<div class="fixed top-0 left-0 right-0 bg-background-color border-b-4 border-gold-color shadow-md z-40 plpc-header" style="cursor: pointer;">
-  <h1 class="text-center my-4 text-3xl font-garamond font-bold text-placeholder-color tracking-wide" style="text-shadow: 1px 1px 2px rgba(0,0,0,0.3);">
+<div class="fixed top-0 left-0 right-0 bg-background-color border-b-4 border-gold-color shadow-md z-40 plpc-header" style="cursor: pointer; pointer-events: none;">
+  <h1 class="text-center pt-4 pb-0 text-3xl font-garamond font-bold text-placeholder-color tracking-wide" style="text-shadow: 1px 1px 2px rgba(0,0,0,0.3);">
     PLPC
   </h1>
+  <p class="text-center text-xs text-placeholder-color opacity-60 pb-3 pt-0.5 subtitle-inset">
+    Pesquisador de Louvores de Partitura e Cifra (e Gestinhos)
+  </p>
 </div>
 
 <!-- Conteúdo principal com margem para toolbar -->
-<div class="pt-24 pb-4 px-4 min-h-screen">
+<div class="pt-24 pb-4 px-4 min-h-screen bg-background-color">
   <slot />
 </div>
 

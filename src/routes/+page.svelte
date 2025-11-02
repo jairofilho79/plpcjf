@@ -1,19 +1,29 @@
 <script>
   import { onMount } from 'svelte';
+  import { browser } from '$app/environment';
   import { derived } from 'svelte/store';
   import { louvores, loadLouvores } from '$lib/stores/louvores';
   import { filters } from '$lib/stores/filters';
   import { pdfViewer } from '$lib/stores/pdfViewer';
   import SearchBar from '$lib/components/SearchBar.svelte';
   import CategoryFilters from '$lib/components/CategoryFilters.svelte';
+  import PdfViewerSelector from '$lib/components/PdfViewerSelector.svelte';
   import LouvorCard from '$lib/components/LouvorCard.svelte';
   import CarouselChips from '$lib/components/CarouselChips.svelte';
   
   let searchQuery = '';
   let filteredResults = [];
+  let debounceTimer = null;
   
   onMount(() => {
     loadLouvores();
+    
+    // Limpar timer ao destruir componente
+    return () => {
+      if (debounceTimer) {
+        clearTimeout(debounceTimer);
+      }
+    };
   });
   
   function normalizeSearchString(str) {
@@ -25,6 +35,11 @@
   }
   
   function handleClear() {
+    // Limpar o debounce timer se existir
+    if (debounceTimer) {
+      clearTimeout(debounceTimer);
+      debounceTimer = null;
+    }
     filteredResults = [];
   }
   
@@ -65,10 +80,25 @@
     });
   }
   
+  // Debounce: Aguarda 300ms após o usuário parar de digitar antes de pesquisar
+  // Isso evita que a pesquisa bloqueie a digitação
   $: if (searchQuery !== undefined) {
-    // React to store changes
     $filters;
-    filterLouvores();
+    
+    // Limpar timer anterior se existir
+    if (debounceTimer) {
+      clearTimeout(debounceTimer);
+    }
+    
+    // Criar novo timer para executar a pesquisa após 300ms
+    if (browser) {
+      debounceTimer = setTimeout(() => {
+        filterLouvores();
+      }, 300);
+    } else {
+      // No servidor, executar diretamente
+      filterLouvores();
+    }
   }
   
   function getLouvorKey(louvor) {
@@ -84,33 +114,59 @@
 
 <div class="max-w-6xl mx-auto">
   <div class="flex flex-col items-center mt-8 space-y-4">
-    <SearchBar bind:searchQuery on:search={handleSearch} on:clear={handleClear} />
+    <SearchBar bind:searchQuery on:clear={handleClear} />
     
     <CategoryFilters />
     
-    <select
-      bind:value={$pdfViewer}
-      class="w-full max-w-4xl p-3 text-base border-2 border-gray-300 rounded-lg bg-white mt-4 cursor-pointer focus:outline-none focus:border-gold-color"
-    >
-      <option value="online">Leitor Online</option>
-      <option value="newtab">Abrir PDF em nova aba</option>
-      <option value="share">Compartilhar (menu do sistema)</option>
-      <option value="save">Salvar/baixar para o dispositivo</option>
-    </select>
+    <PdfViewerSelector />
     
     <CarouselChips />
   </div>
   
-  <div class="mt-8">
+  <div class="mt-8 flex justify-center">
     {#if filteredResults.length > 0}
-      <div class="flex flex-col items-center gap-4">
-        {#each filteredResults as louvor (getLouvorKey(louvor))}
-          <LouvorCard {louvor} />
-        {/each}
+      <div class="louvores-container w-full max-w-4xl">
+        <span class="container-tag">Louvores</span>
+        <div class="louvores-list">
+          {#each filteredResults as louvor (getLouvorKey(louvor))}
+            <LouvorCard {louvor} />
+          {/each}
+        </div>
       </div>
     {:else if searchQuery}
       <p class="text-center text-gray-600 mt-8">Nenhum resultado encontrado.</p>
     {/if}
   </div>
 </div>
+
+<style>
+  .louvores-container {
+    position: relative;
+    padding: 1rem;
+    background-color: var(--card-color);
+    border: 2px solid var(--gold-color);
+    border-radius: 0.5rem;
+  }
+  
+  .container-tag {
+    position: absolute;
+    top: -0.875rem;
+    left: 0.75rem;
+    background-color: var(--card-color);
+    color: var(--text-dark);
+    font-size: 0.75rem;
+    font-weight: 600;
+    padding: 0.25rem 0.5rem;
+    border-radius: 0.25rem;
+    border: 2px solid var(--gold-color);
+    z-index: 10;
+    line-height: 1;
+  }
+  
+  .louvores-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+</style>
 
