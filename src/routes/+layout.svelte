@@ -6,6 +6,15 @@
   import UpdateBanner from '$lib/components/UpdateBanner.svelte';
   import InstallProgressModal from '$lib/components/InstallProgressModal.svelte';
   
+  // Handle overflow for /leitor route
+  $: if (browser && $page.url.pathname.startsWith('/leitor')) {
+    document.documentElement.style.overflow = 'hidden';
+    document.body.style.overflow = 'hidden';
+  } else if (browser) {
+    document.documentElement.style.overflow = '';
+    document.body.style.overflow = '';
+  }
+  
   let showUpdateBanner = false;
   let showProgressModal = false;
   let progress = { current: 0, total: 0 };
@@ -155,7 +164,10 @@
 {/if}
 
 <!-- Conteúdo principal com margem para toolbar (sem margem superior no /leitor) -->
-<div class="pb-4 px-4 min-h-screen bg-background-color" class:pt-24={!$page.url.pathname.startsWith('/leitor')}>
+<div class="pb-4 px-4 min-h-screen bg-background-color" 
+     class:pt-24={!$page.url.pathname.startsWith('/leitor')}
+     class:px-0={$page.url.pathname.startsWith('/leitor')}
+     class:pb-0={$page.url.pathname.startsWith('/leitor')}>
   <slot />
 </div>
 

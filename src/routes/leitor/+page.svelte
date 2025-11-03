@@ -21,6 +21,9 @@
   let totalPages = 0;
   let zoomPercent = 100;
   let lastLoadedFile: string | null = null;
+  // Preferred fit mode: 'page-width' (recommended) or 'page-fit'
+  let preferredFitMode: 'page-width' | 'page-fit' = 'page-width';
+  $: fitModeLabel = preferredFitMode === 'page-width' ? 'Largura' : 'Página';
 
   async function load(fileUrl: string) {
     if (!window.__pdfjsGetDocument) return;
@@ -58,6 +61,11 @@
 
   onMount(async () => {
     if (!containerEl || !viewerEl) return;
+    // Load persisted preferred fit mode
+    try {
+      const saved = localStorage.getItem('PLPC_LEITOR_FIT_MODE');
+      if (saved === 'page-fit' || saved === 'page-width') preferredFitMode = saved;
+    } catch (_) {}
     // Measure toolbar height (including border) and keep it updated
     const updateToolbarHeight = () => {
       toolbarHeight = toolbarEl ? toolbarEl.offsetHeight : 60;
@@ -112,7 +120,7 @@
 
     // Define escala inicial e sincroniza estados
     eventBus.on('pagesinit', () => {
-      if (viewer) viewer.currentScaleValue = 'page-fit';
+      if (viewer) viewer.currentScaleValue = preferredFitMode;
     });
     eventBus.on('scalechanging', (e: any) => {
       zoomPercent = Math.round((e?.scale ?? (viewer as any)?.currentScale ?? 1) * 100);
@@ -150,7 +158,8 @@
   }
   function zoomFit() {
     if (!viewer) return;
-    viewer.currentScaleValue = 'page-fit';
+    // Reset to the preferred fit mode (page-width by default)
+    viewer.currentScaleValue = preferredFitMode;
   }
   function nextPage() {
     if (!viewer) return;
@@ -164,6 +173,11 @@
     (viewer as any).currentPageNumber = prev;
   }
 
+  function toggleFitMode() {
+    preferredFitMode = preferredFitMode === 'page-width' ? 'page-fit' : 'page-width';
+    try { localStorage.setItem('PLPC_LEITOR_FIT_MODE', preferredFitMode); } catch (_) {}
+    if (viewer) viewer.currentScaleValue = preferredFitMode;
+  }
   // Reload if the file query param changes, but only when it actually changes
   $: if (viewer && file && file !== lastLoadedFile) {
     Promise.resolve().then(() => load(file));
@@ -203,7 +217,7 @@
     right: 0;
     height: 56px;
     display: grid;
-    grid-template-columns: 1fr repeat(6, max-content);
+    grid-template-columns: 1fr repeat(7, max-content);
     grid-template-rows: repeat(3, 1fr);
     column-gap: 8px;
     padding: 0 calc(12px + env(safe-area-inset-right)) 0 calc(12px + env(safe-area-inset-left));
@@ -212,6 +226,10 @@
     border-bottom: 4px solid var(--gold-color);
     z-index: 1000;
     align-items: center;
+    box-sizing: border-box;
+    width: 100%;
+    max-width: 100vw;
+    overflow: hidden;
   }
   .btn {
     padding: 10px 12px;
@@ -262,6 +280,7 @@
   .btn.zoom-minus { grid-column: 5; grid-row: 1 / 4; align-self: center; }
   .btn.zoom-fit { grid-column: 6; grid-row: 1 / 4; align-self: center; }
   .btn.zoom-plus { grid-column: 7; grid-row: 1 / 4; align-self: center; }
+  .btn.fit-toggle { grid-column: 8; grid-row: 1 / 4; align-self: center; }
 
   /* Wide screens: let content breathe */
   @media (min-width: 1024px) {
@@ -273,7 +292,7 @@
   /* Tablet+ layout: brand in its own column, title/subtitle to the right */
   @media (min-width: 768px) {
     .toolbar {
-      grid-template-columns: auto 1fr repeat(6, max-content);
+      grid-template-columns: auto 1fr repeat(7, max-content);
     }
     .brand { grid-column: 1; grid-row: 1 / 4; align-self: center; }
     .title-wrap { grid-column: 2; grid-row: 1 / 4; }
@@ -284,6 +303,7 @@
     .btn.zoom-minus { grid-column: 6; }
     .btn.zoom-fit { grid-column: 7; }
     .btn.zoom-plus { grid-column: 8; }
+    .btn.fit-toggle { grid-column: 9; }
   }
 
   /* Compact screens: stack title under PLPC, stack indicator, hide +/- */
@@ -305,6 +325,7 @@
   <button class="btn zoom-minus" on:click={zoomOut} aria-label="Diminuir zoom">−</button>
   <button class="btn zoom-fit" on:click={zoomFit} aria-label="Ajustar (page fit)">{zoomPercent}%</button>
   <button class="btn zoom-plus" on:click={zoomIn} aria-label="Aumentar zoom">+</button>
+  <button class="btn fit-toggle" on:click={toggleFitMode} aria-label="Alternar ajuste entre largura/página">{fitModeLabel}</button>
 
   <div class="title-wrap">
     {#if titulo}
@@ -320,7 +341,7 @@
   
 </div>
 
-<div bind:this={containerEl} class="container pdfViewer">
+<div id="viewerContainer" bind:this={containerEl} class="container">
   <div bind:this={viewerEl} class="viewer pdfViewer"></div>
   <!-- pdfjs-dist css hooks on .pdfViewer and .viewer -->
   
