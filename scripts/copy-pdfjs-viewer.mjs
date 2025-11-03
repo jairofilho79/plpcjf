@@ -15,26 +15,40 @@ async function ensureDir(path) {
 }
 
 async function main() {
-  const source = resolve(__dirname, '..', 'node_modules', 'pdfjs-dist', 'web');
-  // In monorepos or different working dirs, also try process.cwd()
-  const fallbackSource = resolve(process.cwd(), 'node_modules', 'pdfjs-dist', 'web');
-  const target = resolve(process.cwd(), 'static', 'pdfjs', 'web');
+  const pkgRootA = resolve(__dirname, '..', 'node_modules', 'pdfjs-dist');
+  const pkgRootB = resolve(process.cwd(), 'node_modules', 'pdfjs-dist');
 
-  await ensureDir(target);
+  const webSourceA = resolve(pkgRootA, 'web');
+  const webSourceB = resolve(pkgRootB, 'web');
+  const buildSourceA = resolve(pkgRootA, 'build');
+  const buildSourceB = resolve(pkgRootB, 'build');
+  const targetWeb = resolve(process.cwd(), 'static', 'pdfjs', 'web');
+  const targetBuild = resolve(process.cwd(), 'static', 'pdfjs', 'build');
+
+  await ensureDir(targetWeb);
+  await ensureDir(targetBuild);
 
   try {
-    await cp(source, target, { recursive: true });
+    await cp(webSourceA, targetWeb, { recursive: true });
+    await cp(resolve(buildSourceA, 'pdf.worker.min.mjs'), resolve(targetBuild, 'pdf.worker.min.mjs'));
+    await cp(resolve(buildSourceA, 'pdf.mjs'), resolve(targetBuild, 'pdf.mjs'));
     // eslint-disable-next-line no-console
-    console.log(`[pdfjs] Copied viewer from ${source} to ${target}`);
+    console.log(`[pdfjs] Copied viewer from ${webSourceA} to ${targetWeb}`);
+    // eslint-disable-next-line no-console
+    console.log(`[pdfjs] Copied core+worker from ${buildSourceA} to ${targetBuild}`);
     return;
   } catch (err) {
     // try fallback
   }
 
   try {
-    await cp(fallbackSource, target, { recursive: true });
+    await cp(webSourceB, targetWeb, { recursive: true });
+    await cp(resolve(buildSourceB, 'pdf.worker.min.mjs'), resolve(targetBuild, 'pdf.worker.min.mjs'));
+    await cp(resolve(buildSourceB, 'pdf.mjs'), resolve(targetBuild, 'pdf.mjs'));
     // eslint-disable-next-line no-console
-    console.log(`[pdfjs] Copied viewer from ${fallbackSource} to ${target}`);
+    console.log(`[pdfjs] Copied viewer from ${webSourceB} to ${targetWeb}`);
+    // eslint-disable-next-line no-console
+    console.log(`[pdfjs] Copied core+worker from ${buildSourceB} to ${targetBuild}`);
   } catch (err) {
     // eslint-disable-next-line no-console
     console.error('[pdfjs] Failed to copy PDF.js viewer. Is pdfjs-dist installed?', err?.message || err);

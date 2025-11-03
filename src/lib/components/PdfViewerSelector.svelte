@@ -2,13 +2,18 @@
   import { pdfViewer } from '$lib/stores/pdfViewer';
   
   const PDF_VIEWER_OPTIONS = [
-    { value: 'online', label: 'Leitor Online' },
+    { value: 'leitor', label: 'Leitor' },
     { value: 'newtab', label: 'Abrir PDF em nova aba' },
     { value: 'share', label: 'Compartilhar' },
-    { value: 'save', label: 'Baixar' }
+    { value: 'save', label: 'Baixar' },
+    { value: 'online', label: 'Leitor Online' }
   ];
   
   function getIcon(value) {
+    if (value === 'leitor') {
+      // Ícone de livro (fornecido)
+      return 'M12 6.042A8.967 8.967 0 0 0 6 3.75c-1.052 0-2.062.18-3 .512v14.25A8.987 8.987 0 0 1 6 18c2.305 0 4.408.867 6 2.292m0-14.25a8.966 8.966 0 0 1 6-2.292c1.052 0 2.062.18 3 .512v14.25A8.987 8.987 0 0 0 18 18a8.967 8.967 0 0 0-6 2.292m0-14.25v14.25';
+    }
     if (value === 'online') {
       // Ícone de olho/visualização
       return 'M15 12a3 3 0 11-6 0 3 3 0 016 0z M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z';

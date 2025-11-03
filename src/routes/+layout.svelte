@@ -1,6 +1,7 @@
-<script>
+<script lang="ts">
   import '../app.css';
   import { onMount } from 'svelte';
+  import { page } from '$app/stores';
   import { browser } from '$app/environment';
   import UpdateBanner from '$lib/components/UpdateBanner.svelte';
   import InstallProgressModal from '$lib/components/InstallProgressModal.svelte';
@@ -17,10 +18,10 @@
       const swPath = '/sw.js';
       
       // Register with type: 'module' in development for ES module support
-      const swOptions = {
+      const swOptions: RegistrationOptions = {
         scope: '/',
         // Use module type in development to support ES imports
-        ...(browser && window.location.hostname === 'localhost' ? { type: 'module' } : {})
+        ...(browser && window.location.hostname === 'localhost' ? { type: 'module' as WorkerType } : {})
       };
       
       navigator.serviceWorker.register(swPath, swOptions)
@@ -44,8 +45,9 @@
           // Check for updates
           registration.addEventListener('updatefound', () => {
             const newWorker = registration.installing;
+            if (!newWorker) return;
             newWorker.addEventListener('statechange', () => {
-              if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
+              if (newWorker && newWorker.state === 'installed' && navigator.serviceWorker.controller) {
                 showUpdateBanner = true;
               }
             });
@@ -58,11 +60,11 @@
               if (!allowSync) return;
               if ('periodicSync' in reg) {
                 try {
-                  const status = await navigator.permissions.query({ name: 'periodic-background-sync' });
+              const status = await (navigator.permissions as any).query({ name: 'periodic-background-sync' as any });
                   if (status.state === 'granted' || status.state === 'prompt') {
-                    const tags = await reg.periodicSync.getTags();
+                const tags = await (reg as any).periodicSync.getTags();
                     if (!tags.includes('sync-pdfs')) {
-                      await reg.periodicSync.register('sync-pdfs', { minInterval: 24 * 60 * 60 * 1000 });
+                  await (reg as any).periodicSync.register('sync-pdfs', { minInterval: 24 * 60 * 60 * 1000 });
                       console.log('[UI] Periodic background sync registered');
                     }
                   }
@@ -140,18 +142,20 @@
   });
 </script>
 
-<!-- Toolbar fixa no topo -->
-<div class="fixed top-0 left-0 right-0 bg-background-color border-b-4 border-gold-color shadow-md z-40 plpc-header" style="cursor: pointer; pointer-events: none;">
-  <h1 class="text-center pt-4 pb-0 text-3xl font-garamond font-bold text-placeholder-color tracking-wide" style="text-shadow: 1px 1px 2px rgba(0,0,0,0.3);">
-    PLPC
-  </h1>
-  <p class="text-center text-xs text-placeholder-color opacity-60 pb-3 pt-0.5 subtitle-inset">
-    Pesquisador de Louvores de Partitura e Cifra (e Gestinhos)
-  </p>
-</div>
+<!-- Toolbar fixa no topo (oculta no /leitor) -->
+{#if !$page.url.pathname.startsWith('/leitor')}
+  <div class="fixed top-0 left-0 right-0 bg-background-color border-b-4 border-gold-color shadow-md z-40 plpc-header" style="cursor: pointer; pointer-events: none;">
+    <h1 class="text-center pt-4 pb-0 text-3xl font-garamond font-bold text-placeholder-color tracking-wide" style="text-shadow: 1px 1px 2px rgba(0,0,0,0.3);">
+      PLPC
+    </h1>
+    <p class="text-center text-xs text-placeholder-color opacity-60 pb-3 pt-0.5 subtitle-inset">
+      Pesquisador de Louvores de Partitura e Cifra (e Gestinhos)
+    </p>
+  </div>
+{/if}
 
-<!-- Conteúdo principal com margem para toolbar -->
-<div class="pt-24 pb-4 px-4 min-h-screen bg-background-color">
+<!-- Conteúdo principal com margem para toolbar (sem margem superior no /leitor) -->
+<div class="pb-4 px-4 min-h-screen bg-background-color" class:pt-24={!$page.url.pathname.startsWith('/leitor')}>
   <slot />
 </div>
 
