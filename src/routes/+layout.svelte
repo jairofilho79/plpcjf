@@ -40,9 +40,10 @@
           return;
         }
         
-        // Service worker path
-        // Em prod: nossa rota /sw.js serve o arquivo compilado (bundlado)
-        const swPath = '/sw.js';
+                  // Service worker path
+          // Em prod: o arquivo static/sw.js (copiado pelo plugin) é servido automaticamente
+          // Os headers necessários são configurados via static/_headers (Cloudflare Pages)
+          const swPath = '/sw.js';
         
         // Register service worker
         // Em prod: rollupOptions (format: 'iife') gera bundle sem imports ES6 (não precisa de type: 'module')
