@@ -5,7 +5,7 @@ export async function fetchPdfAsBlob(pdfPath) {
   return await res.blob();
 }
 
-// Open PDF using normal URL; Service Worker will serve from cache when available
+// Open PDF using normal URL
 export async function openPdfNewTabOfflineFirst(relPath, filename = 'file.pdf') {
   try {
     const localUrl = new URL(relPath, window.location.origin).href;
