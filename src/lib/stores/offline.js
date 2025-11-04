@@ -11,6 +11,7 @@ import {
 } from '$lib/utils/swRegistration';
 import { louvores } from './louvores';
 import { CATEGORY_OPTIONS } from './filters';
+import { atobUTF8 } from '$lib/utils/pathUtils';
 
 const ALLOW_OFFLINE_KEY = 'ALLOW_OFFLINE';
 const CACHED_PDFS_KEY = 'cachedPdfsList';
@@ -147,7 +148,7 @@ function getPdfUrl(louvor) {
   // Use the same logic as pathUtils.js
   try {
     if (louvor.pdfId) {
-      const decoded = atob(louvor.pdfId);
+      const decoded = atobUTF8(louvor.pdfId);
       const path = decoded.startsWith('assets/') ? decoded : `assets/${decoded}`;
       return `/${path}`;
     }
