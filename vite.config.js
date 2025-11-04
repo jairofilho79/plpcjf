@@ -15,8 +15,17 @@ export default defineConfig({
       manifest: false,
       injectManifest: {
         globPatterns: ['**/*.{js,css,html,ico,png,svg,webp,json}'],
-        maximumFileSizeToCacheInBytes: 5000000
+        maximumFileSizeToCacheInBytes: 5000000,
+        // Forçar o Rollup a fazer bundle de todas as dependências
+        rollupOptions: {
+          output: {
+            format: 'iife',
+            name: 'sw'
+          }
+        }
       },
+      buildExcludes: [/app.html/],
+      useCredentials: false,
       workbox: {
         // Garantir que o service worker seja gerado corretamente
         cleanupOutdatedCaches: true,
