@@ -27,21 +27,30 @@
   onMount(() => {
     if (!browser) return;
     
-    // Service Worker registration
-    if ('serviceWorker' in navigator) {
-      // Service worker está disponível na rota /sw.js
-      const swPath = '/sw.js';
-      
-      // Register service worker
-      // O vite-plugin-pwa com rollupOptions (format: 'iife') gera um bundle sem imports ES6
-      // Então NÃO precisamos de type: 'module'
-      const swOptions: RegistrationOptions = {
-        scope: '/'
-        // Não usar type: 'module' se o service worker for bundlado (IIFE)
-        // O rollupOptions no vite.config.js deve gerar um bundle sem imports ES6
-      };
-      
-      navigator.serviceWorker.register(swPath, swOptions)
+          // Service Worker registration
+      // NOTA: Em dev com injectManifest, o service worker não funciona porque não é bundlado.
+      // O rollupOptions só aplica durante o build. Em dev, os imports workbox não resolvem.
+      // Desabilitamos em dev por enquanto. Teste em produção após o build.
+      if ('serviceWorker' in navigator) {
+        const isDev = browser && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
+        
+        if (isDev) {
+          console.warn('[UI] Service Worker disabled in development (injectManifest limitation)');
+          console.warn('[UI] Service worker will work in production after build');
+          return;
+        }
+        
+        // Service worker path
+        // Em prod: nossa rota /sw.js serve o arquivo compilado (bundlado)
+        const swPath = '/sw.js';
+        
+        // Register service worker
+        // Em prod: rollupOptions (format: 'iife') gera bundle sem imports ES6 (não precisa de type: 'module')
+        const swOptions: RegistrationOptions = {
+          scope: '/'
+        };
+        
+        navigator.serviceWorker.register(swPath, swOptions)
         .then((registration) => {
           console.log('[UI] SW registered:', registration.scope);
           

@@ -2,6 +2,11 @@ import type { RequestHandler } from './$types';
 import { dev } from '$app/environment';
 
 // Servir o service worker compilado pelo vite-plugin-pwa
+// 
+// IMPORTANTE: Em desenvolvimento, o vite-plugin-pwa com devOptions.enabled serve
+// o service worker automaticamente. Não devemos interceptar com esta rota.
+// Esta rota é apenas para produção (Cloudflare Pages).
+//
 // O vite-plugin-pwa compila durante o build e o plugin copy-sw-to-static copia para static/sw.js
 // Em produção no Cloudflare, tentamos acessar via fetch do próprio servidor ou usar o arquivo estático
 
@@ -11,10 +16,29 @@ export const GET: RequestHandler = async ({ url, fetch }) => {
     let source = 'unknown';
     
     if (dev) {
-      // Em desenvolvimento, usar ?raw (Vite processa dinamicamente)
+      // PROBLEMA: Em dev com injectManifest, o vite-plugin-pwa não bundla o service worker.
+      // O rollupOptions só é aplicado durante o build. O ?raw retorna o source com imports ES6.
+      // 
+      // O browser não consegue resolver imports como 'workbox-precaching' porque esses
+      // não são módulos ES disponíveis. Eles precisam ser bundlados.
+      //
+      // SOLUÇÃO TEMPORÁRIA: Em dev, o service worker pode não funcionar corretamente
+      // porque os módulos workbox não estão disponíveis. Isso é uma limitação do
+      // vite-plugin-pwa com injectManifest em desenvolvimento.
+      //
+      // OPÇÕES:
+      // 1. Usar generateSW em vez de injectManifest (menos controle, mas funciona em dev)
+      // 2. Processar o service worker manualmente em dev (complexo)
+      // 3. Aceitar que em dev o service worker não funciona completamente
+      //
+      // Por enquanto, vamos servir o source e deixar o erro aparecer.
+      // Em produção, o rollupOptions bundla tudo corretamente.
+      
       const swModule = await import('../../service-worker/sw.js?raw');
       swContent = swModule.default || swModule;
-      source = 'dev-?raw';
+      source = 'dev-raw-source-unbundled';
+      console.warn('[SW Route] Dev: Serving unbundled source (may not work - workbox imports need bundling)');
+      console.warn('[SW Route] Dev: Service worker functionality may be limited in development');
     } else {
       // Em produção, tentar múltiplas estratégias compatíveis com Cloudflare Workers
       // IMPORTANTE: Precisamos do arquivo COMPILADO (bundlado), não o source
