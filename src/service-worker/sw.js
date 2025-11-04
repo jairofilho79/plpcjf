@@ -378,25 +378,28 @@ self.addEventListener('activate', (event) => {
   );
 });
 
-// Message handler
-self.addEventListener('message', (event) => {
-  if (event.data && event.data.type === 'SKIP_WAITING') {
-    self.skipWaiting();
-  }
-  if (event.data && event.data.type === 'SYNC_PDFS') {
-    event.waitUntil(syncAllPdfs());
-  }
-  if (event.data && event.data.type === 'SYNC_PDFS_FILTERED') {
-    event.waitUntil(syncFilteredPdfs(event.data.filters, event.data.louvores));
-  }
-  if (event.data && event.data.type === 'CANCEL_SYNC') {
-    isSyncCancelled = true;
-    if (syncAbortController) {
-      syncAbortController.abort();
+  // Message handler
+  self.addEventListener('message', (event) => {
+    console.log('[SW] Received message:', event.data?.type, event.data);
+    
+    if (event.data && event.data.type === 'SKIP_WAITING') {
+      self.skipWaiting();
     }
-    console.log('[SW] Sync cancellation requested');
-  }
-});
+    if (event.data && event.data.type === 'SYNC_PDFS') {
+      event.waitUntil(syncAllPdfs());
+    }
+    if (event.data && event.data.type === 'SYNC_PDFS_FILTERED') {
+      console.log('[SW] Starting filtered sync with', event.data.filters?.length || 0, 'filters and', event.data.louvores?.length || 0, 'louvores');
+      event.waitUntil(syncFilteredPdfs(event.data.filters, event.data.louvores));
+    }
+    if (event.data && event.data.type === 'CANCEL_SYNC') {
+      isSyncCancelled = true;
+      if (syncAbortController) {
+        syncAbortController.abort();
+      }
+      console.log('[SW] Sync cancellation requested');
+    }
+  });
 
 self.addEventListener('periodicsync', (event) => {
   if (event.tag === 'sync-pdfs') {

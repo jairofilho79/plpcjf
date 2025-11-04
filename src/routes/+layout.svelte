@@ -29,7 +29,10 @@
     
     // Service Worker registration
     if ('serviceWorker' in navigator) {
-      const swPath = '/sw.js';
+      // VitePWA com injectManifest pode gerar em diferentes caminhos
+      // Tenta primeiro o caminho padrão, depois fallback
+      const swPaths = ['/sw.js', '/service-worker.js', '/_app/immutable/sw.js'];
+      let swPath = swPaths[0];
       
       // Register with type: 'module' in development for ES module support
       const swOptions: RegistrationOptions = {
@@ -89,9 +92,23 @@
             });
         })
         .catch((error) => {
-          // Silently fail in development if service worker is not available
-          if (error.message?.includes('HTTP') || error.message?.includes('403') || error.message?.includes('404')) {
-            console.warn('SW not available in development:', error.message);
+          // Tentar caminhos alternativos se o primeiro falhar
+          if (error.message?.includes('404') || error.message?.includes('HTTP')) {
+            console.warn(`SW not found at ${swPath}, trying alternative paths...`);
+            // Tentar próximo caminho se houver
+            const nextPathIndex = swPaths.indexOf(swPath) + 1;
+            if (nextPathIndex < swPaths.length) {
+              swPath = swPaths[nextPathIndex];
+              navigator.serviceWorker.register(swPath, swOptions)
+                .then((registration) => {
+                  console.log('SW registered at alternative path:', swPath, registration);
+                })
+                .catch((err) => {
+                  console.error('SW registration failed at all paths:', err);
+                });
+            } else {
+              console.error('SW not found at any known path');
+            }
           } else {
             console.error('SW registration failed:', error);
           }
@@ -160,35 +177,77 @@
     plpcHeader.addEventListener('touchend', onTap, { passive: true });
   }
   
-  function handleConfirmOfflineDownload(filters: string[]) {
+  async function handleConfirmOfflineDownload(filters: string[]) {
     showOfflineFilterModal = false;
+    showProgressModal = true;
     
-    // Enviar mensagem ao service worker
-    if (navigator.serviceWorker && navigator.serviceWorker.controller) {
-      // Verificar se louvores já estão carregados
-      if ($louvores && $louvores.length > 0) {
+    if (!('serviceWorker' in navigator)) {
+      console.error('[UI] Service Worker not supported');
+      showProgressModal = false;
+      alert('Service Worker não é suportado neste navegador.');
+      return;
+    }
+    
+    // Função auxiliar para enviar mensagem
+    const sendMessage = (louvoresData: any[]) => {
+      // Tentar usar controller primeiro (mais rápido)
+      if (navigator.serviceWorker.controller) {
+        console.log('[UI] Using controller to send message');
         navigator.serviceWorker.controller.postMessage({
           type: 'SYNC_PDFS_FILTERED',
           filters: filters,
-          louvores: $louvores
+          louvores: louvoresData
         });
-        showProgressModal = true;
-      } else {
-        // Aguardar louvores serem carregados
-        const unsubscribe = louvores.subscribe(l => {
-          if (l && l.length > 0) {
-            unsubscribe();
-            if (navigator.serviceWorker && navigator.serviceWorker.controller) {
-              navigator.serviceWorker.controller.postMessage({
+        console.log('[UI] Sent SYNC_PDFS_FILTERED message via controller with', louvoresData.length, 'louvores');
+        return;
+      }
+      
+      // Se não tiver controller, aguardar registration estar pronto
+      navigator.serviceWorker.ready.then((registration) => {
+        if (registration.active) {
+          console.log('[UI] Using registration.active to send message');
+          registration.active.postMessage({
+            type: 'SYNC_PDFS_FILTERED',
+            filters: filters,
+            louvores: louvoresData
+          });
+          console.log('[UI] Sent SYNC_PDFS_FILTERED message via registration.active with', louvoresData.length, 'louvores');
+        } else if (registration.installing) {
+          console.log('[UI] Service worker installing, waiting for activation');
+          registration.installing.addEventListener('statechange', () => {
+            if (registration.active) {
+              registration.active.postMessage({
                 type: 'SYNC_PDFS_FILTERED',
                 filters: filters,
-                louvores: l
+                louvores: louvoresData
               });
-              showProgressModal = true;
+              console.log('[UI] Sent SYNC_PDFS_FILTERED message after activation with', louvoresData.length, 'louvores');
             }
-          }
-        });
-      }
+          });
+        } else {
+          console.warn('[UI] Service worker not active or installing');
+          showProgressModal = false;
+          alert('Service Worker não está ativo. Por favor, recarregue a página e tente novamente.');
+        }
+      }).catch((error) => {
+        console.error('[UI] Error getting service worker ready:', error);
+        showProgressModal = false;
+        alert('Erro ao acessar Service Worker. Verifique se o service worker está registrado.');
+      });
+    };
+    
+    // Verificar se louvores já estão carregados
+    if ($louvores && $louvores.length > 0) {
+      sendMessage($louvores);
+    } else {
+      // Aguardar louvores serem carregados
+      console.log('[UI] Waiting for louvores to load...');
+      const unsubscribe = louvores.subscribe(l => {
+        if (l && l.length > 0) {
+          unsubscribe();
+          sendMessage(l);
+        }
+      });
     }
   }
   
