@@ -329,5 +329,25 @@
     color: inherit;
     white-space: nowrap;
   }
+  
+  /* Em tablets e telas maiores: evitar quebra de linha e usar espaçamento dinâmico */
+  @media (min-width: 768px) {
+    .filter-container {
+      flex-wrap: nowrap !important;
+      justify-content: flex-start !important;
+      gap: 0.5rem !important;
+    }
+    
+    .filter-chip {
+      flex-shrink: 0;
+    }
+  }
+  
+  @media (min-width: 1024px) {
+    .filter-container {
+      justify-content: center !important;
+      gap: 0.75rem !important;
+    }
+  }
 </style>
 

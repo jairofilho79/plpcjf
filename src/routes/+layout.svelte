@@ -78,6 +78,12 @@
     justify-content: center;
   }
   
+  .header-title-section :global(h1),
+  .header-title-section :global(p) {
+    width: 100%;
+    text-align: center;
+  }
+  
   .offline-indicator-wrapper {
     position: absolute;
     top: 0.5rem;
