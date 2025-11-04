@@ -31,6 +31,19 @@
   let preferredFitMode: 'page-width' | 'page-fit' = 'page-width';
   $: fitModeLabel = preferredFitMode === 'page-width' ? 'Largura' : 'Página';
 
+  // Gesture state for pinch to zoom
+  let pinchInitialDistance = 0;
+  let pinchInitialScale = 1;
+  let isPinching = false;
+  
+  // Gesture state for single touch navigation
+  let touchStartX = 0;
+  let touchStartY = 0;
+  let touchStartTime = 0;
+  let hasMoved = false;
+  const TOUCH_MOVE_THRESHOLD = 10; // pixels
+  const TOUCH_TIME_THRESHOLD = 300; // milliseconds
+
   async function load(fileUrl: string) {
     const getDocument = (window as any).__pdfjsGetDocument as PDFJSGetDocument | undefined;
     if (!getDocument) return;
@@ -123,7 +136,13 @@
     window.addEventListener('resize', resize);
     window.addEventListener('keydown', onKeyDown);
 
-    // Basic pinch-zoom via CSS zoom handled by browser when useOnlyCssZoom is true
+    // Add touch gesture handlers
+    if (containerEl) {
+      containerEl.addEventListener('touchstart', onTouchStart, { passive: false });
+      containerEl.addEventListener('touchmove', onTouchMove, { passive: false });
+      containerEl.addEventListener('touchend', onTouchEnd, { passive: false });
+      containerEl.addEventListener('touchcancel', onTouchEnd, { passive: false });
+    }
 
     // Define escala inicial e sincroniza estados
     eventBus.on('pagesinit', () => {
@@ -145,6 +164,12 @@
     cleanup = () => {
       window.removeEventListener('resize', resize);
       window.removeEventListener('keydown', onKeyDown);
+      if (containerEl) {
+        containerEl.removeEventListener('touchstart', onTouchStart);
+        containerEl.removeEventListener('touchmove', onTouchMove);
+        containerEl.removeEventListener('touchend', onTouchEnd);
+        containerEl.removeEventListener('touchcancel', onTouchEnd);
+      }
       try { if (toolbarEl) ro.unobserve(toolbarEl); } catch {}
       // No explicit destroy API; let GC collect. Clear container contents.
       if (viewerEl) viewerEl.innerHTML = '';
@@ -185,6 +210,112 @@
     try { localStorage.setItem('PLPC_LEITOR_FIT_MODE', preferredFitMode); } catch (_) {}
     if (viewer) viewer.currentScaleValue = preferredFitMode;
   }
+
+  // Calculate distance between two touch points
+  function getTouchDistance(touch1: Touch, touch2: Touch): number {
+    const dx = touch2.clientX - touch1.clientX;
+    const dy = touch2.clientY - touch1.clientY;
+    return Math.sqrt(dx * dx + dy * dy);
+  }
+
+  // Handle touch start for gestures
+  function onTouchStart(e: TouchEvent) {
+    if (!viewer || !containerEl) return;
+    
+    const touches = e.touches;
+    
+    // Pinch to zoom: 2 touches
+    if (touches.length === 2) {
+      isPinching = true;
+      pinchInitialDistance = getTouchDistance(touches[0], touches[1]);
+      pinchInitialScale = viewer.currentScale;
+      e.preventDefault();
+      return;
+    }
+    
+    // Single touch for navigation
+    if (touches.length === 1) {
+      touchStartX = touches[0].clientX;
+      touchStartY = touches[0].clientY;
+      touchStartTime = Date.now();
+      hasMoved = false;
+    }
+  }
+
+  // Handle touch move for gestures
+  function onTouchMove(e: TouchEvent) {
+    if (!viewer || !containerEl) return;
+    
+    const touches = e.touches;
+    
+    // Pinch to zoom: 2 touches
+    if (touches.length === 2 && isPinching) {
+      const currentDistance = getTouchDistance(touches[0], touches[1]);
+      const scaleRatio = currentDistance / pinchInitialDistance;
+      const newScale = pinchInitialScale * scaleRatio;
+      
+      // Clamp scale to reasonable bounds (0.25x to 4x)
+      const clampedScale = Math.max(0.25, Math.min(4, newScale));
+      viewer.currentScale = clampedScale;
+      
+      e.preventDefault();
+      return;
+    }
+    
+    // Single touch: check if it moved significantly
+    if (touches.length === 1 && !isPinching) {
+      const dx = Math.abs(touches[0].clientX - touchStartX);
+      const dy = Math.abs(touches[0].clientY - touchStartY);
+      
+      if (dx > TOUCH_MOVE_THRESHOLD || dy > TOUCH_MOVE_THRESHOLD) {
+        hasMoved = true;
+      }
+    }
+  }
+
+  // Handle touch end for gestures
+  function onTouchEnd(e: TouchEvent) {
+    if (!viewer || !containerEl) return;
+    
+    const touches = e.touches;
+    
+    // End pinch gesture
+    if (isPinching && touches.length < 2) {
+      isPinching = false;
+      pinchInitialDistance = 0;
+      pinchInitialScale = 1;
+      e.preventDefault();
+      return;
+    }
+    
+    // Single touch navigation: check if it was a tap (not a scroll)
+    if (touches.length === 0 && !isPinching && !hasMoved) {
+      const touchDuration = Date.now() - touchStartTime;
+      
+      // Only process if it was a quick tap (not a long press or scroll)
+      if (touchDuration < TOUCH_TIME_THRESHOLD) {
+        const containerRect = containerEl.getBoundingClientRect();
+        const containerWidth = containerRect.width;
+        const relativeX = touchStartX - containerRect.left;
+        const quarterWidth = containerWidth / 4;
+        
+        // First quarter (0-25%): previous page
+        if (relativeX < quarterWidth) {
+          prevPage();
+        }
+        // Last quarter (75-100%): next page
+        else if (relativeX > containerWidth - quarterWidth) {
+          nextPage();
+        }
+      }
+    }
+    
+    // Reset state
+    touchStartX = 0;
+    touchStartY = 0;
+    touchStartTime = 0;
+    hasMoved = false;
+  }
   // Reload if the file query param changes, but only when it actually changes
   $: if (viewer && file && file !== lastLoadedFile) {
     Promise.resolve().then(() => load(file));
@@ -216,6 +347,7 @@
     width: 100vw;
     max-width: 100vw;
     z-index: 1; /* ensure it overlays page background */
+    touch-action: pan-x pan-y; /* Allow scrolling but prevent default pinch */
   }
 
   /* Viewer base width equals viewport; zooms can overflow horizontally for scroll */
