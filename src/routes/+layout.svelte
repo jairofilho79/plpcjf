@@ -33,12 +33,10 @@
       const swPath = '/sw.js';
       
       // Register service worker
-      // O vite-plugin-pwa com injectManifest faz bundle de tudo, então não precisamos de type: 'module'
-      // Em desenvolvimento, pode precisar de type: 'module' se o Vite não bundlar
+      // O vite-plugin-pwa gera um módulo ES6 (sw.mjs), então precisamos usar type: 'module'
       const swOptions: RegistrationOptions = {
         scope: '/',
-        // Usar type: 'module' apenas em desenvolvimento
-        ...(browser && window.location.hostname === 'localhost' ? { type: 'module' as WorkerType } : {})
+        type: 'module' as WorkerType // Sempre usar módulo pois o vite-plugin-pwa gera ES6
       };
       
       navigator.serviceWorker.register(swPath, swOptions)
