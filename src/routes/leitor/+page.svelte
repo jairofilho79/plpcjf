@@ -29,7 +29,6 @@
   let lastLoadedFile: string | null = null;
   // Preferred fit mode: 'page-width' (recommended) or 'page-fit'
   let preferredFitMode: 'page-width' | 'page-fit' = 'page-width';
-  $: fitModeLabel = preferredFitMode === 'page-width' ? 'Largura' : 'Página';
 
   // Gesture state for pinch to zoom
   let pinchInitialDistance = 0;
@@ -81,11 +80,6 @@
 
   onMount(async () => {
     if (!containerEl || !viewerEl) return;
-    // Load persisted preferred fit mode
-    try {
-      const saved = localStorage.getItem('PLPC_LEITOR_FIT_MODE');
-      if (saved === 'page-fit' || saved === 'page-width') preferredFitMode = saved;
-    } catch (_) {}
     // Measure toolbar height (including border) and keep it updated
     const updateToolbarHeight = () => {
       toolbarHeight = toolbarEl ? toolbarEl.offsetHeight : 60;
@@ -203,12 +197,6 @@
     if (!viewer) return;
     const prev = Math.max(((viewer as any).currentPageNumber ?? 1) - 1, 1);
     (viewer as any).currentPageNumber = prev;
-  }
-
-  function toggleFitMode() {
-    preferredFitMode = preferredFitMode === 'page-width' ? 'page-fit' : 'page-width';
-    try { localStorage.setItem('PLPC_LEITOR_FIT_MODE', preferredFitMode); } catch (_) {}
-    if (viewer) viewer.currentScaleValue = preferredFitMode;
   }
 
   // Calculate distance between two touch points
@@ -363,7 +351,7 @@
     right: 0;
     height: 56px;
     display: grid;
-    grid-template-columns: 1fr repeat(7, max-content);
+    grid-template-columns: 1fr repeat(6, max-content);
     grid-template-rows: repeat(3, 1fr);
     column-gap: 8px;
     padding: 0 calc(12px + env(safe-area-inset-right)) 0 calc(12px + env(safe-area-inset-left));
@@ -426,7 +414,6 @@
   .btn.zoom-minus { grid-column: 5; grid-row: 1 / 4; align-self: center; }
   .btn.zoom-fit { grid-column: 6; grid-row: 1 / 4; align-self: center; }
   .btn.zoom-plus { grid-column: 7; grid-row: 1 / 4; align-self: center; }
-  .btn.fit-toggle { grid-column: 8; grid-row: 1 / 4; align-self: center; }
 
   /* Wide screens: let content breathe */
   @media (min-width: 1024px) {
@@ -438,7 +425,7 @@
   /* Tablet+ layout: brand in its own column, title/subtitle to the right */
   @media (min-width: 768px) {
     .toolbar {
-      grid-template-columns: auto 1fr repeat(7, max-content);
+      grid-template-columns: auto 1fr repeat(6, max-content);
     }
     .brand { grid-column: 1; grid-row: 1 / 4; align-self: center; }
     .title-wrap { grid-column: 2; grid-row: 1 / 4; }
@@ -449,7 +436,6 @@
     .btn.zoom-minus { grid-column: 6; }
     .btn.zoom-fit { grid-column: 7; }
     .btn.zoom-plus { grid-column: 8; }
-    .btn.fit-toggle { grid-column: 9; }
   }
 
   /* Compact screens: stack title under PLPC, stack indicator, hide +/- */
@@ -471,7 +457,6 @@
   <button class="btn zoom-minus" on:click={zoomOut} aria-label="Diminuir zoom">−</button>
   <button class="btn zoom-fit" on:click={zoomFit} aria-label="Ajustar (page fit)">{zoomPercent}%</button>
   <button class="btn zoom-plus" on:click={zoomIn} aria-label="Aumentar zoom">+</button>
-  <button class="btn fit-toggle" on:click={toggleFitMode} aria-label="Alternar ajuste entre largura/página">{fitModeLabel}</button>
 
   <div class="title-wrap">
     {#if titulo}
