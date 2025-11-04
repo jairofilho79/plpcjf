@@ -38,11 +38,11 @@
     <div class="header-content">
       <div class="header-title-section">
         <OfflineGestureDetector on:gesture-detected={handleGestureDetected}>
-          <h1 class="text-center pt-4 pb-0 text-3xl font-garamond font-bold text-placeholder-color tracking-wide" style="text-shadow: 1px 1px 2px rgba(0,0,0,0.3);">
+          <h1 class="text-center pt-4 pb-0 text-3xl font-garamond font-bold text-placeholder-color tracking-wide mx-auto" style="text-shadow: 1px 1px 2px rgba(0,0,0,0.3);">
             PLPC
           </h1>
         </OfflineGestureDetector>
-        <p class="text-center text-xs text-placeholder-color opacity-60 pb-3 pt-0.5 subtitle-inset">
+        <p class="text-center text-xs text-placeholder-color opacity-60 pb-3 pt-0.5 subtitle-inset mx-auto">
           Pesquisador de Louvores de Partitura e Cifra (e Gestinhos)
         </p>
       </div>
@@ -72,6 +72,10 @@
   
   .header-title-section {
     width: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
   }
   
   .offline-indicator-wrapper {
