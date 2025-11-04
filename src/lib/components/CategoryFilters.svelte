@@ -18,11 +18,18 @@
   }
   
   // Long press detection
+  /**
+     * @type {number | null | undefined}
+     */
   let longPressTimer = null;
   let wasLongPress = false;
   let wasTouchEvent = false;
   const LONG_PRESS_DURATION = 500; // 500ms
   
+  /**
+     * @param {string} category
+     * @param {MouseEvent & { currentTarget: EventTarget & HTMLButtonElement; }} event
+     */
   function handleCategoryMouseDown(category, event) {
     wasLongPress = false;
     wasTouchEvent = false;
@@ -41,6 +48,10 @@
     }, LONG_PRESS_DURATION);
   }
   
+  /**
+     * @param {string} category
+     * @param {MouseEvent & { currentTarget: EventTarget & HTMLButtonElement; }} event
+     */
   function handleCategoryMouseUp(category, event) {
     // Se o timer ainda está rodando, significa que foi um click normal
     if (longPressTimer) {
@@ -49,6 +60,10 @@
     }
   }
   
+  /**
+     * @param {string} category
+     * @param {MouseEvent & { currentTarget: EventTarget & HTMLButtonElement; }} event
+     */
   function handleCategoryClick(category, event) {
     // Se foi touch event, ignorar (já foi tratado no touchend)
     if (wasTouchEvent) {
@@ -65,6 +80,10 @@
     filters.toggleCategory(category);
   }
   
+  /**
+     * @param {string} category
+     * @param {TouchEvent & { currentTarget: EventTarget & HTMLButtonElement; }} event
+     */
   function handleCategoryTouchStart(category, event) {
     wasLongPress = false;
     wasTouchEvent = true;
@@ -80,6 +99,10 @@
     }, LONG_PRESS_DURATION);
   }
   
+  /**
+     * @param {string} category
+     * @param {TouchEvent & { currentTarget: EventTarget & HTMLButtonElement; }} event
+     */
   function handleCategoryTouchEnd(category, event) {
     // Se o timer ainda está rodando, cancelar e fazer toggle
     if (longPressTimer) {
@@ -97,14 +120,17 @@
     }, 300);
   }
   
+  /**
+     * @param {any} category
+     */
   function isChecked(category) {
     return $filters.includes(category);
   }
   
+  /**
+     * @param {string | string[]} category
+     */
   function getIcon(category) {
-    if (category === 'Todos') {
-      return null; // Sem ícone para Todos
-    }
     if (category === 'Partitura') {
       // Ícone que estava em Cifra (documento com linhas)
       return 'M7 21h10M7 21V5a2 2 0 012-2h6a2 2 0 012 2v16M7 21H5a2 2 0 01-2-2V9a2 2 0 012-2h2m10 4h2a2 2 0 012 2v10a2 2 0 01-2 2h-2m-4-4V9a2 2 0 012-2h2M9 9h2m-2 4h2m-2 4h2';
@@ -125,17 +151,13 @@
   <span class="container-tag">Filtrar</span>
   <button
     type="button"
-    class="filter-chip"
+    class="todos-button-tag"
     class:active={allChecked}
     class:indeterminate={indeterminate}
     on:click={handleTodosClick}
+    title={allChecked ? "Desselecionar todos" : "Selecionar todos"}
   >
-    {#if getIcon('Todos')}
-      <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d={getIcon('Todos')} />
-      </svg>
-    {/if}
-    <span class="font-semibold">Todos</span>
+    <span>Todos</span>
   </button>
   
   {#each CATEGORY_OPTIONS as category}
@@ -197,6 +219,59 @@
     border: 2px solid var(--gold-color);
     z-index: 10;
     line-height: 1;
+  }
+  
+  .todos-button-tag {
+    position: absolute;
+    top: -0.875rem;
+    right: 0.75rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.25rem;
+    background-color: var(--card-color);
+    color: var(--text-dark);
+    font-size: 0.75rem;
+    font-weight: 500;
+    padding: 0.25rem 0.5rem;
+    border-radius: 0.25rem;
+    border: 2px solid var(--title-color);
+    cursor: pointer;
+    transition: all 0.2s ease;
+    line-height: 1;
+    z-index: 10;
+  }
+  
+  .todos-button-tag:hover {
+    background-color: var(--placeholder-color);
+    border-color: var(--gold-color);
+    transform: translateY(-1px);
+  }
+  
+  .todos-button-tag.active {
+    background-color: var(--gold-color) !important;
+    border-color: var(--gold-color) !important;
+    color: var(--text-dark) !important;
+    font-weight: 700 !important;
+    box-shadow: 0 3px 8px rgba(212, 175, 55, 0.5);
+    transform: translateY(-2px);
+  }
+  
+  .todos-button-tag.indeterminate {
+    background-color: var(--gold-light) !important;
+    border-color: var(--gold-color) !important;
+    font-weight: 600;
+    opacity: 0.9;
+  }
+  
+  .todos-button-tag span {
+    color: inherit;
+  }
+  
+  @media (max-width: 768px) {
+    .todos-button-tag {
+      right: 0.5rem;
+    }
   }
   
   .filter-chip {
