@@ -407,7 +407,7 @@
     align-items: center;
     gap: 0.75rem;
     padding: 0.75rem;
-    background-color: var(--background-color);
+    background-color: var(--placeholder-color);
     border: 2px solid var(--placeholder-color);
     border-radius: 0.5rem;
     cursor: pointer;
@@ -429,6 +429,16 @@
     font-size: 0.9375rem;
     color: var(--text-dark);
     font-weight: 500;
+  }
+  
+  /* Quando checkbox está marcado: fundo escuro, texto claro */
+  .category-item:has(input[type="checkbox"]:checked) {
+    background-color: var(--background-color);
+    border-color: var(--gold-color);
+  }
+  
+  .category-item:has(input[type="checkbox"]:checked) .category-label {
+    color: var(--light-gold);
   }
   
   /* Progress section */
