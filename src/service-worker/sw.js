@@ -20,6 +20,8 @@ const META_KEYS = {
 };
 
 let isSyncInProgress = false;
+let isSyncCancelled = false;
+let syncAbortController = null;
 
 async function openMetaCache() {
   return caches.open(META_BUCKET);
@@ -102,8 +104,13 @@ self.addEventListener('install', (event) => {
   self.skipWaiting();
 });
 
-// Helper to precache PDFs in batches
-async function precachePdfs(louvores, startIndex) {
+// Helper to precache PDFs in batches with cancellation support
+async function precachePdfsWithCancel(louvores, startIndex) {
+  if (isSyncCancelled) {
+    console.log('[SW] Sync cancelled, stopping precache');
+    return;
+  }
+
   const BATCH_SIZE = 10;
   const endIndex = Math.min(startIndex + BATCH_SIZE, louvores.length);
 
@@ -115,6 +122,8 @@ async function precachePdfs(louvores, startIndex) {
 
   await Promise.allSettled(
     batch.map(async (louvor) => {
+      if (isSyncCancelled) return;
+      
       const relPath = getLouvorRelPath(louvor);
       const localUrl = new URL(relPath, self.location.origin).href;
       const remoteUrl = new URL(relPath, 'https://plpcjf.org').href;
@@ -162,21 +171,30 @@ async function precachePdfs(louvores, startIndex) {
 
   console.log(`[SW] Cached batch ${startIndex + 1}-${endIndex}`);
 
-  if (endIndex < louvores.length) {
+  // Continue with next batch if needed and not cancelled
+  if (endIndex < louvores.length && !isSyncCancelled) {
     return new Promise(resolve => {
       setTimeout(() => {
-        precachePdfs(louvores, endIndex).then(resolve);
+        precachePdfsWithCancel(louvores, endIndex).then(resolve);
       }, 100);
     });
   }
 
-  try {
-    await verifyCachedPdfs(louvores);
-  } catch (e) {
-    console.warn('[SW] verifyCachedPdfs failed', e);
+  // Após finalizar todos os lotes, executa verificação do cache (apenas se não cancelado)
+  if (!isSyncCancelled) {
+    try {
+      await verifyCachedPdfs(louvores);
+    } catch (e) {
+      console.warn('[SW] verifyCachedPdfs failed', e);
+    }
   }
 
   return Promise.resolve();
+}
+
+// Wrapper para manter compatibilidade com código existente
+async function precachePdfs(louvores, startIndex) {
+  return precachePdfsWithCancel(louvores, startIndex);
 }
 
 async function verifyCachedPdfs(louvores) {
@@ -267,6 +285,76 @@ async function syncAllPdfs() {
   }
 }
 
+// Sync filtered PDFs based on category filters
+async function syncFilteredPdfs(filters, louvoresArray) {
+  if (isSyncInProgress) {
+    console.log('[SW] Sync requested but already in progress; ignoring.');
+    return;
+  }
+  
+  isSyncInProgress = true;
+  isSyncCancelled = false;
+  syncAbortController = new AbortController();
+  
+  try {
+    // Filtrar louvores baseado nas categorias selecionadas
+    let filteredLouvores = louvoresArray;
+    if (filters && filters.length > 0 && !filters.includes('ALL')) {
+      filteredLouvores = louvoresArray.filter(l => 
+        l.categoria && filters.includes(l.categoria)
+      );
+    }
+    
+    if (filteredLouvores.length === 0) {
+      console.log('[SW] No louvores match the selected filters');
+      return;
+    }
+    
+    // Verificar quais PDFs já estão em cache
+    const cache = await caches.open(CACHE_NAME);
+    const toDownload = [];
+    
+    for (const louvor of filteredLouvores) {
+      if (isSyncCancelled) break;
+      const relPath = getLouvorRelPath(louvor);
+      const localUrl = new URL(relPath, self.location.origin).href;
+      const match = await cache.match(localUrl);
+      if (!match) {
+        toDownload.push(louvor);
+      }
+    }
+    
+    // Enviar informação de PDFs já existentes
+    const clients = await self.clients.matchAll();
+    clients.forEach(client => {
+      client.postMessage({
+        type: 'CACHE_CHECK_COMPLETE',
+        alreadyCached: filteredLouvores.length - toDownload.length,
+        toDownload: toDownload.length,
+        total: filteredLouvores.length
+      });
+    });
+    
+    // Baixar apenas os que faltam
+    if (toDownload.length > 0 && !isSyncCancelled) {
+      installProgress = { total: toDownload.length, current: 0 };
+      await precachePdfsWithCancel(toDownload, 0);
+    }
+    
+    // Verificar cache final (apenas se não cancelado)
+    if (!isSyncCancelled) {
+      const summaryAfter = await verifyCachedPdfs(filteredLouvores).catch(() => null);
+    }
+    
+  } catch (e) {
+    console.warn('[SW] syncFilteredPdfs failed', e);
+  } finally {
+    isSyncInProgress = false;
+    isSyncCancelled = false;
+    syncAbortController = null;
+  }
+}
+
 self.addEventListener('activate', (event) => {
   console.log('[SW] Activating service worker...');
   event.waitUntil(
@@ -297,6 +385,16 @@ self.addEventListener('message', (event) => {
   }
   if (event.data && event.data.type === 'SYNC_PDFS') {
     event.waitUntil(syncAllPdfs());
+  }
+  if (event.data && event.data.type === 'SYNC_PDFS_FILTERED') {
+    event.waitUntil(syncFilteredPdfs(event.data.filters, event.data.louvores));
+  }
+  if (event.data && event.data.type === 'CANCEL_SYNC') {
+    isSyncCancelled = true;
+    if (syncAbortController) {
+      syncAbortController.abort();
+    }
+    console.log('[SW] Sync cancellation requested');
   }
 });
 
