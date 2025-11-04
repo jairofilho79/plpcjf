@@ -73,34 +73,12 @@
     selectedCategories = [];
   }
   
-  /**
-     * Handle click on backdrop
-     * @param {{ target: any; currentTarget: any; }} event
-     */
-  function handleBackdropClick(event) {
-    if (event.target === event.currentTarget) {
-      closeModal();
-    }
-  }
   
-  /**
-     * Handle escape key
-     * @param {{ key: string; }} event
-     */
-  function handleKeydown(event) {
-    if (event.key === 'Escape') {
-      closeModal();
-    }
-  }
 </script>
-
-<svelte:window on:keydown={handleKeydown} />
 
 {#if state.showModal}
   <div 
     class="modal-backdrop" 
-    on:click={handleBackdropClick}
-    on:keydown={handleKeydown}
     role="dialog"
     aria-modal="true"
   >
