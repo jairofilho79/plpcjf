@@ -24,6 +24,7 @@
   let longPressTimer = null;
   let wasLongPress = false;
   let wasTouchEvent = false;
+  let toggleExecutedInMouseUp = false;
   const LONG_PRESS_DURATION = 500; // 500ms
   
   /**
@@ -33,6 +34,7 @@
   function handleCategoryMouseDown(category, event) {
     wasLongPress = false;
     wasTouchEvent = false;
+    toggleExecutedInMouseUp = false;
     
     // Limpar qualquer timer existente
     if (longPressTimer) {
@@ -57,6 +59,16 @@
     if (longPressTimer) {
       clearTimeout(longPressTimer);
       longPressTimer = null;
+      // Garantir que wasLongPress está false para cliques rápidos
+      wasLongPress = false;
+      // Fazer toggle diretamente aqui para garantir que funcione
+      // O evento click ainda será disparado, mas será ignorado se já executamos o toggle aqui
+      toggleExecutedInMouseUp = true;
+      filters.toggleCategory(category);
+      // Resetar a flag após um pequeno delay para permitir que o click event seja processado
+      setTimeout(() => {
+        toggleExecutedInMouseUp = false;
+      }, 100);
     }
   }
   
@@ -65,9 +77,15 @@
      * @param {MouseEvent & { currentTarget: EventTarget & HTMLButtonElement; }} event
      */
   function handleCategoryClick(category, event) {
+    // Se o toggle já foi executado no mouseup, ignorar este click
+    if (toggleExecutedInMouseUp) {
+      event.preventDefault();
+      return;
+    }
     // Se foi touch event, ignorar (já foi tratado no touchend)
     if (wasTouchEvent) {
       event.preventDefault();
+      wasTouchEvent = false;
       return;
     }
     // Se foi long press, não fazer toggle (já foi tratado no mousedown)
@@ -176,6 +194,7 @@
           clearTimeout(longPressTimer);
           longPressTimer = null;
         }
+        wasLongPress = false;
       }}
       on:touchstart={(e) => handleCategoryTouchStart(category, e)}
       on:touchend={(e) => handleCategoryTouchEnd(category, e)}
@@ -304,13 +323,6 @@
     transform: translateY(-2px);
   }
   
-  .filter-chip.indeterminate {
-    background-color: var(--gold-light) !important;
-    border-color: var(--gold-color) !important;
-    font-weight: 600;
-    opacity: 0.9;
-  }
-  
   .filter-chip svg {
     color: var(--title-color);
     flex-shrink: 0;
@@ -319,10 +331,6 @@
   
   .filter-chip.active svg {
     color: var(--text-dark) !important;
-  }
-  
-  .filter-chip.indeterminate svg {
-    color: var(--title-color);
   }
   
   .filter-chip span {
