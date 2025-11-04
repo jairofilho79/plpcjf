@@ -16,6 +16,7 @@ import { atobUTF8 } from '$lib/utils/pathUtils';
 const ALLOW_OFFLINE_KEY = 'ALLOW_OFFLINE';
 const CACHED_PDFS_KEY = 'cachedPdfsList';
 const LAST_MANIFEST_HASH_KEY = 'lastManifestHash';
+const SELECTED_CATEGORIES_KEY = 'selectedCategoriesForDownload';
 
 // Offline state
 const initialState = {
@@ -97,6 +98,31 @@ function getManifestHash(louvoresData) {
 }
 
 /**
+ * Get saved selected categories from localStorage
+ */
+function getSavedCategories() {
+  if (!browser) return [];
+  try {
+    const saved = localStorage.getItem(SELECTED_CATEGORIES_KEY);
+    return saved ? JSON.parse(saved) : [];
+  } catch (e) {
+    return [];
+  }
+}
+
+/**
+ * Save selected categories to localStorage
+ */
+function saveCategories(categories) {
+  if (!browser) return;
+  try {
+    localStorage.setItem(SELECTED_CATEGORIES_KEY, JSON.stringify(categories));
+  } catch (e) {
+    console.error('[Offline Store] Failed to save categories:', e);
+  }
+}
+
+/**
  * Check for new PDFs and auto-download if enabled
  */
 async function checkForNewPDFs() {
@@ -104,6 +130,13 @@ async function checkForNewPDFs() {
 
   const allowOffline = localStorage.getItem(ALLOW_OFFLINE_KEY) === 'true';
   if (!allowOffline) return;
+
+  // Get saved categories - only download PDFs from selected categories
+  const savedCategories = getSavedCategories();
+  if (!savedCategories || savedCategories.length === 0) {
+    console.log('[Offline Store] No categories selected for auto-download');
+    return;
+  }
 
   const louvoresData = get(louvores);
   if (!louvoresData || louvoresData.length === 0) return;
@@ -118,14 +151,19 @@ async function checkForNewPDFs() {
     const state = get(offlineState);
     const cachedPdfs = state.cachedPdfs;
     
-    // Find new PDFs that aren't cached yet
+    // Find new PDFs that aren't cached yet AND are in the selected categories
     const newPdfs = louvoresData.filter(louvor => {
+      // Only include PDFs from selected categories
+      if (!savedCategories.includes(louvor.categoria)) {
+        return false;
+      }
+      
       const pdfUrl = getPdfUrl(louvor);
       return !cachedPdfs.some(cached => cached.includes(pdfUrl));
     });
 
     if (newPdfs.length > 0) {
-      console.log(`[Offline Store] Found ${newPdfs.length} new PDFs`);
+      console.log(`[Offline Store] Found ${newPdfs.length} new PDFs in selected categories:`, savedCategories);
       
       // Auto-download new PDFs
       offlineState.update(s => ({ ...s, autoDownloading: true }));
@@ -242,6 +280,9 @@ async function downloadByCategories(categories) {
     return;
   }
 
+  // Save selected categories for future auto-downloads
+  saveCategories(categories);
+
   // Filter louvores by selected categories
   const filteredLouvores = louvoresData.filter(louvor => 
     categories.includes(louvor.categoria)
@@ -284,6 +325,7 @@ async function clearAllCache() {
     localStorage.removeItem(ALLOW_OFFLINE_KEY);
     localStorage.removeItem(CACHED_PDFS_KEY);
     localStorage.removeItem(LAST_MANIFEST_HASH_KEY);
+    localStorage.removeItem(SELECTED_CATEGORIES_KEY);
     
     // Reset state
     offlineState.set(initialState);
@@ -350,7 +392,8 @@ export const offline = {
   disableOffline,
   clearError,
   loadCachedPdfsList,
-  checkForNewPDFs
+  checkForNewPDFs,
+  getSavedCategories
 };
 
 // Derived store for offline status

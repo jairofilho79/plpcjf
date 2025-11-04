@@ -1,10 +1,21 @@
 <script>
-  import { X, Download, AlertCircle, CheckCircle } from 'lucide-svelte';
+  import { X, Download, AlertCircle, CheckCircle, Info } from 'lucide-svelte';
   import { offline, isDownloading } from '$lib/stores/offline';
   import { CATEGORY_OPTIONS } from '$lib/stores/filters';
   
   // Selected categories for download
+  /**
+     * @type {string[]}
+     */
   let selectedCategories = [];
+  
+  // Load saved categories when modal opens
+  $: if (state.showModal && selectedCategories.length === 0 && !downloading) {
+    const saved = offline.getSavedCategories();
+    if (saved && saved.length > 0) {
+      selectedCategories = saved;
+    }
+  }
   
   // Get current offline state
   $: state = $offline;
@@ -16,8 +27,9 @@
   $: total = state.total || 0;
   
   /**
-   * Toggle category selection
-   */
+     * Toggle category selection
+     * @param {string} category
+     */
   function toggleCategory(category) {
     if (downloading) return; // Can't change selection while downloading
     
@@ -62,8 +74,9 @@
   }
   
   /**
-   * Handle click on backdrop
-   */
+     * Handle click on backdrop
+     * @param {{ target: any; currentTarget: any; }} event
+     */
   function handleBackdropClick(event) {
     if (event.target === event.currentTarget) {
       closeModal();
@@ -71,8 +84,9 @@
   }
   
   /**
-   * Handle escape key
-   */
+     * Handle escape key
+     * @param {{ key: string; }} event
+     */
   function handleKeydown(event) {
     if (event.key === 'Escape') {
       closeModal();
@@ -119,6 +133,22 @@
               </p>
               <p class="warning-emphasis">
                 Por favor, baixe apenas os PDFs que você realmente vai usar.
+              </p>
+            </div>
+          </div>
+          
+          <!-- Info about category persistence and cache limitation -->
+          <div class="info-box">
+            <Info class="w-5 h-5 info-icon" />
+            <div class="info-text">
+              <p class="info-title">Sobre downloads automáticos e remoção</p>
+              <p class="info-description">
+                As categorias selecionadas serão salvas e usadas para downloads automáticos de novos PDFs.
+                Novos PDFs serão baixados automaticamente apenas das categorias que você escolher.
+              </p>
+              <p class="info-description">
+                <strong>Atenção:</strong> Ainda não há funcionalidade para remover downloads pré-baixados individualmente.
+                Para remover todos os PDFs baixados, é necessário limpar o cache do navegador completamente.
               </p>
             </div>
           </div>
@@ -335,6 +365,45 @@
     margin: 0;
     font-size: 0.875rem;
     font-weight: 600;
+  }
+  
+  /* Info box */
+  .info-box {
+    display: flex;
+    gap: 1rem;
+    padding: 1rem;
+    background-color: #d1ecf1;
+    border: 2px solid #17a2b8;
+    border-radius: 0.5rem;
+    margin-bottom: 1.5rem;
+  }
+  
+  .info-box :global(.info-icon) {
+    color: #0c5460;
+    flex-shrink: 0;
+    margin-top: 0.125rem;
+  }
+  
+  .info-text {
+    flex: 1;
+  }
+  
+  .info-title {
+    font-weight: 700;
+    color: #0c5460;
+    margin: 0 0 0.5rem 0;
+    font-size: 0.9375rem;
+  }
+  
+  .info-description {
+    color: #0c5460;
+    margin: 0 0 0.5rem 0;
+    font-size: 0.875rem;
+    line-height: 1.5;
+  }
+  
+  .info-description:last-child {
+    margin-bottom: 0;
   }
   
   /* Category section */
