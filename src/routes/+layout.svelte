@@ -32,11 +32,11 @@
       // Service worker está disponível na rota /sw.js
       const swPath = '/sw.js';
       
-      // Register with type: 'module' in development for ES module support
+      // Register with type: 'module' because the service worker uses ES6 imports
+      // The vite-plugin-pwa compiles it, but we still need to register as module
       const swOptions: RegistrationOptions = {
         scope: '/',
-        // Use module type in development to support ES imports
-        ...(browser && window.location.hostname === 'localhost' ? { type: 'module' as WorkerType } : {})
+        type: 'module' as WorkerType // Always use module type since SW uses ES6 imports
       };
       
       navigator.serviceWorker.register(swPath, swOptions)
