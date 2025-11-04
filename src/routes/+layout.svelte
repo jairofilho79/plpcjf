@@ -29,10 +29,8 @@
     
     // Service Worker registration
     if ('serviceWorker' in navigator) {
-      // VitePWA com injectManifest pode gerar em diferentes caminhos
-      // Tenta primeiro o caminho padrão, depois fallback
-      const swPaths = ['/sw.js', '/service-worker.js', '/_app/immutable/sw.js'];
-      let swPath = swPaths[0];
+      // Service worker está disponível na rota /sw.js
+      const swPath = '/sw.js';
       
       // Register with type: 'module' in development for ES module support
       const swOptions: RegistrationOptions = {
@@ -43,7 +41,7 @@
       
       navigator.serviceWorker.register(swPath, swOptions)
         .then((registration) => {
-          console.log('SW registered:', registration);
+          console.log('[UI] SW registered:', registration.scope);
           
           // Sincronizar PDFs apenas para usuários permitidos
           const allowSync = localStorage.getItem('ALLOW_PDF_SYNC') === '1';
@@ -90,29 +88,13 @@
                 }
               }
             });
-        })
-        .catch((error) => {
-          // Tentar caminhos alternativos se o primeiro falhar
-          if (error.message?.includes('404') || error.message?.includes('HTTP')) {
-            console.warn(`SW not found at ${swPath}, trying alternative paths...`);
-            // Tentar próximo caminho se houver
-            const nextPathIndex = swPaths.indexOf(swPath) + 1;
-            if (nextPathIndex < swPaths.length) {
-              swPath = swPaths[nextPathIndex];
-              navigator.serviceWorker.register(swPath, swOptions)
-                .then((registration) => {
-                  console.log('SW registered at alternative path:', swPath, registration);
-                })
-                .catch((err) => {
-                  console.error('SW registration failed at all paths:', err);
-                });
-            } else {
-              console.error('SW not found at any known path');
+                  })
+          .catch((error) => {
+            console.error('[UI] SW registration failed:', error);
+            if (error.message) {
+              console.error('[UI] Error message:', error.message);
             }
-          } else {
-            console.error('SW registration failed:', error);
-          }
-        });
+          });
     }
     
     // Listen for progress updates

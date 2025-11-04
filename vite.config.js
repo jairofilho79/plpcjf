@@ -15,6 +15,12 @@ export default defineConfig({
         globPatterns: ['**/*.{js,css,html,ico,png,svg,webp,json}'],
         maximumFileSizeToCacheInBytes: 5000000
       },
+      workbox: {
+        // Garantir que o service worker seja gerado corretamente
+        cleanupOutdatedCaches: true,
+        skipWaiting: false,
+        clientsClaim: false
+      },
       devOptions: {
         enabled: true,
         type: 'module',
