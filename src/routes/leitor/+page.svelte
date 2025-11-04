@@ -1,6 +1,12 @@
 <script lang="ts">
+  /// <reference types="@sveltejs/kit" />
   import { onDestroy, onMount } from 'svelte';
   import { page } from '$app/stores';
+
+  // Type for PDF.js getDocument function
+  type PDFJSGetDocument = (options: { url: string; withCredentials?: boolean }) => {
+    promise: Promise<{ numPages?: number }>;
+  };
 
   let containerEl: HTMLDivElement | null = null;
   let viewerEl: HTMLDivElement | null = null;
@@ -26,10 +32,11 @@
   $: fitModeLabel = preferredFitMode === 'page-width' ? 'Largura' : 'Página';
 
   async function load(fileUrl: string) {
-    if (!window.__pdfjsGetDocument) return;
+    const getDocument = (window as any).__pdfjsGetDocument as PDFJSGetDocument | undefined;
+    if (!getDocument) return;
     // Avoid duplicate loads of the same file
     if (lastLoadedFile === fileUrl) return;
-    const loadingTask = window.__pdfjsGetDocument({ url: fileUrl, withCredentials: false });
+    const loadingTask = getDocument({ url: fileUrl, withCredentials: false });
     const pdfDocument = await loadingTask.promise;
     linkService.setDocument(pdfDocument);
     viewer.setDocument(pdfDocument);
@@ -189,21 +196,28 @@
 </svelte:head>
 
 <style>
+  /* Ensure body and html don't have margins/padding that could create gaps */
+  :global(body), :global(html) {
+    margin: 0;
+    padding: 0;
+    overflow-x: hidden;
+  }
+
   .container {
     position: fixed;
     /* top is set dynamically via JS to match toolbar height including border */
+    top: 0;
     right: 0;
     bottom: 0;
     left: 0;
     overflow-y: auto;
     overflow-x: auto;
     background: #2a2a2a;
-    width: 100%;
+    width: 100vw;
+    max-width: 100vw;
     z-index: 1; /* ensure it overlays page background */
   }
-  .viewer {
-    /* pdf_viewer.css expects this id/class structure */
-  }
+
   /* Viewer base width equals viewport; zooms can overflow horizontally for scroll */
   .pdfViewer {
     width: 100%;
