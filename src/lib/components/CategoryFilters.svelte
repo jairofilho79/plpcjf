@@ -23,8 +23,6 @@
      */
   let longPressTimer = null;
   let wasLongPress = false;
-  let wasTouchEvent = false;
-  let toggleExecutedInMouseUp = false;
   const LONG_PRESS_DURATION = 500; // 500ms
   
   /**
@@ -33,8 +31,6 @@
      */
   function handleCategoryMouseDown(category, event) {
     wasLongPress = false;
-    wasTouchEvent = false;
-    toggleExecutedInMouseUp = false;
     
     // Limpar qualquer timer existente
     if (longPressTimer) {
@@ -55,20 +51,11 @@
      * @param {MouseEvent & { currentTarget: EventTarget & HTMLButtonElement; }} event
      */
   function handleCategoryMouseUp(category, event) {
-    // Se o timer ainda está rodando, significa que foi um click normal
+    // Se o timer ainda está rodando, cancelar (o toggle será feito no click)
     if (longPressTimer) {
       clearTimeout(longPressTimer);
       longPressTimer = null;
-      // Garantir que wasLongPress está false para cliques rápidos
       wasLongPress = false;
-      // Fazer toggle diretamente aqui para garantir que funcione
-      // O evento click ainda será disparado, mas será ignorado se já executamos o toggle aqui
-      toggleExecutedInMouseUp = true;
-      filters.toggleCategory(category);
-      // Resetar a flag após um pequeno delay para permitir que o click event seja processado
-      setTimeout(() => {
-        toggleExecutedInMouseUp = false;
-      }, 100);
     }
   }
   
@@ -77,24 +64,13 @@
      * @param {MouseEvent & { currentTarget: EventTarget & HTMLButtonElement; }} event
      */
   function handleCategoryClick(category, event) {
-    // Se o toggle já foi executado no mouseup, ignorar este click
-    if (toggleExecutedInMouseUp) {
-      event.preventDefault();
-      return;
-    }
-    // Se foi touch event, ignorar (já foi tratado no touchend)
-    if (wasTouchEvent) {
-      event.preventDefault();
-      wasTouchEvent = false;
-      return;
-    }
-    // Se foi long press, não fazer toggle (já foi tratado no mousedown)
+    // Se foi long press, não fazer toggle (já foi tratado no mousedown/touchstart)
     if (wasLongPress) {
       event.preventDefault();
       wasLongPress = false;
       return;
     }
-    // Click normal - fazer toggle
+    // Click normal - fazer toggle (funciona tanto para mouse quanto touch)
     filters.toggleCategory(category);
   }
   
@@ -104,7 +80,6 @@
      */
   function handleCategoryTouchStart(category, event) {
     wasLongPress = false;
-    wasTouchEvent = true;
     
     if (longPressTimer) {
       clearTimeout(longPressTimer);
@@ -122,20 +97,12 @@
      * @param {TouchEvent & { currentTarget: EventTarget & HTMLButtonElement; }} event
      */
   function handleCategoryTouchEnd(category, event) {
-    // Se o timer ainda está rodando, cancelar e fazer toggle
+    // Se o timer ainda está rodando, cancelar (o toggle será feito no click simulado)
     if (longPressTimer) {
       clearTimeout(longPressTimer);
       longPressTimer = null;
-      // Se foi um touch rápido, fazer toggle
-      if (!wasLongPress) {
-        filters.toggleCategory(category);
-      }
+      wasLongPress = false;
     }
-    wasLongPress = false;
-    // Reset wasTouchEvent após um delay para permitir que o click event seja prevenido
-    setTimeout(() => {
-      wasTouchEvent = false;
-    }, 300);
   }
   
   /**
@@ -205,7 +172,6 @@
           longPressTimer = null;
         }
         wasLongPress = false;
-        wasTouchEvent = false;
       }}
     >
       {#if iconPath}
