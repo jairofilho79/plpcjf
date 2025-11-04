@@ -33,10 +33,12 @@
       const swPath = '/sw.js';
       
       // Register service worker
-      // O vite-plugin-pwa gera um módulo ES6 (sw.mjs), então precisamos usar type: 'module'
+      // O vite-plugin-pwa com rollupOptions (format: 'iife') gera um bundle sem imports ES6
+      // Então NÃO precisamos de type: 'module'
       const swOptions: RegistrationOptions = {
-        scope: '/',
-        type: 'module' as WorkerType // Sempre usar módulo pois o vite-plugin-pwa gera ES6
+        scope: '/'
+        // Não usar type: 'module' se o service worker for bundlado (IIFE)
+        // O rollupOptions no vite.config.js deve gerar um bundle sem imports ES6
       };
       
       navigator.serviceWorker.register(swPath, swOptions)

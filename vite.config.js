@@ -15,7 +15,14 @@ export default defineConfig({
       manifest: false,
       injectManifest: {
         globPatterns: ['**/*.{js,css,html,ico,png,svg,webp,json}'],
-        maximumFileSizeToCacheInBytes: 5000000
+        maximumFileSizeToCacheInBytes: 5000000,
+        // Configurar Rollup para fazer bundle completo (sem imports ES6)
+        rollupOptions: {
+          output: {
+            format: 'iife',
+            name: 'sw'
+          }
+        }
       },
       buildExcludes: [/app.html/],
       useCredentials: false,
@@ -71,7 +78,7 @@ export default defineConfig({
         
         try {
           // Ler e verificar se está bundlado
-          swContent = readFileSync(swSourcePath, 'utf-8');
+          let swContent = readFileSync(swSourcePath, 'utf-8');
           const hasES6Imports = /^import\s+.*from\s+['"]/.test(swContent) || /^import\s+['"]/.test(swContent);
           
           if (hasES6Imports) {

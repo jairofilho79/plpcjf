@@ -1,16 +1,28 @@
 import type { RequestHandler } from './$types';
+import { dev } from '$app/environment';
 
 // Servir o service worker compilado pelo vite-plugin-pwa
-// O vite-plugin-pwa processa e injeta o manifest durante o build
-// O Vite resolve o import ?raw corretamente em produção
+// O vite-plugin-pwa compila durante o build para .svelte-kit/output/client/sw.js
+// Em produção, tentamos acessar o arquivo compilado
 
-export const GET: RequestHandler = async () => {
+export const GET: RequestHandler = async ({ url, fetch }) => {
   try {
-    // Importar o service worker
-    // O vite-plugin-pwa compila durante o build e injeta o manifest
-    // Em produção, o Vite resolve para o arquivo compilado corretamente
+    // Em produção, o vite-plugin-pwa deve ter compilado o service worker
+    // O rollupOptions deve ter gerado um bundle sem imports ES6
+    // Se o ?raw ainda retornar imports ES6, o rollupOptions não está funcionando
+    
+    // Fallback: usar ?raw (retorna o source, mas pode funcionar se rollupOptions funcionou)
+    // OU usar em desenvolvimento
     const swModule = await import('../../service-worker/sw.js?raw');
     const swContent = swModule.default || swModule;
+    
+    // Verificar se ainda tem imports ES6
+    const hasES6Imports = /^import\s+.*from\s+['"]/.test(swContent) || /^import\s+['"]/.test(swContent);
+    
+    if (hasES6Imports && !dev) {
+      console.error('[SW Route] Service worker has ES6 imports but rollupOptions should have bundled them!');
+      console.error('[SW Route] This means the vite-plugin-pwa rollupOptions may not be working correctly.');
+    }
     
     return new Response(swContent, {
       headers: {
