@@ -1,5 +1,5 @@
 <script>
-  import { X, Trash2 } from 'lucide-svelte';
+  import { X, Trash2, GripVertical } from 'lucide-svelte';
   import { carousel } from '$lib/stores/carousel';
   import { pdfViewer } from '$lib/stores/pdfViewer';
   import { enumMapper } from '$lib/utils/enumMapper';
@@ -11,6 +11,69 @@
     buildOnlineReaderUrl, 
     openPdfNewTabOfflineFirst 
   } from '$lib/utils/pdfUtils';
+  
+  let draggedIndex = null;
+  let dragOverIndex = null;
+  let hasDragged = false;
+  let dragStartX = 0;
+  let dragStartY = 0;
+  
+  function handleDragStart(event, index) {
+    draggedIndex = index;
+    hasDragged = false;
+    dragStartX = event.clientX;
+    dragStartY = event.clientY;
+    event.dataTransfer.effectAllowed = 'move';
+    event.dataTransfer.setData('text/html', index);
+    event.currentTarget.style.opacity = '0.5';
+  }
+  
+  function handleDragEnd(event) {
+    event.currentTarget.style.opacity = '1';
+    // Aguarda um tick para garantir que o drop seja processado antes do clique
+    setTimeout(() => {
+      draggedIndex = null;
+      dragOverIndex = null;
+      hasDragged = false;
+    }, 0);
+  }
+  
+  function handleDragOver(event, index) {
+    event.preventDefault();
+    event.dataTransfer.dropEffect = 'move';
+    if (draggedIndex !== null && draggedIndex !== index) {
+      dragOverIndex = index;
+    }
+  }
+  
+  function handleDragLeave(event) {
+    // Só limpa se não estiver sobre outro item
+    if (!event.currentTarget.contains(event.relatedTarget)) {
+      dragOverIndex = null;
+    }
+  }
+  
+  function handleDrop(event, dropIndex) {
+    event.preventDefault();
+    event.stopPropagation();
+    
+    if (draggedIndex !== null && draggedIndex !== dropIndex) {
+      hasDragged = true;
+      carousel.reorderCarousel(draggedIndex, dropIndex);
+    }
+    
+    draggedIndex = null;
+    dragOverIndex = null;
+  }
+  
+  function handleDrag(event) {
+    // Verifica se houve movimento significativo (mais de 5 pixels)
+    const deltaX = Math.abs(event.clientX - dragStartX);
+    const deltaY = Math.abs(event.clientY - dragStartY);
+    if (deltaX > 5 || deltaY > 5) {
+      hasDragged = true;
+    }
+  }
   
   async function openPdfFromChip(louvor) {
     const pdfPath = getPdfRelPath(louvor);
@@ -53,6 +116,10 @@
   
   function handleChipClick(event, louvor) {
     if (event.target.closest('button')) return;
+    if (hasDragged) {
+      hasDragged = false;
+      return;
+    }
     openPdfFromChip(louvor);
   }
   
@@ -84,12 +151,24 @@
     </button>
     
     <div class="flex gap-2 overflow-x-auto carousel-chips-list">
-      {#each $carousel as louvor}
+      {#each $carousel as louvor, index}
         {@const categoryIcon = getCategoryIcon(louvor.categoria)}
         <div
+          draggable="true"
+          on:dragstart={(e) => handleDragStart(e, index)}
+          on:drag={(e) => handleDrag(e)}
+          on:dragend={(e) => handleDragEnd(e)}
+          on:dragover={(e) => handleDragOver(e, index)}
+          on:dragleave={(e) => handleDragLeave(e)}
+          on:drop={(e) => handleDrop(e, index)}
           on:click={(e) => handleChipClick(e, louvor)}
           class="carousel-chip"
+          class:dragging={draggedIndex === index}
+          class:drag-over={dragOverIndex === index}
         >
+          <div class="drag-handle" on:mousedown|stopPropagation>
+            <GripVertical class="w-4 h-4" />
+          </div>
           <div class="chip-content">
             <div class="chip-title">
               <strong>#{enumMapper(louvor.numero) || 'N/A'}</strong> - {louvor.nome || 'Sem título'}
@@ -190,11 +269,43 @@
     transition: all 0.2s ease;
     cursor: pointer;
     flex-shrink: 0;
+    position: relative;
   }
   
   .carousel-chip:hover {
     box-shadow: var(--shadow-lg);
     transform: translateY(-1px);
+  }
+  
+  .carousel-chip.dragging {
+    opacity: 0.5;
+    cursor: grabbing;
+  }
+  
+  .carousel-chip.drag-over {
+    border-color: var(--gold-light);
+    box-shadow: 0 0 0 2px var(--gold-light);
+    transform: scale(1.05);
+  }
+  
+  .drag-handle {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-light);
+    opacity: 0.6;
+    cursor: grab;
+    flex-shrink: 0;
+    padding: 0.125rem;
+    transition: opacity 0.2s ease;
+  }
+  
+  .drag-handle:active {
+    cursor: grabbing;
+  }
+  
+  .carousel-chip:hover .drag-handle {
+    opacity: 1;
   }
   
   .chip-content {

@@ -72,6 +72,27 @@ function createCarouselStore() {
           console.warn('Não foi possível limpar o carousel do localStorage:', e);
         }
       }
+    },
+    reorderCarousel: (fromIndex, toIndex) => {
+      update(louvores => {
+        if (fromIndex === toIndex || fromIndex < 0 || toIndex < 0 || fromIndex >= louvores.length || toIndex >= louvores.length) {
+          return louvores;
+        }
+        
+        const reordered = [...louvores];
+        const [removed] = reordered.splice(fromIndex, 1);
+        reordered.splice(toIndex, 0, removed);
+        
+        if (browser) {
+          try {
+            localStorage.setItem(CAROUSEL_STORAGE_KEY, JSON.stringify(reordered));
+          } catch (e) {
+            console.warn('Não foi possível salvar o carousel no localStorage:', e);
+          }
+        }
+        
+        return reordered;
+      });
     }
   };
 }
