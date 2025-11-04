@@ -17,8 +17,84 @@
     }
   }
   
-  function handleCategoryClick(category) {
+  // Long press detection
+  let longPressTimer = null;
+  let wasLongPress = false;
+  let wasTouchEvent = false;
+  const LONG_PRESS_DURATION = 500; // 500ms
+  
+  function handleCategoryMouseDown(category, event) {
+    wasLongPress = false;
+    wasTouchEvent = false;
+    
+    // Limpar qualquer timer existente
+    if (longPressTimer) {
+      clearTimeout(longPressTimer);
+    }
+    
+    // Iniciar timer para long press
+    longPressTimer = setTimeout(() => {
+      // Long press detectado - selecionar apenas esta categoria
+      wasLongPress = true;
+      filters.selectOnly(category);
+      longPressTimer = null;
+    }, LONG_PRESS_DURATION);
+  }
+  
+  function handleCategoryMouseUp(category, event) {
+    // Se o timer ainda está rodando, significa que foi um click normal
+    if (longPressTimer) {
+      clearTimeout(longPressTimer);
+      longPressTimer = null;
+    }
+  }
+  
+  function handleCategoryClick(category, event) {
+    // Se foi touch event, ignorar (já foi tratado no touchend)
+    if (wasTouchEvent) {
+      event.preventDefault();
+      return;
+    }
+    // Se foi long press, não fazer toggle (já foi tratado no mousedown)
+    if (wasLongPress) {
+      event.preventDefault();
+      wasLongPress = false;
+      return;
+    }
+    // Click normal - fazer toggle
     filters.toggleCategory(category);
+  }
+  
+  function handleCategoryTouchStart(category, event) {
+    wasLongPress = false;
+    wasTouchEvent = true;
+    
+    if (longPressTimer) {
+      clearTimeout(longPressTimer);
+    }
+    
+    longPressTimer = setTimeout(() => {
+      wasLongPress = true;
+      filters.selectOnly(category);
+      longPressTimer = null;
+    }, LONG_PRESS_DURATION);
+  }
+  
+  function handleCategoryTouchEnd(category, event) {
+    // Se o timer ainda está rodando, cancelar e fazer toggle
+    if (longPressTimer) {
+      clearTimeout(longPressTimer);
+      longPressTimer = null;
+      // Se foi um touch rápido, fazer toggle
+      if (!wasLongPress) {
+        filters.toggleCategory(category);
+      }
+    }
+    wasLongPress = false;
+    // Reset wasTouchEvent após um delay para permitir que o click event seja prevenido
+    setTimeout(() => {
+      wasTouchEvent = false;
+    }, 300);
   }
   
   function isChecked(category) {
@@ -69,7 +145,27 @@
       type="button"
       class="filter-chip"
       class:active={isCategoryActive}
-      on:click={() => handleCategoryClick(category)}
+      on:click={(e) => handleCategoryClick(category, e)}
+      on:mousedown={(e) => handleCategoryMouseDown(category, e)}
+      on:mouseup={(e) => handleCategoryMouseUp(category, e)}
+      on:mouseleave={(e) => {
+        // Cancelar long press se o mouse sair do botão
+        if (longPressTimer) {
+          clearTimeout(longPressTimer);
+          longPressTimer = null;
+        }
+      }}
+      on:touchstart={(e) => handleCategoryTouchStart(category, e)}
+      on:touchend={(e) => handleCategoryTouchEnd(category, e)}
+      on:touchcancel={(e) => {
+        // Cancelar long press se o touch for cancelado
+        if (longPressTimer) {
+          clearTimeout(longPressTimer);
+          longPressTimer = null;
+        }
+        wasLongPress = false;
+        wasTouchEvent = false;
+      }}
     >
       {#if iconPath}
         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">

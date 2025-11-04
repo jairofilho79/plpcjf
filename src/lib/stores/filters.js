@@ -43,6 +43,16 @@ function createFiltersStore() {
         return filtered;
       });
     },
+    selectOnly: (category) => {
+      set([category]);
+      if (browser) {
+        try {
+          localStorage.setItem(FILTER_STORAGE_KEY, JSON.stringify([category]));
+        } catch (e) {
+          console.warn('Não foi possível salvar os filtros no localStorage:', e);
+        }
+      }
+    },
     selectAll: () => {
       set(CATEGORY_OPTIONS);
       if (browser) {
