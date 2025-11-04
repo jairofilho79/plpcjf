@@ -1,7 +1,7 @@
 import { sveltekit } from '@sveltejs/kit/vite';
 import { defineConfig } from 'vite';
 import { VitePWA } from 'vite-plugin-pwa';
-import { copyFileSync, existsSync, readFileSync } from 'fs';
+import { copyFileSync, existsSync, readFileSync, mkdirSync } from 'fs';
 import { join } from 'path';
 
 export default defineConfig({
@@ -31,65 +31,76 @@ export default defineConfig({
         disable: false
       }
     }),
-    // Plugin para copiar o service worker compilado para static/ após o build
+    // Plugin para copiar o service worker compilado para static/ e .svelte-kit/cloudflare/
+    // IMPORTANTE: Este plugin deve executar DEPOIS do vite-plugin-pwa
+    // O vite-plugin-pwa executa no writeBundle, então copiamos no closeBundle
     {
       name: 'copy-sw-to-static',
       closeBundle() {
         const staticSwPath = join(process.cwd(), 'static', 'sw.js');
+        const cloudflareSwPath = join(process.cwd(), '.svelte-kit', 'cloudflare', 'sw.js');
         
         // O vite-plugin-pwa com injectManifest coloca o SW compilado em dist/sw.js
         const distSwPath = join(process.cwd(), 'dist', 'sw.js');
         
+        let swSourcePath = null;
+        let swContent = null;
+        
         // Tentar copiar de dist/ primeiro (onde o Vite normalmente coloca)
         if (existsSync(distSwPath)) {
-          try {
-            copyFileSync(distSwPath, staticSwPath);
-            console.log('[Vite Plugin] Copied compiled service worker from dist/sw.js to static/sw.js');
-            return;
-          } catch (error) {
-            console.warn('[Vite Plugin] Failed to copy from dist:', error);
-          }
-        }
-        
-        // Fallback: tentar em .svelte-kit/output/client/sw.js (SvelteKit build output)
-        // Verificar também se há sw.mjs (módulo ES6) que não deve ser usado em produção
-        const sveltekitSwPath = join(process.cwd(), '.svelte-kit', 'output', 'client', 'sw.js');
-        const sveltekitSwMjsPath = join(process.cwd(), '.svelte-kit', 'output', 'client', 'sw.mjs');
-        
-        // Se existir sw.mjs mas não sw.js, significa que o vite-plugin-pwa gerou um módulo ES6
-        // que não funcionará sem type: 'module'. Precisamos do .js bundlado.
-        if (existsSync(sveltekitSwMjsPath) && !existsSync(sveltekitSwPath)) {
-          console.warn('[Vite Plugin] WARNING: Only sw.mjs found (ES6 module). This requires type: "module" registration.');
-          console.warn('[Vite Plugin] Consider checking vite-plugin-pwa configuration to generate bundled sw.js');
-        }
-        
-        if (existsSync(sveltekitSwPath)) {
-          try {
-            // Verificar se o arquivo está bundlado (não deve ter imports ES6)
-            const swContent = readFileSync(sveltekitSwPath, 'utf-8');
-            const hasES6Imports = /^import\s+.*from\s+['"]/.test(swContent) || /^import\s+['"]/.test(swContent);
-            
-            if (hasES6Imports) {
-              console.warn('[Vite Plugin] WARNING: sw.js still contains ES6 imports!');
-              // Se sw.js tem imports ES6, tentar usar sw.mjs que é o módulo correto
-              if (existsSync(sveltekitSwMjsPath)) {
-                console.log('[Vite Plugin] Using sw.mjs instead (ES6 module)');
-                copyFileSync(sveltekitSwMjsPath, staticSwPath);
-                console.log('[Vite Plugin] Copied sw.mjs to static/sw.js - NOTE: Must register with type: "module"');
-              } else {
-                console.warn('[Vite Plugin] sw.js has ES6 imports but sw.mjs not found. Copying anyway (may fail in production)');
-                copyFileSync(sveltekitSwPath, staticSwPath);
-              }
-            } else {
-              console.log('[Vite Plugin] Service worker appears to be properly bundled (no ES6 imports)');
-              copyFileSync(sveltekitSwPath, staticSwPath);
-            }
-            console.log('[Vite Plugin] Copied service worker to static/sw.js');
-          } catch (error) {
-            console.warn('[Vite Plugin] Failed to copy from SvelteKit output:', error);
-          }
+          swSourcePath = distSwPath;
         } else {
+          // Fallback: tentar em .svelte-kit/output/client/sw.js (SvelteKit build output)
+          const sveltekitSwPath = join(process.cwd(), '.svelte-kit', 'output', 'client', 'sw.js');
+          const sveltekitSwMjsPath = join(process.cwd(), '.svelte-kit', 'output', 'client', 'sw.mjs');
+          
+          // Se existir sw.mjs mas não sw.js, significa que o vite-plugin-pwa gerou um módulo ES6
+          if (existsSync(sveltekitSwMjsPath) && !existsSync(sveltekitSwPath)) {
+            console.warn('[Vite Plugin] WARNING: Only sw.mjs found (ES6 module). This requires type: "module" registration.');
+          }
+          
+          if (existsSync(sveltekitSwPath)) {
+            swSourcePath = sveltekitSwPath;
+          }
+        }
+        
+        if (!swSourcePath) {
           console.warn('[Vite Plugin] Service worker not found in dist/ or .svelte-kit/output/client/');
+          return;
+        }
+        
+        try {
+          // Ler e verificar se está bundlado
+          swContent = readFileSync(swSourcePath, 'utf-8');
+          const hasES6Imports = /^import\s+.*from\s+['"]/.test(swContent) || /^import\s+['"]/.test(swContent);
+          
+          if (hasES6Imports) {
+            console.warn('[Vite Plugin] WARNING: sw.js still contains ES6 imports!');
+            // Tentar usar sw.mjs se disponível
+            const sveltekitSwMjsPath = join(process.cwd(), '.svelte-kit', 'output', 'client', 'sw.mjs');
+            if (existsSync(sveltekitSwMjsPath)) {
+              console.log('[Vite Plugin] Using sw.mjs instead (ES6 module)');
+              swContent = readFileSync(sveltekitSwMjsPath, 'utf-8');
+              swSourcePath = sveltekitSwMjsPath;
+            }
+          } else {
+            console.log('[Vite Plugin] Service worker appears to be properly bundled (no ES6 imports)');
+          }
+          
+          // Copiar para static/ (para desenvolvimento e outros adapters)
+          copyFileSync(swSourcePath, staticSwPath);
+          console.log('[Vite Plugin] Copied service worker to static/sw.js');
+          
+          // Copiar também para .svelte-kit/cloudflare/ (para Cloudflare Pages)
+          // Garantir que o diretório existe
+          const cloudflareDir = join(process.cwd(), '.svelte-kit', 'cloudflare');
+          if (!existsSync(cloudflareDir)) {
+            mkdirSync(cloudflareDir, { recursive: true });
+          }
+          copyFileSync(swSourcePath, cloudflareSwPath);
+          console.log('[Vite Plugin] Copied service worker to .svelte-kit/cloudflare/sw.js');
+        } catch (error) {
+          console.warn('[Vite Plugin] Failed to copy service worker:', error);
         }
       }
     }
