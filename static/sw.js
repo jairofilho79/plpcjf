@@ -65,8 +65,11 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Handle PDF requests
-  if (url.pathname.includes('.pdf') || url.pathname.includes('/assets/')) {
+  // Check if this is a navigation request (page load)
+  const isNavigationRequest = event.request.mode === 'navigate';
+
+  // Handle PDF requests (but not navigation requests for PDF URLs)
+  if (!isNavigationRequest && (url.pathname.includes('.pdf') || url.pathname.includes('/assets/'))) {
     event.respondWith(
       caches.match(event.request)
         .then(cachedResponse => {
@@ -105,42 +108,39 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Handle SvelteKit routes for offline access (like /leitor)
-  // This needs to be checked before the general app shell handler
-  if (url.pathname.startsWith('/leitor')) {
+  // Handle navigation requests (page loads) - SvelteKit SPA routing
+  if (isNavigationRequest) {
     event.respondWith(
-      caches.match(event.request)
-        .then(cachedResponse => {
-          if (cachedResponse) {
-            console.log('[SW] Serving /leitor route from cache:', url.pathname);
-            return cachedResponse;
+      fetch(event.request)
+        .then(response => {
+          // Cache successful navigation responses
+          if (response && response.status === 200) {
+            const responseClone = response.clone();
+            caches.open(APP_CACHE).then(cache => {
+              cache.put(event.request, responseClone);
+            });
           }
-          
-          // Network first for navigation requests
-          return fetch(event.request)
-            .then(response => {
-              // Cache successful responses (including HTML, JS, CSS)
-              if (response && response.status === 200) {
-                const responseClone = response.clone();
-                caches.open(APP_CACHE).then(cache => {
-                  cache.put(event.request, responseClone);
-                });
+          return response;
+        })
+        .catch(() => {
+          // When offline, serve index.html for all routes to enable SvelteKit client-side routing
+          // SvelteKit will handle client-side routing based on the current URL
+          console.log('[SW] Navigation request offline, serving index.html for SvelteKit routing:', url.pathname);
+          return caches.match('/')
+            .then(cached => {
+              if (cached) {
+                // Return the cached response directly - SvelteKit will handle routing
+                return cached;
               }
-              return response;
-            })
-            .catch(err => {
-              // If offline and route not cached, try to serve from cache
-              // or fallback to index page
-              console.log('[SW] Network failed for /leitor, trying cache fallback');
-              return caches.match(event.request)
-                .then(cached => cached || caches.match('/'));
+              // Fallback: try to return any cached response
+              return caches.match(event.request);
             });
         })
     );
     return;
   }
 
-  // Handle app shell and manifest requests
+  // Handle app shell and manifest requests (non-navigation)
   if (APP_SHELL.some(path => url.pathname === path || url.pathname.startsWith(path))) {
     event.respondWith(
       caches.match(event.request)
@@ -162,8 +162,14 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // For all other requests, network first
-  event.respondWith(fetch(event.request));
+  // For all other requests (JS, CSS, images, etc.), network first
+  event.respondWith(
+    fetch(event.request)
+      .catch(() => {
+        // If offline, try cache
+        return caches.match(event.request);
+      })
+  );
 });
 
 // Message handling for download control
