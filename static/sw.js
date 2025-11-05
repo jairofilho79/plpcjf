@@ -8,6 +8,7 @@ const PDF_CACHE = `${CACHE_VERSION}-pdfs`;
 // App shell resources to cache on install
 const APP_SHELL = [
   '/',
+  '/leitor',
   '/manifest.json',
   '/louvores-manifest.json',
   '/favicon.svg',
@@ -82,13 +83,57 @@ self.addEventListener('fetch', (event) => {
                 const responseClone = response.clone();
                 caches.open(PDF_CACHE).then(cache => {
                   cache.put(event.request, responseClone);
+                  console.log('[SW] Cached PDF:', url.pathname);
                 });
               }
               return response;
             })
             .catch(err => {
               console.error('[SW] Failed to fetch PDF:', url.pathname, err);
-              throw err;
+              // Try cache again in case it was just added
+              return caches.match(event.request)
+                .then(cached => {
+                  if (cached) {
+                    console.log('[SW] Serving PDF from cache after network failure:', url.pathname);
+                    return cached;
+                  }
+                  throw err;
+                });
+            });
+        })
+    );
+    return;
+  }
+
+  // Handle SvelteKit routes for offline access (like /leitor)
+  // This needs to be checked before the general app shell handler
+  if (url.pathname.startsWith('/leitor')) {
+    event.respondWith(
+      caches.match(event.request)
+        .then(cachedResponse => {
+          if (cachedResponse) {
+            console.log('[SW] Serving /leitor route from cache:', url.pathname);
+            return cachedResponse;
+          }
+          
+          // Network first for navigation requests
+          return fetch(event.request)
+            .then(response => {
+              // Cache successful responses (including HTML, JS, CSS)
+              if (response && response.status === 200) {
+                const responseClone = response.clone();
+                caches.open(APP_CACHE).then(cache => {
+                  cache.put(event.request, responseClone);
+                });
+              }
+              return response;
+            })
+            .catch(err => {
+              // If offline and route not cached, try to serve from cache
+              // or fallback to index page
+              console.log('[SW] Network failed for /leitor, trying cache fallback');
+              return caches.match(event.request)
+                .then(cached => cached || caches.match('/'));
             });
         })
     );
