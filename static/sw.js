@@ -123,22 +123,44 @@ self.addEventListener('fetch', (event) => {
             const responseClone = response.clone();
             caches.open(APP_CACHE).then(cache => {
               cache.put(event.request, responseClone);
+              console.log('[SW] Cached navigation response for:', url.pathname);
             });
           }
           return response;
         })
         .catch(() => {
-          // When offline, serve index.html for all routes to enable SvelteKit client-side routing
-          // SvelteKit will handle client-side routing based on the current URL
-          console.log('[SW] Navigation request offline, serving index.html for SvelteKit routing:', url.pathname);
-          return caches.match('/')
+          // When offline, try to serve the specific route from cache first
+          console.log('[SW] Navigation request offline, trying cache for:', url.pathname);
+          return caches.match(event.request)
             .then(cached => {
               if (cached) {
-                // Return the cached response directly - SvelteKit will handle routing
+                console.log('[SW] Serving cached route:', url.pathname);
                 return cached;
               }
-              // Fallback: try to return any cached response
-              return caches.match(event.request);
+              // If specific route not cached, serve index.html for SvelteKit client-side routing
+              // SvelteKit will handle routing based on the current URL in the browser
+              console.log('[SW] Route not in cache, serving index.html for SvelteKit routing:', url.pathname);
+              return caches.match('/')
+                .then(indexCached => {
+                  if (indexCached) {
+                    // Clone the response to avoid issues with body consumption
+                    const clonedResponse = indexCached.clone();
+                    // Read the body as text and create a new Response
+                    // This ensures we can properly serve the HTML while maintaining the request URL
+                    return clonedResponse.text().then(htmlText => {
+                      return new Response(htmlText, {
+                        status: 200,
+                        statusText: 'OK',
+                        headers: {
+                          'Content-Type': 'text/html; charset=utf-8',
+                          ...Object.fromEntries(clonedResponse.headers.entries())
+                        }
+                      });
+                    });
+                  }
+                  // Last resort: return undefined to let browser handle
+                  return undefined;
+                });
             });
         })
     );
