@@ -69,7 +69,12 @@ self.addEventListener('fetch', (event) => {
   const isNavigationRequest = event.request.mode === 'navigate';
 
   // Handle PDF requests (but not navigation requests for PDF URLs)
-  if (!isNavigationRequest && (url.pathname.includes('.pdf') || url.pathname.includes('/assets/'))) {
+  // Only match actual PDF files in /assets/ directory, not SvelteKit assets
+  const isPdfRequest = !isNavigationRequest && 
+    url.pathname.endsWith('.pdf') && 
+    (url.pathname.startsWith('/assets/') || url.pathname.includes('/assets/'));
+  
+  if (isPdfRequest) {
     event.respondWith(
       caches.match(event.request)
         .then(cachedResponse => {
@@ -148,7 +153,44 @@ self.addEventListener('fetch', (event) => {
           if (cachedResponse) {
             return cachedResponse;
           }
-          return fetch(event.request).then(response => {
+          return fetch(event.request)
+            .then(response => {
+              if (response && response.status === 200) {
+                const responseClone = response.clone();
+                caches.open(APP_CACHE).then(cache => {
+                  cache.put(event.request, responseClone);
+                });
+              }
+              return response;
+            })
+            .catch(() => {
+              // If offline and not in cache, return the cached index if available
+              // This helps ensure the app shell is always available
+              return caches.match('/').catch(() => {
+                // If even index is not cached, let the request fail normally
+                return fetch(event.request);
+              });
+            });
+        })
+        .catch(() => {
+          // If cache.match fails entirely, try network
+          return fetch(event.request);
+        })
+    );
+    return;
+  }
+
+  // For all other requests (JS, CSS, images, etc.), cache first when offline
+  event.respondWith(
+    caches.match(event.request)
+      .then(cachedResponse => {
+        if (cachedResponse) {
+          return cachedResponse;
+        }
+        // Not in cache, try network
+        return fetch(event.request)
+          .then(response => {
+            // Cache successful responses for future offline use
             if (response && response.status === 200) {
               const responseClone = response.clone();
               caches.open(APP_CACHE).then(cache => {
@@ -156,18 +198,16 @@ self.addEventListener('fetch', (event) => {
               });
             }
             return response;
+          })
+          .catch(() => {
+            // Offline and not in cache - fetch will fail, but let it fail gracefully
+            // Return a rejected promise so the browser can handle it
+            return Promise.reject(new Error('Network error and not in cache'));
           });
-        })
-    );
-    return;
-  }
-
-  // For all other requests (JS, CSS, images, etc.), network first
-  event.respondWith(
-    fetch(event.request)
+      })
       .catch(() => {
-        // If offline, try cache
-        return caches.match(event.request);
+        // If cache.match fails, try network one more time
+        return fetch(event.request);
       })
   );
 });
