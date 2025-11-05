@@ -12,7 +12,13 @@
   import CarouselChips from '$lib/components/CarouselChips.svelte';
   
   let searchQuery = '';
+  /**
+     * @type {string | any[]}
+     */
   let filteredResults = [];
+  /**
+     * @type {number | null | undefined}
+     */
   let debounceTimer = null;
   
   onMount(() => {
@@ -26,6 +32,9 @@
     };
   });
   
+  /**
+     * @param {string} str
+     */
   function normalizeSearchString(str) {
     return str.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-zA-Z0-9\s]/g, '');
   }
@@ -101,6 +110,9 @@
     }
   }
   
+  /**
+     * @param {{ numero: any; nome: any; classificacao: any; categoria: any; pdfId: any; pdf: any; }} louvor
+     */
   function getLouvorKey(louvor) {
     // Create a unique key combining all identifying fields
     // Use pipe separator to avoid conflicts

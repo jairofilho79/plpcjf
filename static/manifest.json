@@ -1,6 +1,6 @@
 {
-  "name": "Pesquisador de Louvores",
-  "short_name": "Louvores",
+  "name": "Pesquisador de Louvores em Partitura e Cifra",
+  "short_name": "PLPC",
   "description": "Pesquisador e visualizador offline de partituras de louvores",
   "start_url": "/",
   "display": "standalone",

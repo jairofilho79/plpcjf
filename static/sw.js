@@ -1,14 +1,15 @@
 // Service Worker for PWA Offline Mode
 // Handles caching of PDFs and app resources for offline access
 
-const CACHE_VERSION = 'plpc-v1';
+const CACHE_VERSION = 'plpc-v2';
 const APP_CACHE = `${CACHE_VERSION}-app`;
 const PDF_CACHE = `${CACHE_VERSION}-pdfs`;
 
 // App shell resources to cache on install
+// Note: Only cache the root '/' HTML shell, not individual SPA routes like '/leitor'
+// SvelteKit's client-side router will handle routing to /leitor once the app shell loads
 const APP_SHELL = [
   '/',
-  '/leitor',
   '/manifest.json',
   '/louvores-manifest.json',
   '/favicon.svg',
@@ -129,38 +130,23 @@ self.addEventListener('fetch', (event) => {
           return response;
         })
         .catch(() => {
-          // When offline, try to serve the specific route from cache first
-          console.log('[SW] Navigation request offline, trying cache for:', url.pathname);
+          // When offline, serve the cached HTML shell for SvelteKit SPA routing
+          // SvelteKit's client-side router will handle the actual route based on the URL
+          console.log('[SW] Navigation request offline for:', url.pathname);
+          
+          // Try to serve the specific route from cache first (if previously visited)
           return caches.match(event.request)
             .then(cached => {
               if (cached) {
                 console.log('[SW] Serving cached route:', url.pathname);
                 return cached;
               }
-              // If specific route not cached, serve index.html for SvelteKit client-side routing
-              // SvelteKit will handle routing based on the current URL in the browser
-              console.log('[SW] Route not in cache, serving index.html for SvelteKit routing:', url.pathname);
-              return caches.match('/')
-                .then(indexCached => {
-                  if (indexCached) {
-                    // Clone the response to avoid issues with body consumption
-                    const clonedResponse = indexCached.clone();
-                    // Read the body as text and create a new Response
-                    // This ensures we can properly serve the HTML while maintaining the request URL
-                    return clonedResponse.text().then(htmlText => {
-                      return new Response(htmlText, {
-                        status: 200,
-                        statusText: 'OK',
-                        headers: {
-                          'Content-Type': 'text/html; charset=utf-8',
-                          ...Object.fromEntries(clonedResponse.headers.entries())
-                        }
-                      });
-                    });
-                  }
-                  // Last resort: return undefined to let browser handle
-                  return undefined;
-                });
+              
+              // If specific route not cached, serve the root '/' HTML shell
+              // This is the correct approach for SvelteKit SPA - the same HTML is served
+              // for all routes, and the client-side router handles the actual routing
+              console.log('[SW] Route not cached, serving / shell for SvelteKit routing:', url.pathname);
+              return caches.match('/');
             });
         })
     );

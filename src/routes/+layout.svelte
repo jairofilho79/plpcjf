@@ -43,7 +43,7 @@
           </h1>
         </OfflineGestureDetector>
         <p class="text-center text-xs text-placeholder-color opacity-60 pb-3 pt-0.5 subtitle-inset">
-          Pesquisador de Louvores de Partitura e Cifra (e Gestinhos)
+          Pesquisador de Louvores em Partitura e Cifra (e Gestinhos)
         </p>
       </div>
       <div class="offline-indicator-wrapper">
