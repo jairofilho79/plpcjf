@@ -79,6 +79,16 @@
     const pdfPath = getPdfRelPath(louvor);
     const mode = $pdfViewer;
     
+    if (mode === 'leitor') {
+      const fileParam = encodeURIComponent(`/${pdfPath}`);
+      const tituloParam = encodeURIComponent(louvor.nome || '');
+      const subtituloText = `${louvor.categoria || ''} | ${enumMapper(louvor.classificacao) || ''}`.trim();
+      const subtituloParam = encodeURIComponent(subtituloText);
+      const url = `/leitor?file=${fileParam}&titulo=${tituloParam}&subtitulo=${subtituloParam}`;
+      window.open(url, '_blank', 'noopener');
+      return;
+    }
+    
     if (mode === 'newtab') {
       await openPdfNewTabOfflineFirst(`/${pdfPath}`, louvor.pdf);
       return;
