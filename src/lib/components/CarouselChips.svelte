@@ -11,22 +11,37 @@
     openPdfNewTabOfflineFirst 
   } from '$lib/utils/pdfUtils';
   
+  /**
+     * @type {number | null}
+     */
   let draggedIndex = null;
+  /**
+     * @type {number | null}
+     */
   let dragOverIndex = null;
   let hasDragged = false;
   let dragStartX = 0;
   let dragStartY = 0;
   
+  /**
+     * @param {DragEvent & { currentTarget: EventTarget & HTMLDivElement; }} event
+     * @param {number | null} index
+     */
   function handleDragStart(event, index) {
     draggedIndex = index;
     hasDragged = false;
     dragStartX = event.clientX;
     dragStartY = event.clientY;
+    // @ts-ignore
     event.dataTransfer.effectAllowed = 'move';
+    // @ts-ignore
     event.dataTransfer.setData('text/html', index);
     event.currentTarget.style.opacity = '0.5';
   }
   
+  /**
+     * @param {DragEvent & { currentTarget: EventTarget & HTMLDivElement; }} event
+     */
   function handleDragEnd(event) {
     event.currentTarget.style.opacity = '1';
     // Aguarda um tick para garantir que o drop seja processado antes do clique
@@ -37,21 +52,34 @@
     }, 0);
   }
   
+  /**
+     * @param {DragEvent & { currentTarget: EventTarget & HTMLDivElement; }} event
+     * @param {number} index
+     */
   function handleDragOver(event, index) {
     event.preventDefault();
+    // @ts-ignore
     event.dataTransfer.dropEffect = 'move';
     if (draggedIndex !== null && draggedIndex !== index) {
       dragOverIndex = index;
     }
   }
   
+  /**
+     * @param {DragEvent & { currentTarget: EventTarget & HTMLDivElement; }} event
+     */
   function handleDragLeave(event) {
     // Só limpa se não estiver sobre outro item
+    // @ts-ignore
     if (!event.currentTarget.contains(event.relatedTarget)) {
       dragOverIndex = null;
     }
   }
   
+  /**
+     * @param {DragEvent & { currentTarget: EventTarget & HTMLDivElement; }} event
+     * @param {number} dropIndex
+     */
   function handleDrop(event, dropIndex) {
     event.preventDefault();
     event.stopPropagation();
@@ -65,6 +93,7 @@
     dragOverIndex = null;
   }
   
+  // @ts-ignore
   function handleDrag(event) {
     // Verifica se houve movimento significativo (mais de 5 pixels)
     const deltaX = Math.abs(event.clientX - dragStartX);
@@ -74,6 +103,9 @@
     }
   }
   
+  /**
+     * @param {{ nome: any; categoria: any; classificacao: any; pdf: string | undefined; }} louvor
+     */
   async function openPdfFromChip(louvor) {
     const pdfPath = getPdfRelPath(louvor);
     const mode = $pdfViewer;
@@ -102,6 +134,7 @@
         const blob = await fetchPdfAsBlob(pdfPath);
         await sharePdf(blob, louvor.pdf, louvor.nome);
       } catch (_) {
+        // @ts-ignore
         window.open(pdfPath, '_blank');
       }
       return;
@@ -112,7 +145,9 @@
         await savePdf(blob, louvor.pdf);
       } catch (_) {
         const a = document.createElement('a');
+        // @ts-ignore
         a.href = pdfPath;
+        // @ts-ignore
         a.download = louvor.pdf;
         a.click();
       }
@@ -120,9 +155,11 @@
     }
     
     // default: mesma aba
+    // @ts-ignore
     window.location.href = pdfPath;
   }
   
+  // @ts-ignore
   function handleChipClick(event, louvor) {
     if (event.target.closest('button')) return;
     if (hasDragged) {
@@ -132,6 +169,7 @@
     openPdfFromChip(louvor);
   }
   
+  // @ts-ignore
   function getCategoryIcon(category) {
     if (!category) return null;
     if (category === 'Partitura') {
