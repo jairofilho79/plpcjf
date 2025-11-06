@@ -2,7 +2,6 @@
   import { X, Trash2, GripVertical } from 'lucide-svelte';
   import { carousel } from '$lib/stores/carousel';
   import { pdfViewer } from '$lib/stores/pdfViewer';
-  import { enumMapper } from '$lib/utils/enumMapper';
   import { getPdfRelPath } from '$lib/utils/pathUtils';
   import { 
     fetchPdfAsBlob, 
@@ -82,7 +81,7 @@
     if (mode === 'leitor') {
       const fileParam = encodeURIComponent(`/${pdfPath}`);
       const tituloParam = encodeURIComponent(louvor.nome || '');
-      const subtituloText = `${louvor.categoria || ''} | ${enumMapper(louvor.classificacao) || ''}`.trim();
+      const subtituloText = `${louvor.categoria || ''} | ${louvor.classificacao || ''}`.trim();
       const subtituloParam = encodeURIComponent(subtituloText);
       const url = `/leitor?file=${fileParam}&titulo=${tituloParam}&subtitulo=${subtituloParam}`;
       window.open(url, '_blank', 'noopener');
@@ -181,11 +180,11 @@
           </div>
           <div class="chip-content">
             <div class="chip-title">
-              <strong>#{enumMapper(louvor.numero) || 'N/A'}</strong> - {louvor.nome || 'Sem título'}
+              <strong>#{louvor.numero || 'N/A'}</strong> - {louvor.nome || 'Sem título'}
             </div>
             <div class="chip-subtitles">
               <div class="chip-classification">
-                {enumMapper(louvor.classificacao) || 'Sem classificação'}
+                {louvor.classificacao || 'Sem classificação'}
               </div>
               <div class="chip-category">
                 {#if categoryIcon}

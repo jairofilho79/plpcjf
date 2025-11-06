@@ -1,5 +1,3 @@
-import { pdfMapper } from './enumMapper.js';
-
 // Função helper para decodificar base64 para UTF-8 corretamente
 export function atobUTF8(base64) {
   const binaryString = atob(base64);
@@ -13,37 +11,36 @@ export function atobUTF8(base64) {
 
 // Retorna caminho relativo sem barra inicial, ex: "assets/ColAdultos/arquivo.pdf"
 export function getPdfRelPath(louvor) {
+  if (!louvor || !louvor.pdfId) {
+    return null;
+  }
+  
   try {
-    const raw = louvor && (louvor.pdfId || louvor['pdfId']);
-    if (raw && typeof raw === 'string') {
-      let decoded = '';
-      try {
-        decoded = atobUTF8(raw).trim();
-      } catch (_) {
-        decoded = '';
-      }
-      if (decoded) {
-        // normaliza removendo barras iniciais
-        let path = decoded.replace(/^\/+/, '');
-        // Decodifica caracteres URI-encoded se necessário (para evitar dupla codificação)
-        try {
-          if (path.includes('%')) {
-            path = decodeURIComponent(path);
-          }
-        } catch (_) {
-          // Se decodeURIComponent falhar, mantém o path original
-        }
-        // assegura prefixo assets/
-        if (path.toLowerCase().startsWith('assets/')) {
-          return path;
-        }
-        if (/\.pdf$/i.test(path) && path.includes('/')) {
-          return `assets/${path}`;
-        }
-      }
+    const decoded = atobUTF8(louvor.pdfId);
+    // normaliza removendo barras iniciais
+    let path = decoded.replace(/^\/+/, '').trim();
+    
+    if (!path) {
+      return null;
     }
-  } catch (_) {}
-  // fallback atual
-  return `assets/${pdfMapper(louvor.classificacao)}${louvor.pdf}`;
+    
+    // Decodifica caracteres URI-encoded se necessário (para evitar dupla codificação)
+    try {
+      if (path.includes('%')) {
+        path = decodeURIComponent(path);
+      }
+    } catch (_) {
+      // Se decodeURIComponent falhar, mantém o path original
+    }
+    
+    // assegura prefixo assets/
+    if (path.toLowerCase().startsWith('assets/')) {
+      return path;
+    }
+    
+    return `assets/${path}`;
+  } catch (_) {
+    return null;
+  }
 }
 

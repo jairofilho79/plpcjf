@@ -159,6 +159,10 @@ async function checkForNewPDFs() {
       }
       
       const pdfUrl = getPdfUrl(louvor);
+      if (!pdfUrl) {
+        return false;
+      }
+      
       return !cachedPdfs.some(cached => cached.includes(pdfUrl));
     });
 
@@ -168,7 +172,7 @@ async function checkForNewPDFs() {
       // Auto-download new PDFs
       offlineState.update(s => ({ ...s, autoDownloading: true }));
       
-      const pdfUrls = newPdfs.map(getPdfUrl);
+      const pdfUrls = newPdfs.map(getPdfUrl).filter(url => url !== null);
       await startDownload(pdfUrls);
       
       offlineState.update(s => ({ ...s, autoDownloading: false }));
@@ -183,20 +187,29 @@ async function checkForNewPDFs() {
  * Get PDF URL from louvor object
  */
 function getPdfUrl(louvor) {
-  // Use the same logic as pathUtils.js
-  try {
-    if (louvor.pdfId) {
-      const decoded = atobUTF8(louvor.pdfId);
-      const path = decoded.startsWith('assets/') ? decoded : `assets/${decoded}`;
-      return `/${path}`;
-    }
-  } catch (e) {
-    // Fallback
+  if (!louvor || !louvor.pdfId) {
+    return null;
   }
   
-  const classificacao = louvor.classificacao || '';
-  const pdf = louvor.pdf || '';
-  return `/assets/${classificacao}/${pdf}`;
+  try {
+    const decoded = atobUTF8(louvor.pdfId);
+    // normaliza removendo barras iniciais
+    let path = decoded.replace(/^\/+/, '').trim();
+    
+    if (!path) {
+      return null;
+    }
+    
+    // assegura prefixo assets/
+    if (!path.toLowerCase().startsWith('assets/')) {
+      path = `assets/${path}`;
+    }
+    
+    return `/${path}`;
+  } catch (e) {
+    console.error('[Offline Store] Failed to decode pdfId:', e);
+    return null;
+  }
 }
 
 /**
@@ -290,7 +303,7 @@ async function downloadByCategories(categories) {
 
   console.log(`[Offline Store] Downloading ${filteredLouvores.length} PDFs from ${categories.length} categories`);
 
-  const pdfUrls = filteredLouvores.map(getPdfUrl);
+  const pdfUrls = filteredLouvores.map(getPdfUrl).filter(url => url !== null);
   await startDownload(pdfUrls, categories);
 }
 
