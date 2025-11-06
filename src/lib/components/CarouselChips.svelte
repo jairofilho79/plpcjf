@@ -235,7 +235,7 @@
             </div>
           </div>
           <button
-            on:click|stopPropagation={() => carousel.removeLouvor(louvor.numero, louvor.nome, louvor.classificacao)}
+            on:click|stopPropagation={() => carousel.removeLouvor(louvor.pdfId)}
             class="chip-remove-button"
             title="Remover"
           >

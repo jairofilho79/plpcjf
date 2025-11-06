@@ -15,9 +15,7 @@
   
   $: pdfPath = getPdfRelPath(louvor);
   $: isInCarousel = $carousel.some(item => 
-    item.numero === louvor.numero && 
-    item.nome === louvor.nome && 
-    item.classificacao === louvor.classificacao
+    item.pdfId === louvor.pdfId
   );
   
   function getCategoryIcon(category) {

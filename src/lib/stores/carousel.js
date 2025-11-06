@@ -22,14 +22,10 @@ function createCarouselStore() {
 
   return {
     subscribe,
-    addLouvor: (louvor) => {
+    addLouvor: (/** @type {{ pdfId: any; }} */ louvor) => {
       update(louvores => {
         // Check if already exists
-        if (louvores.some(item => 
-          item.numero === louvor.numero && 
-          item.nome === louvor.nome && 
-          item.classificacao === louvor.classificacao
-        )) {
+        if (louvores.some(item => item.pdfId === louvor.pdfId)) {
           return louvores;
         }
         
@@ -46,11 +42,9 @@ function createCarouselStore() {
         return updated;
       });
     },
-    removeLouvor: (numero, nome, classificacao) => {
+    removeLouvor: (/** @type {any} */ pdfId) => {
       update(louvores => {
-        const filtered = louvores.filter(item => 
-          !(item.numero === numero && item.nome === nome && item.classificacao === classificacao)
-        );
+        const filtered = louvores.filter(item => item.pdfId !== pdfId);
         
         if (browser) {
           try {
@@ -73,7 +67,7 @@ function createCarouselStore() {
         }
       }
     },
-    reorderCarousel: (fromIndex, toIndex) => {
+    reorderCarousel: (/** @type {number} */ fromIndex, /** @type {number} */ toIndex) => {
       update(louvores => {
         if (fromIndex === toIndex || fromIndex < 0 || toIndex < 0 || fromIndex >= louvores.length || toIndex >= louvores.length) {
           return louvores;

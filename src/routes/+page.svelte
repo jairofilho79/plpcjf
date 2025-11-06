@@ -111,12 +111,11 @@
   }
   
   /**
-     * @param {{ numero: any; nome: any; classificacao: any; categoria: any; pdfId: any; pdf: any; }} louvor
+     * @param {{ pdfId: any; }} louvor
      */
   function getLouvorKey(louvor) {
-    // Create a unique key combining all identifying fields
-    // Use pipe separator to avoid conflicts
-    return `${louvor.numero || ''}|${louvor.nome || ''}|${louvor.classificacao || ''}|${louvor.categoria || ''}|${louvor.pdfId || ''}|${louvor.pdf || ''}`;
+    // Use pdfId as the unique identifier
+    return louvor.pdfId || '';
   }
 </script>
 
