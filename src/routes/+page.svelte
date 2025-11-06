@@ -3,10 +3,12 @@
   import { browser } from '$app/environment';
   import { derived } from 'svelte/store';
   import { louvores, loadLouvores } from '$lib/stores/louvores';
-  import { filters } from '$lib/stores/filters';
+  import { filters, CATEGORY_OPTIONS } from '$lib/stores/filters';
+  import { classificationFilters } from '$lib/stores/classificationFilters';
   import { pdfViewer } from '$lib/stores/pdfViewer';
   import SearchBar from '$lib/components/SearchBar.svelte';
   import CategoryFilters from '$lib/components/CategoryFilters.svelte';
+  import ClassificationFilters from '$lib/components/ClassificationFilters.svelte';
   import PdfViewerSelector from '$lib/components/PdfViewerSelector.svelte';
   import LouvorCard from '$lib/components/LouvorCard.svelte';
   import CarouselChips from '$lib/components/CarouselChips.svelte';
@@ -33,11 +35,40 @@
   });
   
   /**
-     * @param {string} str
-     */
+   * @param {string} str
+   */
   function normalizeSearchString(str) {
     return str.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-zA-Z0-9\s]/g, '');
   }
+  
+  // Normalize classification by removing content in parentheses
+  /**
+   * @param {string} classification
+   */
+  function normalizeClassification(classification) {
+    if (!classification) return '';
+    return classification.replace(/\([^)]*\)/g, '').trim();
+  }
+  
+  // Expand category filter: if "Cifra" is selected, include "Cifra nível I" and "Cifra nível II"
+  /**
+   * @param {string[]} selectedCategories
+   */
+  function expandCategoryFilter(selectedCategories) {
+    const expanded = [...selectedCategories];
+    if (selectedCategories.includes('Cifra')) {
+      if (!expanded.includes('Cifra nível I')) expanded.push('Cifra nível I');
+      if (!expanded.includes('Cifra nível II')) expanded.push('Cifra nível II');
+    }
+    return expanded;
+  }
+  
+  // Get unique normalized classifications from louvores
+  $: uniqueNormalizedClassifications = $louvores
+    .map(louvor => normalizeClassification(louvor.classificacao))
+    .filter(c => c)
+    .filter((c, index, arr) => arr.indexOf(c) === index)
+    .sort();
   
   function handleSearch() {
     filterLouvores();
@@ -58,17 +89,38 @@
       return;
     }
     
-    // Get currently selected categories
+    // First, apply category filter (with inclusive logic for Cifra)
     const activeCategories = $filters;
-    const allCategoriesSelected = activeCategories.length === 5;
+    const allCategoriesSelected = activeCategories.length === CATEGORY_OPTIONS.length;
     
-    // Apply category filter with OR logic
-    let filtered = $louvores;
+    let categoryFiltered = $louvores;
     if (!allCategoriesSelected && activeCategories.length > 0) {
-      filtered = $louvores.filter(louvor => {
+      // Expand "Cifra" to include "Cifra nível I" and "Cifra nível II"
+      const expandedCategories = expandCategoryFilter(activeCategories);
+      categoryFiltered = $louvores.filter(louvor => {
         if (!louvor.categoria) return false;
-        return activeCategories.includes(louvor.categoria);
+        return expandedCategories.includes(louvor.categoria);
       });
+    }
+    
+    // Then, apply classification filter
+    const selectedFilters = $classificationFilters;
+    let classificationFiltered = categoryFiltered;
+    
+    if (selectedFilters.length > 0) {
+      // If all unique normalized classifications are selected, show all
+      const allSelected = uniqueNormalizedClassifications.length > 0 &&
+                         selectedFilters.length === uniqueNormalizedClassifications.length &&
+                         uniqueNormalizedClassifications.every(c => selectedFilters.includes(c));
+      
+      if (!allSelected) {
+        // Otherwise, filter by selected classifications
+        classificationFiltered = categoryFiltered.filter(louvor => {
+          if (!louvor.classificacao) return false;
+          const normalized = normalizeClassification(louvor.classificacao);
+          return selectedFilters.includes(normalized);
+        });
+      }
     }
     
     // Apply search filter
@@ -78,12 +130,12 @@
     }
     
     if (!isNaN(Number(searchQuery))) {
-      filteredResults = filtered.filter(louvor => Number(louvor.numero) === Number(searchQuery));
+      filteredResults = classificationFiltered.filter(louvor => Number(louvor.numero) === Number(searchQuery));
       return;
     }
     
     const searchNormalized = normalizeSearchString(searchQuery);
-    filteredResults = filtered.filter(louvor => {
+    filteredResults = classificationFiltered.filter(louvor => {
       const titulo = normalizeSearchString(louvor.nome);
       return titulo.includes(searchNormalized);
     });
@@ -93,6 +145,7 @@
   // Isso evita que a pesquisa bloqueie a digitação
   $: if (searchQuery !== undefined) {
     $filters;
+    $classificationFilters;
     
     // Limpar timer anterior se existir
     if (debounceTimer) {
@@ -107,6 +160,21 @@
     } else {
       // No servidor, executar diretamente
       filterLouvores();
+    }
+  }
+  
+  // Initialize filters with all classifications on first load if localStorage is empty
+  let filtersInitialized = false;
+  $: {
+    if ($louvores.length && !filtersInitialized) {
+      // Check if filters are empty (not initialized) and we have classifications
+      if ($classificationFilters.length === 0 && uniqueNormalizedClassifications.length > 0) {
+        filtersInitialized = true;
+        classificationFilters.selectAll(uniqueNormalizedClassifications);
+      } else if ($classificationFilters.length > 0) {
+        // Filters already initialized from localStorage
+        filtersInitialized = true;
+      }
     }
   }
   
@@ -128,6 +196,8 @@
     <SearchBar bind:searchQuery on:clear={handleClear} />
     
     <CategoryFilters />
+    
+    <ClassificationFilters availableClassifications={$louvores.map(l => l.classificacao).filter(c => c)} />
     
     <PdfViewerSelector />
     

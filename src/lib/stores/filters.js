@@ -1,7 +1,7 @@
 import { writable } from 'svelte/store';
 import { browser } from '$app/environment';
 
-export const CATEGORY_OPTIONS = ['Partitura', 'Cifra', 'Cifra nível I', 'Cifra nível II', 'Gestos em Gravura'];
+export const CATEGORY_OPTIONS = ['Partitura', 'Cifra', 'Gestos em Gravura'];
 const FILTER_STORAGE_KEY = 'categoryFilters';
 
 function loadFiltersFromStorage() {

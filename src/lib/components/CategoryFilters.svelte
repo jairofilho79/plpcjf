@@ -133,7 +133,7 @@
 </script>
 
 <div class="w-full max-w-4xl p-4 bg-card-color rounded-lg border-2 flex flex-wrap gap-2 items-center justify-center filter-container">
-  <span class="container-tag">Filtrar</span>
+  <span class="container-tag">Material</span>
   <button
     type="button"
     class="todos-button-tag"
