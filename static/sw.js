@@ -70,21 +70,28 @@ self.addEventListener('fetch', (event) => {
   const isNavigationRequest = event.request.mode === 'navigate';
 
   // Handle PDF requests (but not navigation requests for PDF URLs)
-  // Only match actual PDF files in /assets/ directory, not SvelteKit assets
+  // Intercept ALL PDF files regardless of path (/pdfs/, /assets/, etc.)
+  // Exclude SvelteKit's internal assets (like JS bundles) by checking URL structure
   const isPdfRequest = !isNavigationRequest && 
-    url.pathname.endsWith('.pdf') && 
-    (url.pathname.startsWith('/assets/') || url.pathname.includes('/assets/'));
+    url.pathname.endsWith('.pdf') &&
+    // Exclude SvelteKit internal assets by checking if it's a real PDF file request
+    // (not a JS/CSS bundle that happens to have .pdf in the name)
+    !url.pathname.includes('/_app/') &&
+    !url.pathname.includes('/node_modules/');
   
   if (isPdfRequest) {
+    // Cache First strategy: Check cache FIRST, then network
+    // This avoids network timeout delays when PDF is already cached
     event.respondWith(
       caches.match(event.request)
         .then(cachedResponse => {
           if (cachedResponse) {
-            console.log('[SW] Serving PDF from cache:', url.pathname);
+            console.log('[SW] Serving PDF from cache (Cache First):', url.pathname);
             return cachedResponse;
           }
           
           // Not in cache, fetch from network
+          console.log('[SW] PDF not in cache, fetching from network:', url.pathname);
           return fetch(event.request)
             .then(response => {
               // Only cache successful responses
@@ -99,7 +106,7 @@ self.addEventListener('fetch', (event) => {
             })
             .catch(err => {
               console.error('[SW] Failed to fetch PDF:', url.pathname, err);
-              // Try cache again in case it was just added
+              // Try cache one more time in case it was added between checks
               return caches.match(event.request)
                 .then(cached => {
                   if (cached) {
@@ -363,9 +370,19 @@ async function handleGetCachedPDFs(event) {
   try {
     const cache = await caches.open(PDF_CACHE);
     const requests = await cache.keys();
+    // Filter for all PDF files regardless of path
     const pdfUrls = requests
       .map(req => req.url)
-      .filter(url => url.includes('.pdf') || url.includes('/assets/'));
+      .filter(url => {
+        try {
+          const urlObj = new URL(url);
+          return urlObj.pathname.endsWith('.pdf') && 
+                 !urlObj.pathname.includes('/_app/') &&
+                 !urlObj.pathname.includes('/node_modules/');
+        } catch {
+          return false;
+        }
+      });
     
     event.ports[0].postMessage({
       type: 'CACHED_PDFS',
