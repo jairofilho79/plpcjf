@@ -34,9 +34,9 @@
     goto('/listas');
   }
   
-  // Placeholder function for sobre button
+  // Navigate to sobre page
   function handleSobreClick() {
-    // TODO: Implementar funcionalidade futuramente
+    goto('/sobre');
   }
 </script>
 
