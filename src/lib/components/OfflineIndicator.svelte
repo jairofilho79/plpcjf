@@ -1,6 +1,7 @@
 <script>
   import { CloudOff, Cloud, Download } from 'lucide-svelte';
   import { offline, isOfflineEnabled, isDownloading } from '$lib/stores/offline';
+  import { goto } from '$app/navigation';
   
   $: state = $offline;
   $: enabled = $isOfflineEnabled;
@@ -10,13 +11,18 @@
   $: isOnline = typeof navigator !== 'undefined' ? navigator.onLine : true;
   
   let showTooltip = false;
-  let tooltipTimeout = null;
+  /**
+   * @type {ReturnType<typeof setTimeout> | undefined}
+   */
+  let tooltipTimeout = undefined;
   
   /**
    * Show tooltip
    */
   function handleMouseEnter() {
-    clearTimeout(tooltipTimeout);
+    if (tooltipTimeout !== undefined) {
+      clearTimeout(tooltipTimeout);
+    }
     showTooltip = true;
   }
   
@@ -30,10 +36,10 @@
   }
   
   /**
-   * Click handler - show modal
+   * Click handler - navigate to offline page
    */
   function handleClick() {
-    offline.showOfflineModal();
+    goto('/offline');
   }
 </script>
 

@@ -6,7 +6,6 @@
   import { goto } from '$app/navigation';
   import { CloudOff } from 'lucide-svelte';
   import OfflineIndicator from '$lib/components/OfflineIndicator.svelte';
-  import OfflineModal from '$lib/components/OfflineModal.svelte';
   import { registerServiceWorker } from '$lib/utils/swRegistration';
   
   // Handle overflow for /leitor route
@@ -25,9 +24,9 @@
     }
   });
   
-  // Placeholder function for offline button
+  // Navigate to offline page
   function handleOfflineClick() {
-    // TODO: Implementar funcionalidade futuramente
+    goto('/offline');
   }
   
   // Placeholder function for listas button
@@ -116,9 +115,6 @@
      class:pb-0={$page.url.pathname.startsWith('/leitor')}>
   <slot />
 </div>
-
-<!-- Offline Modal -->
-<OfflineModal />
 
 <style>
   .header-content {
@@ -222,9 +218,6 @@
     height: 1.25rem;
   }
   
-  .biblioteca-button {
-    /* Mantém compatibilidade com classe específica */
-  }
   
   @media (max-width: 768px) {
     .header-left {
