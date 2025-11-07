@@ -638,8 +638,16 @@
     border: 1px solid rgba(255,255,255,0.12);
     color: var(--text-light);
     cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
   }
   .btn:hover { filter: brightness(1.05); }
+  .btn .icon {
+    width: 20px;
+    height: 20px;
+    stroke: currentColor;
+  }
   .title-wrap { display: flex; flex-direction: column; justify-content: center; min-width: 0; grid-column: 1; grid-row: 2 / 4; }
   .title-main {
     font-weight: 600;
@@ -783,12 +791,26 @@
 <div class="toolbar" bind:this={toolbarEl}>
   <div class="brand">PLPC</div>
 
-  <button class="btn prev" on:click={prevPage} aria-label="Página anterior">◀</button>
+  <button class="btn prev" on:click={prevPage} aria-label="Página anterior">
+    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="icon">
+      <path stroke-linecap="round" stroke-linejoin="round" d="M10.5 19.5 3 12m0 0 7.5-7.5M3 12h18" />
+    </svg>
+  </button>
   <div class="indicator" aria-label="Página atual e total">
     <span class="current">{currentPage}</span>
     <span class="total">/ {totalPages}</span>
   </div>
-  <button class="btn next" on:click={nextPage} aria-label="Próxima página">▶</button>
+  <button class="btn next" on:click={nextPage} aria-label="Próxima página">
+    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="icon">
+      <path stroke-linecap="round" stroke-linejoin="round" d="M13.5 4.5 21 12m0 0-7.5 7.5M21 12H3" />
+    </svg>
+  </button>
+
+  <button class="btn zoom-minus" on:click={zoomOut} aria-label="Diminuir zoom">
+    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="icon">
+      <path stroke-linecap="round" stroke-linejoin="round" d="M5 12h14" />
+    </svg>
+  </button>
 
   <button 
     class="btn zoom-fit" 
@@ -808,6 +830,12 @@
     <div class="zoom-fit-indicator bar page-fit bottom"></div>
     <div class="zoom-fit-indicator bar page-width left"></div>
     <div class="zoom-fit-indicator bar page-width right"></div>
+  </button>
+
+  <button class="btn zoom-plus" on:click={zoomIn} aria-label="Aumentar zoom">
+    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="icon">
+      <path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
+    </svg>
   </button>
 
   <div class="title-wrap">
