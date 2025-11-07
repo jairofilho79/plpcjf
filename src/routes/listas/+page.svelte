@@ -1,5 +1,5 @@
 <script>
-  import { onMount, afterUpdate } from 'svelte';
+  import { afterUpdate } from 'svelte';
   import { browser } from '$app/environment';
   import { savedPlaylists } from '$lib/stores/savedPlaylists';
   import { carousel } from '$lib/stores/carousel';
@@ -17,15 +17,21 @@
   let showDeleteModal = false;
   let playlistToDelete = null;
   let showOnlyFavorites = false;
+  let searchTerm = '';
   /**
    * @type {HTMLElement | null}
    */
   let filterButtonElement = null;
 
   $: allPlaylists = $savedPlaylists;
-  $: playlists = showOnlyFavorites 
-    ? allPlaylists.filter(p => p.favorita === true)
+  $: filteredByFavorite = showOnlyFavorites 
+    ? allPlaylists.filter((p) => p.favorita === true)
     : allPlaylists;
+  $: normalizedSearchTerm = normalizeText(searchTerm);
+  $: playlists = normalizedSearchTerm
+    ? filteredByFavorite.filter((p) => normalizeText(p?.nome ?? '').includes(normalizedSearchTerm))
+    : filteredByFavorite;
+  $: hasActiveSearch = normalizedSearchTerm.length > 0;
 
   /**
    * Update SVG star attributes directly
@@ -53,6 +59,14 @@
         polygon.setAttribute('stroke-width', '2');
       }
     }
+  }
+
+  function normalizeText(text = '') {
+    return text
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase()
+      .trim();
   }
 
   // Update SVG attributes directly for filter button
@@ -224,6 +238,29 @@
         <Star class="star-icon" />
       </button>
     </div>
+
+    <div class="search-section">
+      <label class="search-label" for="playlist-search">Pesquisar playlists</label>
+      <div class="search-input-wrapper">
+        <input
+          id="playlist-search"
+          type="text"
+          placeholder="Buscar por nome..."
+          bind:value={searchTerm}
+          class:has-text={hasActiveSearch}
+        />
+        {#if hasActiveSearch}
+          <button
+            type="button"
+            class="clear-search"
+            on:click={() => (searchTerm = '')}
+            title="Limpar pesquisa"
+          >
+            <X class="w-4 h-4" />
+          </button>
+        {/if}
+      </div>
+    </div>
     
     {#if showCopiedMessage}
       <div class="copied-notification">Link copiado!</div>
@@ -231,7 +268,18 @@
 
     {#if playlists.length === 0}
       <div class="empty-state">
-        {#if showOnlyFavorites}
+        {#if filteredByFavorite.length === 0}
+          {#if showOnlyFavorites}
+            <p>Você ainda não tem playlists favoritas.</p>
+            <p class="empty-hint">Clique na estrela de uma playlist para adicioná-la aos favoritos.</p>
+          {:else}
+            <p>Você ainda não tem playlists salvas.</p>
+            <p class="empty-hint">Crie uma playlist na página inicial e clique em "Salvar" para começar.</p>
+          {/if}
+        {:else if hasActiveSearch}
+          <p>Nenhuma playlist encontrada para "{searchTerm.trim()}".</p>
+          <p class="empty-hint">Tente buscar por outro nome ou limpe a pesquisa.</p>
+        {:else if showOnlyFavorites}
           <p>Você ainda não tem playlists favoritas.</p>
           <p class="empty-hint">Clique na estrela de uma playlist para adicioná-la aos favoritos.</p>
         {:else}
@@ -432,6 +480,76 @@
     stroke-width: 0 !important;
   }
 
+  .search-section {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    margin-bottom: 2rem;
+  }
+
+  .search-label {
+    font-size: 0.875rem;
+    font-weight: 600;
+    color: var(--text-light);
+  }
+
+  .search-input-wrapper {
+    position: relative;
+    display: flex;
+    align-items: center;
+    background-color: var(--card-color);
+    border: 2px solid var(--gold-color);
+    border-radius: 0.5rem;
+    padding: 0.25rem 0.75rem;
+    box-shadow: var(--shadow-md);
+    transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
+  }
+
+  .search-input-wrapper:focus-within {
+    border-color: var(--gold-light);
+    box-shadow: var(--shadow-lg);
+    transform: translateY(-1px);
+  }
+
+  .search-input-wrapper input {
+    flex: 1;
+    background: transparent;
+    border: none;
+    outline: none;
+    font-size: 1rem;
+    color: var(--text-dark);
+    padding: 0.5rem 0.25rem;
+  }
+
+  .search-input-wrapper input::placeholder {
+    color: var(--text-dark);
+    opacity: 0.65;
+  }
+
+  .search-input-wrapper input.has-text {
+    padding-right: 2rem;
+  }
+
+  .clear-search {
+    position: absolute;
+    right: 0.5rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.75rem;
+    height: 1.75rem;
+    border: none;
+    background: none;
+    color: var(--text-dark);
+    cursor: pointer;
+    opacity: 0.7;
+    transition: opacity 0.2s ease;
+  }
+
+  .clear-search:hover {
+    opacity: 1;
+  }
+ 
   .copied-notification {
     position: fixed;
     top: 5rem;
@@ -702,6 +820,14 @@
   @media (max-width: 640px) {
     .page-body {
       padding: 1rem;
+    }
+
+    .search-section {
+      margin-bottom: 1.5rem;
+    }
+
+    .search-input-wrapper {
+      padding: 0.25rem 0.5rem;
     }
 
     .playlists-grid {
