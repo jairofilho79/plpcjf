@@ -102,7 +102,9 @@
   <!-- Footer -->
   <footer class="footer-section">
     <p class="footer-text">
-      Feito com <span class="heart">♥</span> pela IDM (Irmãos da Maranata)
+      Feito com <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" class="heart-icon">
+        <path d="m11.645 20.91-.007-.003-.022-.012a15.247 15.247 0 0 1-.383-.218 25.18 25.18 0 0 1-4.244-3.17C4.688 15.36 2.25 12.174 2.25 8.25 2.25 5.322 4.714 3 7.688 3A5.5 5.5 0 0 1 12 5.052 5.5 5.5 0 0 1 16.313 3c2.973 0 5.437 2.322 5.437 5.25 0 3.925-2.438 7.111-4.739 9.256a25.175 25.175 0 0 1-4.244 3.17 15.247 15.247 0 0 1-.383.219l-.022.012-.007.004-.003.001a.752.752 0 0 1-.704 0l-.003-.001Z" />
+      </svg> pela IDM (Irmãos da Maranata)
     </p>
   </footer>
 </div>
@@ -190,14 +192,18 @@
   }
 
   .footer-text {
-    color: var(--placeholder-color);
+    color: white;
     font-size: 1rem;
     font-weight: 500;
   }
 
-  .heart {
-    color: #e91e63;
-    font-size: 1.2em;
+  .heart-icon {
+    width: 1.2em;
+    height: 1.2em;
+    fill: var(--gold-light);
+    display: inline-block;
+    vertical-align: middle;
+    margin: 0 0.25em;
   }
 
   @media (max-width: 768px) {
