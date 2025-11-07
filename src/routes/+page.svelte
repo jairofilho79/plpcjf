@@ -2,10 +2,14 @@
   import { onMount } from 'svelte';
   import { browser } from '$app/environment';
   import { derived } from 'svelte/store';
+  import { page } from '$app/stores';
+  import { goto } from '$app/navigation';
   import { louvores, loadLouvores } from '$lib/stores/louvores';
   import { filters, CATEGORY_OPTIONS } from '$lib/stores/filters';
   import { classificationFilters } from '$lib/stores/classificationFilters';
   import { pdfViewer } from '$lib/stores/pdfViewer';
+  import { carousel } from '$lib/stores/carousel';
+  import { savedPlaylists } from '$lib/stores/savedPlaylists';
   import SearchBar from '$lib/components/SearchBar.svelte';
   import CategoryFilters from '$lib/components/CategoryFilters.svelte';
   import ClassificationFilters from '$lib/components/ClassificationFilters.svelte';
@@ -22,6 +26,7 @@
      * @type {number | null | undefined}
      */
   let debounceTimer = null;
+  let sharedLinkProcessed = false;
   
   onMount(() => {
     loadLouvores();
@@ -33,6 +38,49 @@
       }
     };
   });
+
+  /**
+   * Handle shared playlist link from query parameters
+   */
+  function handleSharedPlaylistLink() {
+    if (sharedLinkProcessed) return;
+    
+    const urlParams = new URLSearchParams($page.url.search);
+    const sharepdfs = urlParams.get('sharepdfs');
+    const sharename = urlParams.get('sharename');
+
+    if (sharepdfs && $louvores.length > 0) {
+      sharedLinkProcessed = true;
+      
+      // Parse PDF IDs from comma-separated string
+      const pdfIds = sharepdfs.split(',').filter(id => id.trim());
+      
+      if (pdfIds.length > 0) {
+        // Clear current playlist
+        carousel.clearCarousel();
+        
+        // Load playlist with the shared PDF IDs
+        carousel.loadPlaylist(pdfIds, $louvores);
+        
+        // Save playlist automatically with the shared name or default name
+        const playlistName = sharename ? decodeURIComponent(sharename) : undefined;
+        savedPlaylists.savePlaylist(pdfIds, playlistName);
+        
+        // Clean URL by removing query parameters
+        goto($page.url.pathname, { replaceState: true, noScroll: true });
+      }
+    }
+  }
+
+  // Watch for louvores to be loaded and handle shared link
+  $: {
+    if (browser && $louvores.length > 0 && $page.url.search && !sharedLinkProcessed) {
+      const urlParams = new URLSearchParams($page.url.search);
+      if (urlParams.has('sharepdfs')) {
+        handleSharedPlaylistLink();
+      }
+    }
+  }
   
   /**
    * @param {string} str

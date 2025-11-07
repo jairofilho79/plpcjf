@@ -87,6 +87,59 @@ function createCarouselStore() {
         
         return reordered;
       });
+    },
+    /**
+     * Set the entire carousel with a list of louvores
+     * @param {Array<any>} louvoresList - Array of louvor objects
+     */
+    setCarousel: (/** @type {Array<any>} */ louvoresList) => {
+      const carouselLouvores = Array.isArray(louvoresList) ? [...louvoresList] : [];
+      set(carouselLouvores);
+      
+      if (browser) {
+        try {
+          localStorage.setItem(CAROUSEL_STORAGE_KEY, JSON.stringify(carouselLouvores));
+        } catch (e) {
+          console.warn('Não foi possível salvar o carousel no localStorage:', e);
+        }
+      }
+    },
+    /**
+     * Load playlist from array of pdfIds
+     * Requires louvores store to be available
+     * @param {string[]} pdfIds - Array of PDF IDs in order
+     * @param {Array<any>} allLouvores - Array of all available louvores
+     */
+    loadPlaylist: (/** @type {string[]} */ pdfIds, /** @type {Array<any>} */ allLouvores) => {
+      if (!Array.isArray(pdfIds) || !Array.isArray(allLouvores)) {
+        console.warn('loadPlaylist: pdfIds e allLouvores devem ser arrays');
+        return;
+      }
+      
+      // Create a map for quick lookup
+      const louvoresMap = new Map();
+      allLouvores.forEach(louvor => {
+        if (louvor.pdfId) {
+          louvoresMap.set(louvor.pdfId, louvor);
+        }
+      });
+      
+      // Build playlist in order
+      const playlistLouvores = pdfIds
+        .map(pdfId => louvoresMap.get(pdfId))
+        .filter(louvor => louvor !== undefined);
+      
+      // Set the carousel with the loaded playlist
+      const carouselLouvores = [...playlistLouvores];
+      set(carouselLouvores);
+      
+      if (browser) {
+        try {
+          localStorage.setItem(CAROUSEL_STORAGE_KEY, JSON.stringify(carouselLouvores));
+        } catch (e) {
+          console.warn('Não foi possível salvar o carousel no localStorage:', e);
+        }
+      }
     }
   };
 }

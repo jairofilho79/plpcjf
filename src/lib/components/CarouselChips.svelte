@@ -1,7 +1,8 @@
 <script>
-  import { X, Trash2, GripVertical } from 'lucide-svelte';
+  import { X, Trash2, GripVertical, Share2, Save, Check } from 'lucide-svelte';
   import { carousel } from '$lib/stores/carousel';
   import { pdfViewer } from '$lib/stores/pdfViewer';
+  import { savedPlaylists } from '$lib/stores/savedPlaylists';
   import { getPdfRelPath } from '$lib/utils/pathUtils';
   import { 
     fetchPdfAsBlob, 
@@ -10,6 +11,7 @@
     buildOnlineReaderUrl, 
     openPdfNewTabOfflineFirst 
   } from '$lib/utils/pdfUtils';
+  import { sharePlaylistLink, generatePlaylistShareUrl } from '$lib/utils/playlistUtils';
   
   /**
      * @type {number | null}
@@ -183,19 +185,184 @@
     }
     return null;
   }
+
+  // Track saved playlist state
+  let savedPlaylistId = null;
+  let savedPdfIds = null;
+  let savedPlaylistName = null;
+  let showCopiedMessage = false;
+
+  // Generate hash of current playlist for comparison
+  function getCurrentPlaylistHash() {
+    const pdfIds = $carousel
+      .map(l => l.pdfId)
+      .filter(id => id != null && id !== '')
+      .join(',');
+    return pdfIds;
+  }
+
+  // Check if current playlist matches saved version
+  $: currentHash = getCurrentPlaylistHash();
+  $: isPlaylistSaved = savedPlaylistId !== null && savedPdfIds !== null && savedPdfIds === currentHash && currentHash !== '';
+  $: canSave = $carousel.length > 0;
+
+  // Reset saved state when playlist changes (but only if we have a saved state)
+  $: {
+    if (savedPdfIds !== null && savedPlaylistId !== null && currentHash !== '' && savedPdfIds !== currentHash) {
+      // Playlist was modified after being saved
+      savedPlaylistId = null;
+      savedPdfIds = null;
+      savedPlaylistName = null;
+    }
+  }
+  
+  // Sync with existing playlist if current playlist matches a saved one
+  $: {
+    if ($carousel.length > 0) {
+      const pdfIds = $carousel
+        .map(l => l.pdfId)
+        .filter(id => id != null && id !== '');
+      
+      if (pdfIds.length > 0) {
+        const hash = pdfIds.join(',');
+        const existingPlaylist = savedPlaylists.findPlaylistByPdfIds(pdfIds);
+        
+        if (existingPlaylist) {
+          // Sync with existing playlist (update even if already synced, in case name changed)
+          savedPlaylistId = existingPlaylist.id;
+          savedPdfIds = hash;
+          savedPlaylistName = existingPlaylist.nome;
+        } else if (savedPlaylistId !== null && savedPdfIds === hash) {
+          // Keep current saved state if hash matches
+          // This handles the case where playlist was just saved
+        } else {
+          // No matching playlist found, clear saved state
+          savedPlaylistId = null;
+          savedPdfIds = null;
+          savedPlaylistName = null;
+        }
+      } else {
+        // Empty playlist, clear saved state
+        savedPlaylistId = null;
+        savedPdfIds = null;
+        savedPlaylistName = null;
+      }
+    } else {
+      // Empty carousel, clear saved state
+      savedPlaylistId = null;
+      savedPdfIds = null;
+      savedPlaylistName = null;
+    }
+  }
+
+  function handleSave() {
+    if (!$carousel.length) return;
+    
+    // Filter out invalid IDs to match getCurrentPlaylistHash logic
+    const pdfIds = $carousel
+      .map(l => l.pdfId)
+      .filter(id => id != null && id !== '');
+    
+    if (pdfIds.length === 0) return;
+    
+    // Check if a playlist with the same pdfIds already exists
+    const existingPlaylist = savedPlaylists.findPlaylistByPdfIds(pdfIds);
+    
+    if (existingPlaylist) {
+      // Use existing playlist - sync with it
+      const hash = pdfIds.join(',');
+      savedPlaylistId = existingPlaylist.id;
+      savedPdfIds = hash;
+      savedPlaylistName = existingPlaylist.nome;
+    } else {
+      // Create new playlist
+      const playlistId = savedPlaylists.savePlaylist(pdfIds);
+      const hash = pdfIds.join(',');
+      savedPlaylistId = playlistId;
+      savedPdfIds = hash;
+      
+      // Get the newly created playlist to get its name
+      const newPlaylist = savedPlaylists.getPlaylist(playlistId);
+      savedPlaylistName = newPlaylist ? newPlaylist.nome : null;
+    }
+  }
+
+  /**
+   * Generate default playlist name: "lista dd/mm/yyyy HH:mm:ss"
+   */
+  function generateDefaultPlaylistName() {
+    const now = new Date();
+    const day = String(now.getDate()).padStart(2, '0');
+    const month = String(now.getMonth() + 1).padStart(2, '0');
+    const year = now.getFullYear();
+    const hours = String(now.getHours()).padStart(2, '0');
+    const minutes = String(now.getMinutes()).padStart(2, '0');
+    const seconds = String(now.getSeconds()).padStart(2, '0');
+    
+    return `lista ${day}/${month}/${year} ${hours}:${minutes}:${seconds}`;
+  }
+
+  async function handleShare() {
+    if (!$carousel.length) return;
+    
+    const pdfIds = $carousel.map(l => l.pdfId);
+    // Use saved playlist name if available, otherwise generate default name
+    const playlistName = savedPlaylistName || generateDefaultPlaylistName();
+    const shareUrl = generatePlaylistShareUrl(pdfIds, playlistName);
+    
+    try {
+      const result = await sharePlaylistLink(shareUrl, playlistName);
+      if (result && result.copied) {
+        showCopiedMessage = true;
+        setTimeout(() => {
+          showCopiedMessage = false;
+        }, 2000);
+      }
+    } catch (error) {
+      console.error('Erro ao compartilhar playlist:', error);
+    }
+  }
 </script>
 
 {#if $carousel.length > 0}
   <div class="w-full max-w-4xl mx-auto p-4 bg-card-color rounded-lg border-2 relative carousel-container">
     <span class="container-tag">Playlist</span>
-    <button
-      on:click={() => carousel.clearCarousel()}
-      class="clear-button-tag"
-      title="Limpar todos"
-    >
-      <Trash2 class="w-3 h-3" />
-      <span>Limpar</span>
-    </button>
+    <div class="action-buttons-group">
+      <button
+        on:click={handleShare}
+        class="action-button-tag light-button"
+        title="Compartilhar playlist"
+        disabled={!canSave}
+      >
+        <Share2 class="w-3 h-3" />
+        <span>Compartilhar</span>
+      </button>
+      <button
+        on:click={handleSave}
+        class="action-button-tag light-button"
+        title={isPlaylistSaved ? 'Playlist salva' : 'Salvar playlist'}
+        disabled={!canSave || isPlaylistSaved}
+      >
+        {#if isPlaylistSaved}
+          <Check class="w-3 h-3" />
+          <span>Salvo</span>
+        {:else}
+          <Save class="w-3 h-3" />
+          <span>Salvar</span>
+        {/if}
+      </button>
+      <button
+        on:click={() => carousel.clearCarousel()}
+        class="action-button-tag clear-button-tag"
+        title="Limpar todos"
+      >
+        <Trash2 class="w-3 h-3" />
+        <span>Limpar</span>
+      </button>
+    </div>
+    {#if showCopiedMessage}
+      <div class="copied-message">Link copiado!</div>
+    {/if}
     
     <div class="flex gap-2 overflow-x-auto carousel-chips-list">
       {#each $carousel as louvor, index}
@@ -268,15 +435,20 @@
     line-height: 1;
   }
   
-  .clear-button-tag {
+  .action-buttons-group {
     position: absolute;
     top: -0.875rem;
     right: 0.75rem;
     display: flex;
     align-items: center;
+    gap: 0.5rem;
+    z-index: 10;
+  }
+
+  .action-button-tag {
+    display: flex;
+    align-items: center;
     gap: 0.25rem;
-    background-color: var(--title-color);
-    color: var(--placeholder-color);
     font-size: 0.75rem;
     font-weight: 600;
     padding: 0.25rem 0.5rem;
@@ -285,13 +457,52 @@
     cursor: pointer;
     transition: all 0.2s ease;
     line-height: 1;
-    z-index: 10;
+  }
+
+  .light-button {
+    background-color: var(--card-color);
+    color: var(--text-dark);
+  }
+
+  .light-button:hover:not(:disabled) {
+    background-color: var(--placeholder-color);
+    transform: translateY(-1px);
+  }
+
+  .light-button:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+  }
+
+  .clear-button-tag {
+    background-color: var(--title-color);
+    color: var(--placeholder-color);
   }
   
   .clear-button-tag:hover {
     background-color: var(--title-color);
     opacity: 0.9;
     transform: translateY(-1px);
+  }
+
+  .copied-message {
+    position: absolute;
+    top: -2.5rem;
+    right: 0.75rem;
+    background-color: var(--title-color);
+    color: var(--placeholder-color);
+    font-size: 0.75rem;
+    font-weight: 600;
+    padding: 0.25rem 0.5rem;
+    border-radius: 0.25rem;
+    border: 2px solid var(--gold-color);
+    z-index: 20;
+    animation: fadeInOut 2s ease;
+  }
+
+  @keyframes fadeInOut {
+    0%, 100% { opacity: 0; transform: translateY(-5px); }
+    10%, 90% { opacity: 1; transform: translateY(0); }
   }
   
   .carousel-chips-list {

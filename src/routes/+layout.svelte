@@ -29,9 +29,9 @@
     goto('/offline');
   }
   
-  // Placeholder function for listas button
+  // Navigate to listas page
   function handleListasClick() {
-    // TODO: Implementar funcionalidade futuramente
+    goto('/listas');
   }
   
   // Placeholder function for sobre button
