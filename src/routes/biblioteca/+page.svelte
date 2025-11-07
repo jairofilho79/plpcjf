@@ -105,7 +105,42 @@
   let currentPage = 1;
   let pageInput = '1';
   let itemsPerPageMenuOpen = false;
-  
+  /**
+   * @type {HTMLElement | null}
+   */
+  let louvoresContainer = null;
+
+  function scrollToLouvores() {
+    if (!browser) return;
+
+    const target = louvoresContainer || document.getElementById('louvores');
+    if (!target) return;
+
+    const mediaQuery = typeof window.matchMedia === 'function'
+      ? window.matchMedia('(prefers-reduced-motion: reduce)')
+      : null;
+    const prefersReducedMotion = mediaQuery?.matches;
+    target.scrollIntoView({
+      behavior: prefersReducedMotion ? 'auto' : 'smooth',
+      block: 'start'
+    });
+  }
+
+  /**
+   * @param {number} page
+   * @param {{ scroll?: boolean }} [options]
+   */
+  function setPage(page, { scroll = true } = {}) {
+    const maxPage = totalPages > 0 ? totalPages : 1;
+    const pageNum = Math.max(1, Math.min(maxPage, page));
+    currentPage = pageNum;
+    pageInput = pageNum.toString();
+
+    if (scroll && totalPages > 0) {
+      scrollToLouvores();
+    }
+  }
+
   $: itemsPerPage = $bibliotecaItemsPerPage;
   $: totalPages = Math.ceil(sortedLouvores.length / itemsPerPage);
   $: paginatedLouvores = sortedLouvores.slice(
@@ -118,8 +153,7 @@
     if (itemsPerPage) {
       const newTotalPages = Math.ceil(sortedLouvores.length / itemsPerPage);
       if (currentPage > newTotalPages && newTotalPages > 0) {
-        currentPage = 1;
-        pageInput = '1';
+        setPage(1, { scroll: false });
       }
     }
   }
@@ -130,21 +164,16 @@
     const currentFilteredCount = filteredLouvores.length;
     // Reset to page 1 if filtered results count changed significantly or current page is invalid
     if (previousFilteredCount !== currentFilteredCount || (currentPage > totalPages && totalPages > 0)) {
-      currentPage = 1;
-      pageInput = '1';
-      previousFilteredCount = currentFilteredCount;
-    } else {
-      previousFilteredCount = currentFilteredCount;
+      setPage(1, { scroll: false });
     }
+    previousFilteredCount = currentFilteredCount;
   }
   
   /**
      * @param {number} page
      */
   function goToPage(page) {
-    const pageNum = Math.max(1, Math.min(totalPages, page));
-    currentPage = pageNum;
-    pageInput = pageNum.toString();
+    setPage(page);
   }
   
   /**
@@ -155,7 +184,7 @@
     pageInput = value;
     const pageNum = parseInt(value, 10);
     if (!isNaN(pageNum) && pageNum >= 1 && pageNum <= totalPages) {
-      currentPage = pageNum;
+      setPage(pageNum, { scroll: false });
     }
   }
   
@@ -167,7 +196,7 @@
       event.currentTarget.blur();
       const pageNum = parseInt(pageInput, 10);
       if (!isNaN(pageNum)) {
-        goToPage(pageNum);
+        setPage(pageNum);
       } else {
         pageInput = currentPage.toString();
       }
@@ -176,13 +205,13 @@
   
   function nextPage() {
     if (currentPage < totalPages) {
-      goToPage(currentPage + 1);
+      setPage(currentPage + 1);
     }
   }
   
   function previousPage() {
     if (currentPage > 1) {
-      goToPage(currentPage - 1);
+      setPage(currentPage - 1);
     }
   }
   
@@ -254,7 +283,7 @@
   
   <div class="mt-8 flex justify-center">
     {#if paginatedLouvores.length > 0}
-      <div class="louvores-container w-full max-w-4xl">
+      <div id="louvores" class="louvores-container w-full max-w-4xl" bind:this={louvoresContainer}>
         <span class="container-tag">Louvores</span>
         
         <div class="louvores-list">
@@ -295,6 +324,7 @@
                           e.stopPropagation();
                           bibliotecaItemsPerPage.set(option);
                           itemsPerPageMenuOpen = false;
+                          scrollToLouvores();
                         }}
                       >
                         {option}
