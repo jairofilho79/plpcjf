@@ -3,6 +3,7 @@
   import { Download, AlertCircle, CheckCircle, Info } from 'lucide-svelte';
   import { offline, isDownloading } from '$lib/stores/offline';
   import { CATEGORY_OPTIONS } from '$lib/stores/filters';
+  import { louvores, loadLouvores, louvoresLoaded } from '$lib/stores/louvores';
 
   // Selected categories for download
   /**
@@ -11,7 +12,9 @@
   let selectedCategories = [];
 
   // Load saved categories on mount
-  onMount(() => {
+  onMount(async () => {
+    await loadLouvores();
+
     const saved = offline.getSavedCategories();
     if (saved && saved.length > 0) {
       selectedCategories = saved;
@@ -21,7 +24,8 @@
   // Get current offline state
   $: state = $offline;
   $: downloading = $isDownloading;
-  $: canDownload = selectedCategories.length > 0 && !downloading;
+  $: louvoresReady = $louvores.length > 0;
+  $: canDownload = selectedCategories.length > 0 && !downloading && louvoresReady;
   $: progress = state.progress || 0;
   $: completed = state.completed || 0;
   $: failed = state.failed || 0;
@@ -84,6 +88,17 @@
           </p>
         </div>
       </div>
+
+      {#if !$louvoresLoaded}
+        <p class="loading-text">Carregando lista de louvores...</p>
+      {:else if !louvoresReady}
+        <div class="error-box">
+          <AlertCircle class="w-5 h-5 error-icon" />
+          <p class="error-text">
+            Não foi possível carregar os dados dos louvores. Conecte-se à internet e tente novamente.
+          </p>
+        </div>
+      {/if}
 
       <!-- Category selection -->
       <div class="category-section">
@@ -228,6 +243,12 @@
 
   .info-description:last-child {
     margin-bottom: 0;
+  }
+
+  .loading-text {
+    color: var(--text-light);
+    margin: 0 0 1rem 0;
+    font-size: 0.875rem;
   }
 
   /* Category section */
