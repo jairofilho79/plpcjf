@@ -8,7 +8,11 @@ export async function handle({ event, resolve }) {
   if (url.pathname.startsWith('/assets/') && url.pathname.endsWith('.pdf')) {
     return await servePdf(url.pathname, event.platform);
   }
-  
+
+  if (url.pathname.startsWith('/packages/') && url.pathname.endsWith('.zip')) {
+    return await serveZipPackage(url.pathname, event.platform);
+  }
+
   // Pass other requests to SvelteKit
   return resolve(event);
 }
@@ -106,3 +110,63 @@ async function servePdf(pathname, platform) {
   }
 }
 
+
+
+async function serveZipPackage(pathname, platform) {
+  const corsHeaders = {
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+    'Content-Type': 'application/zip',
+    'Cache-Control': 'public, max-age=86400'
+  };
+
+  try {
+    if (!platform?.env?.LOUVORES_BUCKET) {
+      console.error('LOUVORES_BUCKET not configured');
+      return new Response('Backend not configured', {
+        status: 503,
+        headers: corsHeaders
+      });
+    }
+
+    let r2Key = decodeURIComponent(pathname.substring(1));
+    let object = await platform.env.LOUVORES_BUCKET.get(r2Key);
+
+    if (!object) {
+      let decodedKey = r2Key;
+      for (let i = 0; i < 5; i++) {
+        try {
+          decodedKey = decodeURIComponent(decodedKey);
+          object = await platform.env.LOUVORES_BUCKET.get(decodedKey);
+          if (object) {
+            r2Key = decodedKey;
+            break;
+          }
+        } catch (e) {
+          break;
+        }
+      }
+    }
+
+    if (!object) {
+      return new Response('Pacote nao encontrado', {
+        status: 404,
+        headers: corsHeaders
+      });
+    }
+
+    return new Response(object.body, {
+      headers: {
+        ...corsHeaders,
+        'Content-Disposition': `attachment; filename="${r2Key.split('/').pop() || 'pacote.zip'}"`
+      }
+    });
+  } catch (err) {
+    console.error('Error serving ZIP package:', err);
+    return new Response('Internal server error', {
+      status: 500,
+      headers: corsHeaders
+    });
+  }
+}

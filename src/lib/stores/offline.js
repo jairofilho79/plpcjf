@@ -9,6 +9,7 @@ import {
   isServiceWorkerReady,
   waitForServiceWorker
 } from '$lib/utils/swRegistration';
+import { unzip } from 'fflate';
 import { louvores } from './louvores';
 import { CATEGORY_OPTIONS } from './filters';
 import { atobUTF8 } from '$lib/utils/pathUtils';
@@ -17,6 +18,17 @@ const ALLOW_OFFLINE_KEY = 'ALLOW_OFFLINE';
 const CACHED_PDFS_KEY = 'cachedPdfsList';
 const LAST_MANIFEST_HASH_KEY = 'lastManifestHash';
 const SELECTED_CATEGORIES_KEY = 'selectedCategoriesForDownload';
+
+const CATEGORY_PACKAGE_MAP = {
+  Partitura: 'Partitura.zip',
+  Cifra: 'Cifra.zip',
+  'Gestos em Gravura': 'Gestos-em-Gravura.zip'
+};
+const PACKAGES_BASE_PATH = '/packages';
+const DEFAULT_PDF_CACHE_FALLBACK = 'plpc-v2-pdfs';
+let zipDownloadController = null;
+let isZipDownloadActive = false;
+let zipDownloadCancelled = false;
 
 // Offline state
 const initialState = {
@@ -95,6 +107,52 @@ function getManifestHash(louvoresData) {
     .sort()
     .join('|');
   return sortedPdfs;
+}
+
+async function openPdfCache() {
+  if (!browser || typeof caches === 'undefined') {
+    throw new Error('Caches API nao esta disponivel neste ambiente');
+  }
+
+  const cacheKeys = await caches.keys();
+  const pdfCacheKey = cacheKeys.find(key => key.endsWith('-pdfs'));
+
+  if (pdfCacheKey) {
+    return caches.open(pdfCacheKey);
+  }
+
+  return caches.open(DEFAULT_PDF_CACHE_FALLBACK);
+}
+
+function normalizeZipEntryName(entryName) {
+  if (!entryName) {
+    return '';
+  }
+
+  const normalized = entryName.trim().replace(/\\/g, '/').replace(/^\/+/, '');
+
+  if (!normalized || normalized.endsWith('/')) {
+    return '';
+  }
+
+  return `/${normalized}`;
+}
+
+function getPackageUrl(packageName) {
+  return `${PACKAGES_BASE_PATH}/${packageName}`;
+}
+
+function unzipEntries(buffer) {
+  return new Promise((resolve, reject) => {
+    unzip(buffer, (err, data) => {
+      if (err) {
+        reject(err);
+        return;
+      }
+
+      resolve(data || {});
+    });
+  });
 }
 
 /**
@@ -222,7 +280,7 @@ async function startDownload(pdfUrls, selectedCategories = []) {
     console.error('[Offline Store] Service worker not ready');
     offlineState.update(state => ({
       ...state,
-      error: 'Service worker não está pronto. Recarregue a página.'
+      error: 'Service worker nao esta pronto. Recarregue a pagina.'
     }));
     return;
   }
@@ -284,6 +342,171 @@ async function startDownload(pdfUrls, selectedCategories = []) {
 /**
  * Download PDFs by categories
  */
+
+async function startZipDownload(categories, pdfUrls) {
+  if (!browser) return;
+
+  if (zipDownloadController) {
+    try {
+      zipDownloadController.abort();
+    } catch (err) {
+      console.warn('[Offline Store] Could not abort previous zip download controller:', err);
+    }
+  }
+
+  zipDownloadCancelled = false;
+  zipDownloadController = new AbortController();
+  isZipDownloadActive = true;
+
+  const total = pdfUrls.length;
+  const pdfSet = new Set(pdfUrls);
+  const remainingSet = new Set(pdfUrls);
+  let completed = 0;
+
+  offlineState.update(state => ({
+    ...state,
+    downloading: true,
+    autoDownloading: false,
+    progress: total === 0 ? 100 : 0,
+    completed: 0,
+    failed: 0,
+    total,
+    selectedCategories: categories,
+    error: null
+  }));
+
+  try {
+    const cache = await openPdfCache();
+
+    for (const category of categories) {
+      if (zipDownloadCancelled) {
+        throw new Error('DOWNLOAD_CANCELLED');
+      }
+
+      const packageName = CATEGORY_PACKAGE_MAP[category];
+      if (!packageName) {
+        console.warn(`[Offline Store] No ZIP package configured for category ${category}`);
+        continue;
+      }
+
+      const packageUrl = getPackageUrl(packageName);
+      let response;
+
+      try {
+        response = await fetch(packageUrl, {
+          signal: zipDownloadController.signal,
+          cache: 'no-store'
+        });
+      } catch (err) {
+        if (zipDownloadCancelled || err?.name === 'AbortError') {
+          throw new Error('DOWNLOAD_CANCELLED');
+        }
+        throw err;
+      }
+
+      if (!response.ok) {
+        throw new Error(`Falha ao baixar o pacote ${packageName} (${response.status})`);
+      }
+
+      const arrayBuffer = await response.arrayBuffer();
+      const entries = await unzipEntries(new Uint8Array(arrayBuffer));
+      const entryNames = Object.keys(entries);
+
+      for (const entryName of entryNames) {
+        if (zipDownloadCancelled) {
+          throw new Error('DOWNLOAD_CANCELLED');
+        }
+
+        const normalizedPath = normalizeZipEntryName(entryName);
+
+        if (!normalizedPath || !normalizedPath.endsWith('.pdf')) {
+          delete entries[entryName];
+          continue;
+        }
+
+        if (!pdfSet.has(normalizedPath) || !remainingSet.has(normalizedPath)) {
+          delete entries[entryName];
+          continue;
+        }
+
+        const fileData = entries[entryName];
+        delete entries[entryName];
+
+        if (!fileData) {
+          continue;
+        }
+
+        const pdfBlob = new Blob([fileData], { type: 'application/pdf' });
+        const requestUrl = new URL(normalizedPath, location.origin).toString();
+        const pdfResponse = new Response(pdfBlob, {
+          headers: { 'Content-Type': 'application/pdf' }
+        });
+
+        await cache.put(new Request(requestUrl), pdfResponse);
+
+        remainingSet.delete(normalizedPath);
+        completed++;
+
+        const progress = total === 0 ? 100 : Math.min(99, Math.floor((completed / total) * 100));
+
+        offlineState.update(state => ({
+          ...state,
+          completed,
+          failed: 0,
+          progress
+        }));
+      }
+    }
+
+    if (zipDownloadCancelled) {
+      throw new Error('DOWNLOAD_CANCELLED');
+    }
+
+    const failed = remainingSet.size;
+    const finalCompleted = Math.min(completed, total - failed);
+    const finalProgress = total === 0 ? 100 : Math.floor((finalCompleted / total) * 100);
+
+    offlineState.update(state => ({
+      ...state,
+      downloading: false,
+      progress: finalProgress,
+      completed: finalCompleted,
+      failed,
+      error: failed > 0 ? `${failed} PDFs nao foram encontrados nos pacotes selecionados.` : null
+    }));
+
+    if (!zipDownloadCancelled) {
+      localStorage.setItem(ALLOW_OFFLINE_KEY, 'true');
+      const louvoresData = get(louvores);
+      if (louvoresData && louvoresData.length > 0) {
+        const currentHash = getManifestHash(louvoresData);
+        localStorage.setItem(LAST_MANIFEST_HASH_KEY, currentHash);
+      }
+
+      await loadCachedPdfsList();
+    }
+  } catch (error) {
+    if (error?.message === 'DOWNLOAD_CANCELLED' || error?.name === 'AbortError') {
+      offlineState.update(state => ({
+        ...state,
+        downloading: false,
+        error: 'Download cancelado'
+      }));
+    } else {
+      console.error('[Offline Store] Zip download error:', error);
+      offlineState.update(state => ({
+        ...state,
+        downloading: false,
+        error: error?.message || 'Erro ao baixar pacotes ZIP'
+      }));
+    }
+  } finally {
+    zipDownloadController = null;
+    isZipDownloadActive = false;
+    zipDownloadCancelled = false;
+  }
+}
+
 async function downloadByCategories(categories) {
   if (!browser) return;
 
@@ -293,25 +516,67 @@ async function downloadByCategories(categories) {
     return;
   }
 
+  const validCategories = (categories || []).filter(Boolean);
+  if (validCategories.length === 0) {
+    offlineState.update(state => ({
+      ...state,
+      error: 'Selecione ao menos uma categoria para download.'
+    }));
+    return;
+  }
+
   // Save selected categories for future auto-downloads
-  saveCategories(categories);
+  saveCategories(validCategories);
 
   // Filter louvores by selected categories
-  const filteredLouvores = louvoresData.filter(louvor => 
-    categories.includes(louvor.categoria)
+  const filteredLouvores = louvoresData.filter(louvor =>
+    validCategories.includes(louvor.categoria)
   );
 
-  console.log(`[Offline Store] Downloading ${filteredLouvores.length} PDFs from ${categories.length} categories`);
-
   const pdfUrls = filteredLouvores.map(getPdfUrl).filter(url => url !== null);
-  await startDownload(pdfUrls, categories);
+
+  if (pdfUrls.length === 0) {
+    offlineState.update(state => ({
+      ...state,
+      downloading: false,
+      progress: 0,
+      completed: 0,
+      failed: 0,
+      total: 0,
+      error: 'Nenhum PDF encontrado para as categorias selecionadas.'
+    }));
+    return;
+  }
+
+  console.log(`[Offline Store] Downloading ${pdfUrls.length} PDFs via ZIP packages for ${validCategories.length} categories`);
+
+  await startZipDownload(validCategories, pdfUrls);
 }
+
+
 
 /**
  * Cancel ongoing download
  */
 async function cancelDownload() {
   if (!browser) return;
+
+  if (isZipDownloadActive) {
+    zipDownloadCancelled = true;
+    if (zipDownloadController) {
+      try {
+        zipDownloadController.abort();
+      } catch (err) {
+        console.warn('[Offline Store] Failed to abort ZIP download controller:', err);
+      }
+    }
+
+    offlineState.update(state => ({
+      ...state,
+      error: 'Cancelando download...'
+    }));
+    return;
+  }
 
   try {
     await cancelDownloadSW();

@@ -99,21 +99,6 @@
       <!-- Body -->
       <div class="modal-body">
         {#if !downloading && progress < 100}
-          <!-- Initial explanation -->
-          <div class="warning-box">
-            <AlertCircle class="w-5 h-5 warning-icon" />
-            <div class="warning-text">
-              <p class="warning-title">Atenção sobre a limitação de downloads</p>
-              <p class="warning-description">
-                Há uma limitação de <strong>100.000 downloads de PDF por dia</strong> no servidor.
-                Se todos os usuários baixassem todos os PDFs, apenas <strong>20 pessoas</strong> poderiam 
-                fazer o download por dia.
-              </p>
-              <p class="warning-emphasis">
-                Por favor, baixe apenas os PDFs que você realmente vai usar.
-              </p>
-            </div>
-          </div>
           
           <!-- Info about category persistence and cache limitation -->
           <div class="info-box">
@@ -302,49 +287,6 @@
   .modal-body {
     padding: 1.5rem;
   }
-  
-  /* Warning box */
-  .warning-box {
-    display: flex;
-    gap: 1rem;
-    padding: 1rem;
-    background-color: #fff3cd;
-    border: 2px solid #ffc107;
-    border-radius: 0.5rem;
-    margin-bottom: 1.5rem;
-  }
-  
-  .warning-box :global(.warning-icon) {
-    color: #856404;
-    flex-shrink: 0;
-    margin-top: 0.125rem;
-  }
-  
-  .warning-text {
-    flex: 1;
-  }
-  
-  .warning-title {
-    font-weight: 700;
-    color: #856404;
-    margin: 0 0 0.5rem 0;
-    font-size: 0.9375rem;
-  }
-  
-  .warning-description {
-    color: #856404;
-    margin: 0 0 0.5rem 0;
-    font-size: 0.875rem;
-    line-height: 1.5;
-  }
-  
-  .warning-emphasis {
-    color: #856404;
-    margin: 0;
-    font-size: 0.875rem;
-    font-weight: 600;
-  }
-  
   /* Info box */
   .info-box {
     display: flex;
