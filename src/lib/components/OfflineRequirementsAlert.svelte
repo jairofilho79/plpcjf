@@ -21,10 +21,10 @@
       <p class="alert-title">Requisitos para modo offline não cumpridos</p>
       <ul class="alert-list">
         {#if !hasCategoryDownloaded}
-          <li>É preciso baixar pelo menos 1 categoria</li>
+          <li>Baixe pelo menos 1 categoria (ver abaixo)</li>
         {/if}
         {#if !isLeitorOffline}
-          <li>É preciso abrir um PDF</li>
+          <li>Abra qualquer PDF online no leitor.</li>
         {/if}
       </ul>
     </div>
