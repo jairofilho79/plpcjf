@@ -120,11 +120,6 @@
       <!-- Offline requirements alert -->
       <OfflineRequirementsAlert />
 
-      <!-- Offline indicator showing preparation status -->
-      <div class="offline-indicator-container">
-        <OfflineIndicator />
-      </div>
-
       {#if !$louvoresLoaded}
         <p class="loading-text">Carregando lista de louvores...</p>
       {:else if !louvoresReady}
@@ -213,11 +208,6 @@
             Cancelar Download
           </button>
         </div>
-
-        <p class="progress-note">
-          Você pode fechar esta página e continuar usando o aplicativo.
-          O download continuará em segundo plano.
-        </p>
       </div>
     {:else if progress >= 100}
       <!-- Download complete -->

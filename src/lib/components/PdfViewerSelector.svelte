@@ -94,6 +94,12 @@
     font-weight: 500;
     cursor: pointer;
     transition: all 0.2s ease;
+    user-select: none;
+    -webkit-user-select: none;
+    -moz-user-select: none;
+    -ms-user-select: none;
+    -webkit-touch-callout: none;
+    -webkit-tap-highlight-color: transparent;
   }
   
   .pdf-viewer-chip:hover:not(.active) {
@@ -124,6 +130,10 @@
   .pdf-viewer-chip span {
     color: inherit;
     white-space: nowrap;
+    user-select: none;
+    -webkit-user-select: none;
+    -moz-user-select: none;
+    -ms-user-select: none;
   }
   
   /* Em tablets e telas maiores: evitar quebra de linha e usar espaçamento dinâmico */
