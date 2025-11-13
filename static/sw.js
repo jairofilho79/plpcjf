@@ -12,6 +12,7 @@ const APP_SHELL = [
   '/',
   '/manifest.json',
   '/louvores-manifest.json',
+  '/offline-manifest.json',
   '/favicon.svg',
   '/icon-192.png',
   '/icon-512.png'

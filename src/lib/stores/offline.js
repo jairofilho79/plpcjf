@@ -18,12 +18,8 @@ const ALLOW_OFFLINE_KEY = 'ALLOW_OFFLINE';
 const CACHED_PDFS_KEY = 'cachedPdfsList';
 const LAST_MANIFEST_HASH_KEY = 'lastManifestHash';
 const SELECTED_CATEGORIES_KEY = 'selectedCategoriesForDownload';
+const OFFLINE_MANIFEST_KEY = 'offlineManifest';
 
-const CATEGORY_PACKAGE_MAP = {
-  Partitura: 'Partitura.zip',
-  Cifra: 'Cifra.zip',
-  'Gestos em Gravura': 'Gestos-em-Gravura.zip'
-};
 const PACKAGES_BASE_PATH = '/packages';
 const DEFAULT_PDF_CACHE_FALLBACK = 'plpc-v2-pdfs';
 let zipDownloadController = null;
@@ -43,10 +39,79 @@ const initialState = {
   cachedCount: 0, // Number of cached PDFs
   showModal: false, // Show offline modal
   error: null, // Error message
-  autoDownloading: false // Auto-downloading new PDFs
+  autoDownloading: false, // Auto-downloading new PDFs
+  offlineManifest: null, // Offline manifest data
+  categorySizes: {} // Map of category -> total size in bytes
 };
 
 const offlineState = writable(initialState);
+
+/**
+ * Fetch offline manifest from backend
+ */
+async function fetchOfflineManifest() {
+  try {
+    const response = await fetch('/offline-manifest.json', {
+      cache: 'no-cache'
+    });
+
+    if (!response.ok) {
+      throw new Error(`Failed to fetch offline manifest: ${response.status}`);
+    }
+
+    const manifest = await response.json();
+    
+    // Calculate category sizes
+    const categorySizes = {};
+    if (manifest.packages) {
+      for (const [category, packageData] of Object.entries(manifest.packages)) {
+        categorySizes[category] = packageData.totalSize || 0;
+      }
+    }
+
+    // Update state with manifest
+    offlineState.update(state => ({
+      ...state,
+      offlineManifest: manifest,
+      categorySizes
+    }));
+
+    // Cache manifest in localStorage
+    if (browser) {
+      localStorage.setItem(OFFLINE_MANIFEST_KEY, JSON.stringify(manifest));
+    }
+
+    return manifest;
+  } catch (error) {
+    console.error('[Offline Store] Failed to fetch offline manifest:', error);
+    
+    // Try to load from localStorage as fallback
+    if (browser) {
+      try {
+        const cached = localStorage.getItem(OFFLINE_MANIFEST_KEY);
+        if (cached) {
+          const manifest = JSON.parse(cached);
+          const categorySizes = {};
+          if (manifest.packages) {
+            for (const [category, packageData] of Object.entries(manifest.packages)) {
+              categorySizes[category] = packageData.totalSize || 0;
+            }
+          }
+          offlineState.update(state => ({
+            ...state,
+            offlineManifest: manifest,
+            categorySizes
+          }));
+          return manifest;
+        }
+      } catch (e) {
+        console.warn('[Offline Store] Failed to load cached manifest:', e);
+      }
+    }
+    
+    throw error;
+  }
+}
 
 /**
  * Initialize offline store
@@ -55,6 +120,9 @@ async function initialize() {
   if (!browser) return;
 
   try {
+    // Fetch offline manifest
+    await fetchOfflineManifest();
+
     // Check if offline mode was previously enabled
     const allowOffline = localStorage.getItem(ALLOW_OFFLINE_KEY) === 'true';
     
@@ -140,6 +208,16 @@ function normalizeZipEntryName(entryName) {
 
 function getPackageUrl(packageName) {
   return `${PACKAGES_BASE_PATH}/${packageName}`;
+}
+
+/**
+ * Get package parts for a category from manifest
+ */
+function getPackageParts(category, manifest) {
+  if (!manifest || !manifest.packages || !manifest.packages[category]) {
+    return [];
+  }
+  return manifest.packages[category].parts || [];
 }
 
 function unzipEntries(buffer) {
@@ -363,6 +441,24 @@ async function startZipDownload(categories, pdfUrls) {
   const remainingSet = new Set(pdfUrls);
   let completed = 0;
 
+  // Get manifest
+  const state = get(offlineState);
+  let manifest = state.offlineManifest;
+
+  if (!manifest) {
+    // Try to fetch manifest if not available
+    try {
+      manifest = await fetchOfflineManifest();
+    } catch (error) {
+      offlineState.update(s => ({
+        ...s,
+        downloading: false,
+        error: 'Não foi possível carregar o manifest de pacotes offline. Tente novamente.'
+      }));
+      return;
+    }
+  }
+
   offlineState.update(state => ({
     ...state,
     downloading: true,
@@ -383,78 +479,87 @@ async function startZipDownload(categories, pdfUrls) {
         throw new Error('DOWNLOAD_CANCELLED');
       }
 
-      const packageName = CATEGORY_PACKAGE_MAP[category];
-      if (!packageName) {
-        console.warn(`[Offline Store] No ZIP package configured for category ${category}`);
+      // Get all package parts for this category from manifest
+      const packageParts = getPackageParts(category, manifest);
+      
+      if (packageParts.length === 0) {
+        console.warn(`[Offline Store] No package parts found for category ${category}`);
         continue;
       }
 
-      const packageUrl = getPackageUrl(packageName);
-      let response;
-
-      try {
-        response = await fetch(packageUrl, {
-          signal: zipDownloadController.signal,
-          cache: 'no-store'
-        });
-      } catch (err) {
-        if (zipDownloadCancelled || err?.name === 'AbortError') {
-          throw new Error('DOWNLOAD_CANCELLED');
-        }
-        throw err;
-      }
-
-      if (!response.ok) {
-        throw new Error(`Falha ao baixar o pacote ${packageName} (${response.status})`);
-      }
-
-      const arrayBuffer = await response.arrayBuffer();
-      const entries = await unzipEntries(new Uint8Array(arrayBuffer));
-      const entryNames = Object.keys(entries);
-
-      for (const entryName of entryNames) {
+      // Download each part
+      for (const part of packageParts) {
         if (zipDownloadCancelled) {
           throw new Error('DOWNLOAD_CANCELLED');
         }
 
-        const normalizedPath = normalizeZipEntryName(entryName);
+        const packageUrl = part.url.startsWith('/') ? part.url : `${PACKAGES_BASE_PATH}/${part.filename}`;
+        let response;
 
-        if (!normalizedPath || !normalizedPath.endsWith('.pdf')) {
+        try {
+          response = await fetch(packageUrl, {
+            signal: zipDownloadController.signal,
+            cache: 'no-store'
+          });
+        } catch (err) {
+          if (zipDownloadCancelled || err?.name === 'AbortError') {
+            throw new Error('DOWNLOAD_CANCELLED');
+          }
+          throw err;
+        }
+
+        if (!response.ok) {
+          throw new Error(`Falha ao baixar o pacote ${part.filename} (${response.status})`);
+        }
+
+        const arrayBuffer = await response.arrayBuffer();
+        const entries = await unzipEntries(new Uint8Array(arrayBuffer));
+        const entryNames = Object.keys(entries);
+
+        for (const entryName of entryNames) {
+          if (zipDownloadCancelled) {
+            throw new Error('DOWNLOAD_CANCELLED');
+          }
+
+          const normalizedPath = normalizeZipEntryName(entryName);
+
+          if (!normalizedPath || !normalizedPath.endsWith('.pdf')) {
+            delete entries[entryName];
+            continue;
+          }
+
+          if (!pdfSet.has(normalizedPath) || !remainingSet.has(normalizedPath)) {
+            delete entries[entryName];
+            continue;
+          }
+
+          const fileData = entries[entryName];
           delete entries[entryName];
-          continue;
+
+          if (!fileData) {
+            continue;
+          }
+
+          const pdfBlob = new Blob([fileData], { type: 'application/pdf' });
+          const requestUrl = new URL(normalizedPath, location.origin).toString();
+          const pdfResponse = new Response(pdfBlob, {
+            headers: { 'Content-Type': 'application/pdf' }
+          });
+
+          await cache.put(new Request(requestUrl), pdfResponse);
+
+          remainingSet.delete(normalizedPath);
+          completed++;
+
+          const progress = total === 0 ? 100 : Math.min(99, Math.floor((completed / total) * 100));
+
+          offlineState.update(state => ({
+            ...state,
+            completed,
+            failed: 0,
+            progress
+          }));
         }
-
-        if (!pdfSet.has(normalizedPath) || !remainingSet.has(normalizedPath)) {
-          delete entries[entryName];
-          continue;
-        }
-
-        const fileData = entries[entryName];
-        delete entries[entryName];
-
-        if (!fileData) {
-          continue;
-        }
-
-        const pdfBlob = new Blob([fileData], { type: 'application/pdf' });
-        const requestUrl = new URL(normalizedPath, location.origin).toString();
-        const pdfResponse = new Response(pdfBlob, {
-          headers: { 'Content-Type': 'application/pdf' }
-        });
-
-        await cache.put(new Request(requestUrl), pdfResponse);
-
-        remainingSet.delete(normalizedPath);
-        completed++;
-
-        const progress = total === 0 ? 100 : Math.min(99, Math.floor((completed / total) * 100));
-
-        offlineState.update(state => ({
-          ...state,
-          completed,
-          failed: 0,
-          progress
-        }));
       }
     }
 
@@ -671,7 +776,8 @@ export const offline = {
   clearError,
   loadCachedPdfsList,
   checkForNewPDFs,
-  getSavedCategories
+  getSavedCategories,
+  fetchOfflineManifest
 };
 
 // Derived store for offline status

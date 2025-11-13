@@ -30,6 +30,27 @@
   $: completed = state.completed || 0;
   $: failed = state.failed || 0;
   $: total = state.total || 0;
+  $: categorySizes = state.categorySizes || {};
+  
+  /**
+   * Format bytes to human readable size
+   */
+  function formatSize(bytes) {
+    if (!bytes || bytes === 0) return '0 B';
+    const mb = bytes / (1024 * 1024);
+    if (mb >= 1) {
+      return `${mb.toFixed(2)} MB`;
+    }
+    const kb = bytes / 1024;
+    return `${kb.toFixed(2)} KB`;
+  }
+  
+  /**
+   * Get total size of selected categories
+   */
+  $: totalSelectedSize = selectedCategories.reduce((sum, cat) => {
+    return sum + (categorySizes[cat] || 0);
+  }, 0);
 
   /**
      * Toggle category selection
@@ -106,6 +127,7 @@
         <div class="category-list">
           {#each CATEGORY_OPTIONS as category}
             {@const isSelected = selectedCategories.includes(category)}
+            {@const categorySize = categorySizes[category] || 0}
             <label class="category-item">
               <input
                 type="checkbox"
@@ -113,10 +135,23 @@
                 on:change={() => toggleCategory(category)}
                 disabled={downloading}
               />
-              <span class="category-label">{category}</span>
+              <div class="category-info">
+                <span class="category-label">{category}</span>
+                {#if categorySize > 0}
+                  <span class="category-size">{formatSize(categorySize)}</span>
+                {/if}
+              </div>
             </label>
           {/each}
         </div>
+        
+        {#if selectedCategories.length > 0 && totalSelectedSize > 0}
+          <div class="total-size-info">
+            <p class="total-size-text">
+              Tamanho total a baixar: <strong>{formatSize(totalSelectedSize)}</strong>
+            </p>
+          </div>
+        {/if}
       </div>
 
       <!-- Action buttons -->
@@ -294,10 +329,43 @@
     cursor: pointer;
   }
 
+  .category-info {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    flex: 1;
+  }
+
   .category-label {
     font-size: 0.9375rem;
     color: var(--text-dark);
     font-weight: 500;
+  }
+
+  .category-size {
+    font-size: 0.8125rem;
+    color: var(--text-light);
+    opacity: 0.8;
+  }
+  
+  .total-size-info {
+    margin-top: 1rem;
+    padding: 0.75rem;
+    background-color: var(--placeholder-color);
+    border: 2px solid var(--gold-color);
+    border-radius: 0.5rem;
+  }
+
+  .total-size-text {
+    margin: 0;
+    font-size: 0.9375rem;
+    color: var(--text-light);
+    text-align: center;
+  }
+
+  .total-size-text strong {
+    color: var(--gold-color);
+    font-weight: 700;
   }
 
   /* Quando checkbox está marcado: fundo escuro, texto claro */
