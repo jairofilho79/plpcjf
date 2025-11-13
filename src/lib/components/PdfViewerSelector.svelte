@@ -1,5 +1,8 @@
 <script lang="ts">
+  import { onMount, onDestroy } from 'svelte';
+  import { browser } from '$app/environment';
   import { pdfViewer } from '$lib/stores/pdfViewer';
+  import { WifiOff } from 'lucide-svelte';
   
   const PDF_VIEWER_OPTIONS = [
     { value: 'leitor', label: 'Leitor' },
@@ -8,6 +11,36 @@
     { value: 'save', label: 'Baixar' },
     { value: 'online', label: 'Leitor Online' }
   ];
+  
+  // Check if offline
+  let isOffline = false;
+  
+  function updateOfflineStatus() {
+    if (browser) {
+      isOffline = navigator.onLine === false;
+    }
+  }
+  
+  // If offline and "online" is selected, switch to "leitor"
+  $: if (isOffline && $pdfViewer === 'online') {
+    pdfViewer.set('leitor');
+  }
+  
+  onMount(() => {
+    updateOfflineStatus();
+    
+    if (browser) {
+      window.addEventListener('online', updateOfflineStatus);
+      window.addEventListener('offline', updateOfflineStatus);
+    }
+  });
+  
+  onDestroy(() => {
+    if (browser) {
+      window.removeEventListener('online', updateOfflineStatus);
+      window.removeEventListener('offline', updateOfflineStatus);
+    }
+  });
   
   function getIcon(value: any) {
     if (value === 'leitor') {
@@ -33,8 +66,14 @@
     return '';
   }
   
+  function isOptionDisabled(value: any) {
+    return value === 'online' && isOffline;
+  }
+  
   function handleOptionClick(value: any) {
-    pdfViewer.set(value);
+    if (!isOptionDisabled(value)) {
+      pdfViewer.set(value);
+    }
   }
 </script>
 
@@ -43,13 +82,18 @@
   {#each PDF_VIEWER_OPTIONS as option}
     {@const isActive = $pdfViewer === option.value}
     {@const iconPath = getIcon(option.value)}
+    {@const isDisabled = isOptionDisabled(option.value)}
     <button
       type="button"
       class="pdf-viewer-chip"
       class:active={isActive}
+      class:disabled={isDisabled}
+      disabled={isDisabled}
       on:click={() => handleOptionClick(option.value)}
     >
-      {#if iconPath}
+      {#if isDisabled}
+        <WifiOff class="w-4 h-4 offline-icon" />
+      {:else if iconPath}
         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d={iconPath} />
         </svg>
@@ -125,6 +169,20 @@
   
   .pdf-viewer-chip.active svg {
     color: var(--text-dark) !important;
+  }
+  
+  .pdf-viewer-chip.disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+    pointer-events: none;
+  }
+
+  .pdf-viewer-chip.disabled .offline-icon {
+    color: #6c757d;
+  }
+
+  .pdf-viewer-chip.disabled span {
+    color: #6c757d;
   }
   
   .pdf-viewer-chip span {
