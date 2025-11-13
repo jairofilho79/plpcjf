@@ -12,12 +12,15 @@
     { value: 'online', label: 'Leitor Online' }
   ];
   
-  // Check if offline
-  let isOffline = false;
+  // Check if offline - store the value in a variable that we update
+  let isOnline = browser ? navigator.onLine : true;
+  
+  // Reactive statement that depends on isOnline
+  $: isOffline = !isOnline;
   
   function updateOfflineStatus() {
     if (browser) {
-      isOffline = navigator.onLine === false;
+      isOnline = navigator.onLine;
     }
   }
   
@@ -27,9 +30,9 @@
   }
   
   onMount(() => {
-    updateOfflineStatus();
-    
     if (browser) {
+      updateOfflineStatus();
+      
       window.addEventListener('online', updateOfflineStatus);
       window.addEventListener('offline', updateOfflineStatus);
     }
@@ -66,6 +69,7 @@
     return '';
   }
   
+  // Reactive function to check if option is disabled
   function isOptionDisabled(value: any) {
     return value === 'online' && isOffline;
   }
@@ -82,7 +86,7 @@
   {#each PDF_VIEWER_OPTIONS as option}
     {@const isActive = $pdfViewer === option.value}
     {@const iconPath = getIcon(option.value)}
-    {@const isDisabled = isOptionDisabled(option.value)}
+    {@const isDisabled = option.value === 'online' && isOffline}
     <button
       type="button"
       class="pdf-viewer-chip"
