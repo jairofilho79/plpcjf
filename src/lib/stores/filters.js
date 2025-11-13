@@ -22,10 +22,20 @@ function loadFiltersFromStorage() {
 }
 
 function createFiltersStore() {
-  const { subscribe, set, update } = writable(loadFiltersFromStorage());
+  const { subscribe, set: setStore, update } = writable(loadFiltersFromStorage());
 
   return {
     subscribe,
+    set: (categories) => {
+      setStore(categories);
+      if (browser) {
+        try {
+          localStorage.setItem(FILTER_STORAGE_KEY, JSON.stringify(categories));
+        } catch (e) {
+          console.warn('Não foi possível salvar os filtros no localStorage:', e);
+        }
+      }
+    },
     toggleCategory: (category) => {
       update(categories => {
         const filtered = categories.includes(category)
@@ -44,7 +54,7 @@ function createFiltersStore() {
       });
     },
     selectOnly: (category) => {
-      set([category]);
+      setStore([category]);
       if (browser) {
         try {
           localStorage.setItem(FILTER_STORAGE_KEY, JSON.stringify([category]));
@@ -54,7 +64,7 @@ function createFiltersStore() {
       }
     },
     selectAll: () => {
-      set(CATEGORY_OPTIONS);
+      setStore(CATEGORY_OPTIONS);
       if (browser) {
         try {
           localStorage.setItem(FILTER_STORAGE_KEY, JSON.stringify(CATEGORY_OPTIONS));
@@ -64,7 +74,7 @@ function createFiltersStore() {
       }
     },
     deselectAll: () => {
-      set([]);
+      setStore([]);
       if (browser) {
         try {
           localStorage.setItem(FILTER_STORAGE_KEY, JSON.stringify([]));

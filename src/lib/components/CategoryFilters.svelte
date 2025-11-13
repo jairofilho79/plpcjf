@@ -11,6 +11,18 @@
   $: isOffline = browser ? navigator.onLine === false : false;
   $: downloadedCategories = offline.getSavedCategories() || [];
   
+  // When offline, automatically remove non-downloaded categories from filters
+  $: if (isOffline && browser) {
+    const currentFilters = $filters;
+    const availableCategories = currentFilters.filter(cat => downloadedCategories.includes(cat));
+    
+    // Only update if filters have changed (to avoid infinite loops)
+    if (availableCategories.length !== currentFilters.length || 
+        !availableCategories.every(cat => currentFilters.includes(cat))) {
+      filters.set(availableCategories);
+    }
+  }
+  
   $: {
     allChecked = $filters.length === CATEGORY_OPTIONS.length;
     indeterminate = $filters.length > 0 && $filters.length < CATEGORY_OPTIONS.length;
