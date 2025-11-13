@@ -18,6 +18,7 @@ const ALLOW_OFFLINE_KEY = 'ALLOW_OFFLINE';
 const CACHED_PDFS_KEY = 'cachedPdfsList';
 const LAST_MANIFEST_HASH_KEY = 'lastManifestHash';
 const SELECTED_CATEGORIES_KEY = 'selectedCategoriesForDownload';
+const DOWNLOADED_CATEGORIES_KEY = 'downloadedCategories';
 const OFFLINE_MANIFEST_KEY = 'offlineManifest';
 
 const PACKAGES_BASE_PATH = '/packages';
@@ -259,6 +260,135 @@ function saveCategories(categories) {
 }
 
 /**
+ * Get downloaded categories from localStorage
+ */
+function getDownloadedCategories() {
+  if (!browser) return [];
+  try {
+    const saved = localStorage.getItem(DOWNLOADED_CATEGORIES_KEY);
+    return saved ? JSON.parse(saved) : [];
+  } catch (e) {
+    console.error('[Offline Store] Failed to get downloaded categories:', e);
+    return [];
+  }
+}
+
+/**
+ * Save downloaded categories to localStorage
+ */
+function saveDownloadedCategories(categories) {
+  if (!browser) return;
+  try {
+    localStorage.setItem(DOWNLOADED_CATEGORIES_KEY, JSON.stringify(categories));
+  } catch (e) {
+    console.error('[Offline Store] Failed to save downloaded categories:', e);
+  }
+}
+
+/**
+ * Normalize URL for comparison (remove protocol and domain)
+ */
+function normalizeUrlForComparison(url) {
+  if (!url) return '';
+  // Remove protocol and domain, keep only path
+  let normalized = url.replace(/^https?:\/\/[^/]+/, '');
+  // Ensure starts with /
+  if (!normalized.startsWith('/')) {
+    normalized = '/' + normalized;
+  }
+  // Remove trailing slashes (except root)
+  normalized = normalized.replace(/\/+$/, '') || '/';
+  return normalized.toLowerCase();
+}
+
+/**
+ * Check if a category is completely downloaded (all PDFs are in cache)
+ */
+async function isCategoryCompletelyDownloaded(category, cachedPdfs, louvoresData) {
+  if (!category || !louvoresData || !cachedPdfs) {
+    return false;
+  }
+
+  // Get all PDFs for this category
+  const categoryLouvores = louvoresData.filter(louvor => louvor.categoria === category);
+  
+  if (categoryLouvores.length === 0) {
+    return false;
+  }
+
+  // Normalize cached PDFs URLs for comparison
+  const normalizedCachedPdfs = cachedPdfs.map(url => normalizeUrlForComparison(url));
+
+  // Check if all PDFs for this category are in cache
+  for (const louvor of categoryLouvores) {
+    const pdfUrl = getPdfUrl(louvor);
+    if (!pdfUrl) {
+      continue;
+    }
+
+    // Normalize PDF URL for comparison
+    const normalizedPdfUrl = normalizeUrlForComparison(pdfUrl);
+
+    // Check if PDF is in cache
+    const isCached = normalizedCachedPdfs.some(cached => {
+      // Exact match
+      if (cached === normalizedPdfUrl) {
+        return true;
+      }
+      // Check if cached URL ends with PDF URL (handles full URLs vs relative paths)
+      if (cached.endsWith(normalizedPdfUrl)) {
+        return true;
+      }
+      // Check if PDF URL ends with cached URL (handles different path formats)
+      if (normalizedPdfUrl.endsWith(cached)) {
+        return true;
+      }
+      // Check if both URLs contain the same path segments
+      const cachedSegments = cached.split('/').filter(s => s);
+      const pdfSegments = normalizedPdfUrl.split('/').filter(s => s);
+      if (cachedSegments.length > 0 && pdfSegments.length > 0) {
+        // Check if the last segments match (filename)
+        const cachedFilename = cachedSegments[cachedSegments.length - 1];
+        const pdfFilename = pdfSegments[pdfSegments.length - 1];
+        if (cachedFilename === pdfFilename && cachedFilename.endsWith('.pdf')) {
+          return true;
+        }
+      }
+      return false;
+    });
+
+    if (!isCached) {
+      console.log(`[Offline Store] PDF not found in cache: ${pdfUrl} (normalized: ${normalizedPdfUrl})`);
+      console.log(`[Offline Store] Cached PDFs (first 5):`, normalizedCachedPdfs.slice(0, 5));
+      return false;
+    }
+  }
+
+  return true;
+}
+
+/**
+ * Get list of completely downloaded categories
+ */
+async function getCompletelyDownloadedCategories(louvoresData, cachedPdfs) {
+  if (!louvoresData || !cachedPdfs || louvoresData.length === 0) {
+    return [];
+  }
+
+  const categories = [...new Set(louvoresData.map(l => l.categoria).filter(Boolean))];
+  const downloadedCategories = [];
+
+  for (const category of categories) {
+    const isDownloaded = await isCategoryCompletelyDownloaded(category, cachedPdfs, louvoresData);
+    if (isDownloaded) {
+      downloadedCategories.push(category);
+    }
+  }
+
+  return downloadedCategories;
+}
+
+/**
  * Check for new PDFs and auto-download if enabled
  */
 async function checkForNewPDFs() {
@@ -421,7 +551,7 @@ async function startDownload(pdfUrls, selectedCategories = []) {
  * Download PDFs by categories
  */
 
-async function startZipDownload(categories, pdfUrls) {
+async function startZipDownload(categories, pdfUrls, alreadyDownloadedCategories = []) {
   if (!browser) return;
 
   if (zipDownloadController) {
@@ -588,7 +718,25 @@ async function startZipDownload(categories, pdfUrls) {
         localStorage.setItem(LAST_MANIFEST_HASH_KEY, currentHash);
       }
 
+      // Reload cached PDFs list to get updated cache
       await loadCachedPdfsList();
+
+      // Update downloaded categories list
+      // After successful download, verify which categories are now completely downloaded
+      const updatedState = get(offlineState);
+      const updatedCachedPdfs = updatedState.cachedPdfs;
+      
+      if (updatedCachedPdfs && updatedCachedPdfs.length > 0 && louvoresData && louvoresData.length > 0) {
+        // Check which categories are now completely downloaded
+        const completelyDownloaded = await getCompletelyDownloadedCategories(louvoresData, updatedCachedPdfs);
+        
+        // Merge with already downloaded categories
+        const currentDownloaded = getDownloadedCategories();
+        const allDownloaded = [...new Set([...currentDownloaded, ...completelyDownloaded, ...alreadyDownloadedCategories])];
+        saveDownloadedCategories(allDownloaded);
+        
+        console.log('[Offline Store] Updated downloaded categories:', allDownloaded);
+      }
 
       // Check if IS_LEITOR_OFFLINE flag exists, if not open PDF in leitor
       const isLeitorOffline = localStorage.getItem('IS_LEITOR_OFFLINE');
@@ -638,7 +786,59 @@ async function downloadByCategories(categories) {
     return;
   }
 
-  // Save selected categories for future auto-downloads
+  // Load cached PDFs to check which categories are already downloaded
+  const state = get(offlineState);
+  let cachedPdfs = state.cachedPdfs;
+  
+  // If cached PDFs are not loaded, load them
+  if (!cachedPdfs || cachedPdfs.length === 0) {
+    try {
+      cachedPdfs = await getCachedPDFs();
+      offlineState.update(s => ({
+        ...s,
+        cachedPdfs,
+        cachedCount: cachedPdfs.length
+      }));
+    } catch (error) {
+      console.error('[Offline Store] Failed to load cached PDFs:', error);
+      cachedPdfs = [];
+    }
+  }
+
+  // Check which categories are already completely downloaded
+  const alreadyDownloadedCategories = [];
+  const categoriesToDownload = [];
+
+  for (const category of validCategories) {
+    const isDownloaded = await isCategoryCompletelyDownloaded(category, cachedPdfs, louvoresData);
+    if (isDownloaded) {
+      alreadyDownloadedCategories.push(category);
+      console.log(`[Offline Store] Category ${category} is already completely downloaded, skipping.`);
+    } else {
+      categoriesToDownload.push(category);
+    }
+  }
+
+  // If all categories are already downloaded, show message and return
+  if (categoriesToDownload.length === 0) {
+    offlineState.update(state => ({
+      ...state,
+      downloading: false,
+      progress: 100,
+      completed: 0,
+      failed: 0,
+      total: 0,
+      error: null
+    }));
+    console.log('[Offline Store] All selected categories are already downloaded.');
+    // Update downloaded categories list
+    const currentDownloaded = getDownloadedCategories();
+    const updatedDownloaded = [...new Set([...currentDownloaded, ...alreadyDownloadedCategories])];
+    saveDownloadedCategories(updatedDownloaded);
+    return;
+  }
+
+  // Save selected categories for future auto-downloads (including already downloaded ones)
   saveCategories(validCategories);
 
   // Check if IS_LEITOR_OFFLINE flag exists, if not open PDF in leitor
@@ -649,9 +849,9 @@ async function downloadByCategories(categories) {
     window.open(leitorUrl, '_blank', 'noopener');
   }
 
-  // Filter louvores by selected categories
+  // Filter louvores by categories to download (excluding already downloaded)
   const filteredLouvores = louvoresData.filter(louvor =>
-    validCategories.includes(louvor.categoria)
+    categoriesToDownload.includes(louvor.categoria)
   );
 
   const pdfUrls = filteredLouvores.map(getPdfUrl).filter(url => url !== null);
@@ -669,9 +869,10 @@ async function downloadByCategories(categories) {
     return;
   }
 
-  console.log(`[Offline Store] Downloading ${pdfUrls.length} PDFs via ZIP packages for ${validCategories.length} categories`);
+  console.log(`[Offline Store] Downloading ${pdfUrls.length} PDFs via ZIP packages for ${categoriesToDownload.length} categories (${alreadyDownloadedCategories.length} already downloaded)`);
 
-  await startZipDownload(validCategories, pdfUrls);
+  // Download only categories that are not already downloaded
+  await startZipDownload(categoriesToDownload, pdfUrls, alreadyDownloadedCategories);
 }
 
 
@@ -725,6 +926,7 @@ async function clearAllCache() {
     localStorage.removeItem(CACHED_PDFS_KEY);
     localStorage.removeItem(LAST_MANIFEST_HASH_KEY);
     localStorage.removeItem(SELECTED_CATEGORIES_KEY);
+    localStorage.removeItem(DOWNLOADED_CATEGORIES_KEY);
     
     // Reset state
     offlineState.set(initialState);
@@ -779,6 +981,49 @@ if (browser) {
   initialize();
 }
 
+/**
+ * Check and update downloaded categories based on current cache
+ */
+async function checkAndUpdateDownloadedCategories() {
+  if (!browser) return [];
+
+  try {
+    const louvoresData = get(louvores);
+    if (!louvoresData || louvoresData.length === 0) {
+      return getDownloadedCategories();
+    }
+
+    // Load cached PDFs
+    const state = get(offlineState);
+    let cachedPdfs = state.cachedPdfs;
+    
+    if (!cachedPdfs || cachedPdfs.length === 0) {
+      try {
+        cachedPdfs = await getCachedPDFs();
+        offlineState.update(s => ({
+          ...s,
+          cachedPdfs,
+          cachedCount: cachedPdfs.length
+        }));
+      } catch (error) {
+        console.error('[Offline Store] Failed to load cached PDFs:', error);
+        return getDownloadedCategories();
+      }
+    }
+
+    // Check which categories are completely downloaded
+    const completelyDownloaded = await getCompletelyDownloadedCategories(louvoresData, cachedPdfs);
+    
+    // Always save updated list (even if empty) to ensure consistency
+    saveDownloadedCategories(completelyDownloaded);
+    
+    return completelyDownloaded;
+  } catch (error) {
+    console.error('[Offline Store] Failed to check downloaded categories:', error);
+    return getDownloadedCategories();
+  }
+}
+
 // Export store and methods
 export const offline = {
   subscribe: offlineState.subscribe,
@@ -793,6 +1038,8 @@ export const offline = {
   loadCachedPdfsList,
   checkForNewPDFs,
   getSavedCategories,
+  getDownloadedCategories,
+  checkAndUpdateDownloadedCategories,
   fetchOfflineManifest
 };
 

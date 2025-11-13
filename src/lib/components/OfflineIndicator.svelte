@@ -176,9 +176,9 @@
   /* Progress ring */
   .progress-ring {
     position: absolute;
-    top: 0;
-    left: 0;
-    transform: rotate(-90deg);
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%) rotate(-90deg);
     z-index: 1;
   }
   

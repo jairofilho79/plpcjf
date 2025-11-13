@@ -13,18 +13,54 @@
      */
   let selectedCategories = [];
 
-  // Load saved categories on mount
+  // Track which categories are already downloaded (cannot be removed)
+  let downloadedCategories = [];
+
+  // Load saved categories and check downloaded categories on mount
   onMount(async () => {
     await loadLouvores();
 
+    // Check and update downloaded categories based on cache
+    downloadedCategories = await offline.checkAndUpdateDownloadedCategories();
+    
+    // Load saved categories for selection
     const saved = offline.getSavedCategories();
     if (saved && saved.length > 0) {
       selectedCategories = saved;
     }
+    
+    // Ensure downloaded categories are selected and cannot be deselected
+    downloadedCategories.forEach(cat => {
+      if (!selectedCategories.includes(cat)) {
+        selectedCategories = [...selectedCategories, cat];
+      }
+    });
   });
 
-  // Track which categories are already downloaded (cannot be removed)
-  $: downloadedCategories = offline.getSavedCategories() || [];
+  // Track download completion to update categories
+  let lastCompletedCount = 0;
+  let hasCheckedAfterDownload = false;
+
+  // React to download completion
+  $: if (!downloading && completed > lastCompletedCount && completed > 0) {
+    lastCompletedCount = completed;
+    hasCheckedAfterDownload = false;
+    
+    // When download completes, update downloaded categories after a short delay
+    setTimeout(async () => {
+      if (!hasCheckedAfterDownload) {
+        hasCheckedAfterDownload = true;
+        const cats = await offline.checkAndUpdateDownloadedCategories();
+        downloadedCategories = cats;
+        // Ensure downloaded categories are selected
+        cats.forEach(cat => {
+          if (!selectedCategories.includes(cat)) {
+            selectedCategories = [...selectedCategories, cat];
+          }
+        });
+      }
+    }, 1000);
+  }
 
   // Get current offline state
   $: state = $offline;
@@ -51,11 +87,13 @@
   }
   
   /**
-   * Get total size of selected categories
+   * Get total size of selected categories (excluding already downloaded)
    */
-  $: totalSelectedSize = selectedCategories.reduce((sum, cat) => {
-    return sum + (categorySizes[cat] || 0);
-  }, 0);
+  $: totalSelectedSize = selectedCategories
+    .filter(cat => !downloadedCategories.includes(cat))
+    .reduce((sum, cat) => {
+      return sum + (categorySizes[cat] || 0);
+    }, 0);
 
   /**
      * Toggle category selection
@@ -80,7 +118,13 @@
     if (!canDownload) return;
 
     console.log('[Offline Page] Starting download for categories:', selectedCategories);
-    await offline.downloadByCategories(selectedCategories);
+    
+    // Ensure downloaded categories are included in selection
+    const categoriesToDownload = [...new Set([...selectedCategories, ...downloadedCategories])];
+    
+    await offline.downloadByCategories(categoriesToDownload);
+    
+    // After download completes, categories will be updated via reactive statement
   }
 
   /**
