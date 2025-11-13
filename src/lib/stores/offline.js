@@ -193,6 +193,30 @@ async function openPdfCache() {
   return caches.open(DEFAULT_PDF_CACHE_FALLBACK);
 }
 
+/**
+ * Remove arquivo ZIP do cache após descompactação
+ */
+async function removeZipFromCache(zipUrl) {
+  if (!browser || typeof caches === 'undefined') {
+    return;
+  }
+
+  try {
+    const cacheKeys = await caches.keys();
+    
+    // Remove de todos os caches possíveis (APP_CACHE e PDF_CACHE)
+    for (const cacheKey of cacheKeys) {
+      const cache = await caches.open(cacheKey);
+      const zipRequest = new Request(zipUrl);
+      await cache.delete(zipRequest);
+    }
+    
+    console.log(`[Offline Store] Removed ZIP from cache: ${zipUrl}`);
+  } catch (error) {
+    console.warn(`[Offline Store] Failed to remove ZIP from cache: ${zipUrl}`, error);
+  }
+}
+
 function normalizeZipEntryName(entryName) {
   if (!entryName) {
     return '';
@@ -690,6 +714,10 @@ async function startZipDownload(categories, pdfUrls, alreadyDownloadedCategories
             progress
           }));
         }
+
+        // Remove o arquivo ZIP do cache após processar todos os PDFs
+        const fullPackageUrl = new URL(packageUrl, location.origin).toString();
+        await removeZipFromCache(fullPackageUrl);
       }
     }
 
