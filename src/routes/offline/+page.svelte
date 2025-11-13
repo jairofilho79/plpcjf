@@ -376,7 +376,7 @@
   .total-size-info {
     margin-top: 1rem;
     padding: 0.75rem;
-    background-color: var(--placeholder-color);
+    background-color: var(--background-color);
     border: 2px solid var(--gold-color);
     border-radius: 0.5rem;
   }

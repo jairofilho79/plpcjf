@@ -36,8 +36,8 @@
     display: flex;
     gap: 0.75rem;
     padding: 0.875rem 1rem;
-    background-color: #fff3cd;
-    border: 2px solid #ffc107;
+    background-color: #fff8e1;
+    border: 2px solid #d4af37;
     border-radius: 0.5rem;
     margin-bottom: 1rem;
     align-items: flex-start;
@@ -46,7 +46,7 @@
   .alert-icon {
     width: 1.25rem;
     height: 1.25rem;
-    color: #856404;
+    color: #8b4513;
     flex-shrink: 0;
     margin-top: 0.125rem;
   }
@@ -58,7 +58,7 @@
   .alert-title {
     font-size: 0.875rem;
     font-weight: 600;
-    color: #856404;
+    color: #8b4513;
     margin: 0 0 0.5rem 0;
   }
 
@@ -66,7 +66,7 @@
     margin: 0;
     padding-left: 1.25rem;
     font-size: 0.8125rem;
-    color: #856404;
+    color: #8b4513;
     line-height: 1.6;
   }
 
