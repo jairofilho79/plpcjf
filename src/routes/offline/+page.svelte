@@ -14,6 +14,9 @@
   let selectedCategories = [];
 
   // Track which categories are already downloaded (cannot be removed)
+  /**
+     * @type {string[]}
+     */
   let downloadedCategories = [];
 
   // Load saved categories and check downloaded categories on mount
@@ -29,12 +32,10 @@
       selectedCategories = saved;
     }
     
-    // Ensure downloaded categories are selected and cannot be deselected
-    downloadedCategories.forEach(cat => {
-      if (!selectedCategories.includes(cat)) {
-        selectedCategories = [...selectedCategories, cat];
-      }
-    });
+    // Ensure downloaded categories are ALWAYS selected and cannot be deselected
+    // Merge downloaded categories with saved categories, ensuring downloaded ones are included
+    const allCategories = [...new Set([...selectedCategories, ...downloadedCategories])];
+    selectedCategories = allCategories;
   });
 
   // Track download completion to update categories
@@ -53,7 +54,7 @@
         const cats = await offline.checkAndUpdateDownloadedCategories();
         downloadedCategories = cats;
         // Ensure downloaded categories are selected
-        cats.forEach(cat => {
+        cats.forEach((/** @type {string} */ cat) => {
           if (!selectedCategories.includes(cat)) {
             selectedCategories = [...selectedCategories, cat];
           }
@@ -75,6 +76,7 @@
   
   /**
    * Format bytes to human readable size
+   * @param {number} bytes
    */
   function formatSize(bytes) {
     if (!bytes || bytes === 0) return '0 B';
@@ -90,9 +92,9 @@
    * Get total size of selected categories (excluding already downloaded)
    */
   $: totalSelectedSize = selectedCategories
-    .filter(cat => !downloadedCategories.includes(cat))
-    .reduce((sum, cat) => {
-      return sum + (categorySizes[cat] || 0);
+    .filter((/** @type {string} */ cat) => !downloadedCategories.includes(cat))
+    .reduce((/** @type {number} */ sum, /** @type {string} */ cat) => {
+      return sum + ((/** @type {Record<string, number>} */ (categorySizes))[cat] || 0);
     }, 0);
 
   /**
@@ -119,8 +121,13 @@
 
     console.log('[Offline Page] Starting download for categories:', selectedCategories);
     
-    // Ensure downloaded categories are included in selection
-    const categoriesToDownload = [...new Set([...selectedCategories, ...downloadedCategories])];
+    // Filter out already downloaded categories - they should not be downloaded again
+    const categoriesToDownload = selectedCategories.filter(cat => !downloadedCategories.includes(cat));
+    
+    if (categoriesToDownload.length === 0) {
+      console.log('[Offline Page] All selected categories are already downloaded');
+      return;
+    }
     
     await offline.downloadByCategories(categoriesToDownload);
     
@@ -181,7 +188,7 @@
         <div class="category-list">
           {#each CATEGORY_OPTIONS as category}
             {@const isSelected = selectedCategories.includes(category)}
-            {@const categorySize = categorySizes[category] || 0}
+            {@const categorySize = ((/** @type {Record<string, number>} */ (categorySizes))[category] || 0)}
             {@const isDownloaded = downloadedCategories.includes(category)}
             <label class="category-item" class:downloaded={isDownloaded}>
               <input

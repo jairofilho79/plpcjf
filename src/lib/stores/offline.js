@@ -19,6 +19,7 @@ const CACHED_PDFS_KEY = 'cachedPdfsList';
 const LAST_MANIFEST_HASH_KEY = 'lastManifestHash';
 const SELECTED_CATEGORIES_KEY = 'selectedCategoriesForDownload';
 const DOWNLOADED_CATEGORIES_KEY = 'downloadedCategories';
+const OFFLINE_CATEGORIAS_SALVAS = 'OFFLINE_CATEGORIAS_SALVAS';
 const OFFLINE_MANIFEST_KEY = 'offlineManifest';
 
 const PACKAGES_BASE_PATH = '/packages';
@@ -285,12 +286,25 @@ function saveCategories(categories) {
 
 /**
  * Get downloaded categories from localStorage
+ * Uses OFFLINE_CATEGORIAS_SALVAS flag to store categories that are saved in cache storage
  */
 function getDownloadedCategories() {
   if (!browser) return [];
   try {
-    const saved = localStorage.getItem(DOWNLOADED_CATEGORIES_KEY);
-    return saved ? JSON.parse(saved) : [];
+    // First try the new flag
+    const saved = localStorage.getItem(OFFLINE_CATEGORIAS_SALVAS);
+    if (saved) {
+      return JSON.parse(saved);
+    }
+    // Fallback to old key for migration
+    const oldSaved = localStorage.getItem(DOWNLOADED_CATEGORIES_KEY);
+    if (oldSaved) {
+      const categories = JSON.parse(oldSaved);
+      // Migrate to new key
+      localStorage.setItem(OFFLINE_CATEGORIAS_SALVAS, oldSaved);
+      return categories;
+    }
+    return [];
   } catch (e) {
     console.error('[Offline Store] Failed to get downloaded categories:', e);
     return [];
@@ -299,10 +313,13 @@ function getDownloadedCategories() {
 
 /**
  * Save downloaded categories to localStorage
+ * Uses OFFLINE_CATEGORIAS_SALVAS flag to store categories that are saved in cache storage
  */
 function saveDownloadedCategories(categories) {
   if (!browser) return;
   try {
+    localStorage.setItem(OFFLINE_CATEGORIAS_SALVAS, JSON.stringify(categories));
+    // Also save to old key for backward compatibility
     localStorage.setItem(DOWNLOADED_CATEGORIES_KEY, JSON.stringify(categories));
   } catch (e) {
     console.error('[Offline Store] Failed to save downloaded categories:', e);
@@ -326,7 +343,9 @@ function normalizeUrlForComparison(url) {
 }
 
 /**
- * Check if a category is completely downloaded (all PDFs are in cache)
+ * Check if a category is completely downloaded (all PDFs are in cache storage)
+ * IMPORTANT: This checks PDFs in cache storage, NOT ZIP files.
+ * ZIP files are removed from cache after extraction, so we verify PDFs directly.
  */
 async function isCategoryCompletelyDownloaded(category, cachedPdfs, louvoresData) {
   if (!category || !louvoresData || !cachedPdfs) {
@@ -955,6 +974,7 @@ async function clearAllCache() {
     localStorage.removeItem(LAST_MANIFEST_HASH_KEY);
     localStorage.removeItem(SELECTED_CATEGORIES_KEY);
     localStorage.removeItem(DOWNLOADED_CATEGORIES_KEY);
+    localStorage.removeItem(OFFLINE_CATEGORIAS_SALVAS);
     
     // Reset state
     offlineState.set(initialState);
@@ -1010,7 +1030,11 @@ if (browser) {
 }
 
 /**
- * Check and update downloaded categories based on current cache
+ * Check and update downloaded categories based on current cache storage
+ * IMPORTANT: This function verifies PDFs in cache storage, NOT ZIP files.
+ * ZIP files are removed from cache after extraction, so we check if all PDFs
+ * from a category are present in the cache storage.
+ * Uses OFFLINE_CATEGORIAS_SALVAS flag to store the list of saved categories.
  */
 async function checkAndUpdateDownloadedCategories() {
   if (!browser) return [];
@@ -1021,7 +1045,7 @@ async function checkAndUpdateDownloadedCategories() {
       return getDownloadedCategories();
     }
 
-    // Load cached PDFs
+    // Load cached PDFs from cache storage (NOT ZIPs - ZIPs are removed after extraction)
     const state = get(offlineState);
     let cachedPdfs = state.cachedPdfs;
     
@@ -1039,10 +1063,11 @@ async function checkAndUpdateDownloadedCategories() {
       }
     }
 
-    // Check which categories are completely downloaded
+    // Check which categories are completely downloaded (all PDFs are in cache storage)
+    // This verifies PDFs, not ZIPs, since ZIPs are removed after extraction
     const completelyDownloaded = await getCompletelyDownloadedCategories(louvoresData, cachedPdfs);
     
-    // Always save updated list (even if empty) to ensure consistency
+    // Save to OFFLINE_CATEGORIAS_SALVAS flag
     saveDownloadedCategories(completelyDownloaded);
     
     return completelyDownloaded;
