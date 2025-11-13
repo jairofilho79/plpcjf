@@ -369,8 +369,8 @@
 
   .category-size {
     font-size: 0.8125rem;
-    color: var(--text-light);
-    opacity: 0.8;
+    color: #6c757d;
+    font-weight: 500;
   }
   
   .total-size-info {
