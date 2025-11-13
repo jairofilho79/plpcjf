@@ -198,6 +198,11 @@
   }
 
   onMount(async () => {
+    // Set IS_LEITOR_OFFLINE flag when accessing the leitor route
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('IS_LEITOR_OFFLINE', 'true');
+    }
+
     if (!containerEl || !viewerEl) return;
     // Measure toolbar height (including border) and keep it updated
     const updateToolbarHeight = () => {

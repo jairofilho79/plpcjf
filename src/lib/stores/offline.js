@@ -589,6 +589,14 @@ async function startZipDownload(categories, pdfUrls) {
       }
 
       await loadCachedPdfsList();
+
+      // Check if IS_LEITOR_OFFLINE flag exists, if not open PDF in leitor
+      const isLeitorOffline = localStorage.getItem('IS_LEITOR_OFFLINE');
+      if (!isLeitorOffline || isLeitorOffline !== 'true') {
+        // Open offline-setup.pdf in leitor to set the flag
+        const leitorUrl = '/leitor?file=/offline-setup.pdf&titulo=Configuração Offline&subtitulo=Página de funcionamento';
+        window.open(leitorUrl, '_blank', 'noopener');
+      }
     }
   } catch (error) {
     if (error?.message === 'DOWNLOAD_CANCELLED' || error?.name === 'AbortError') {
@@ -632,6 +640,14 @@ async function downloadByCategories(categories) {
 
   // Save selected categories for future auto-downloads
   saveCategories(validCategories);
+
+  // Check if IS_LEITOR_OFFLINE flag exists, if not open PDF in leitor
+  const isLeitorOffline = localStorage.getItem('IS_LEITOR_OFFLINE');
+  if (!isLeitorOffline || isLeitorOffline !== 'true') {
+    // Open offline-setup.pdf in leitor to set the flag
+    const leitorUrl = '/leitor?file=/offline-setup.pdf&titulo=Configuração Offline&subtitulo=Página de funcionamento';
+    window.open(leitorUrl, '_blank', 'noopener');
+  }
 
   // Filter louvores by selected categories
   const filteredLouvores = louvoresData.filter(louvor =>

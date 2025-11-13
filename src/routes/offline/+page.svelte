@@ -4,6 +4,8 @@
   import { offline, isDownloading } from '$lib/stores/offline';
   import { CATEGORY_OPTIONS } from '$lib/stores/filters';
   import { louvores, loadLouvores, louvoresLoaded } from '$lib/stores/louvores';
+  import OfflineRequirementsAlert from '$lib/components/OfflineRequirementsAlert.svelte';
+  import OfflineIndicator from '$lib/components/OfflineIndicator.svelte';
 
   // Selected categories for download
   /**
@@ -20,6 +22,9 @@
       selectedCategories = saved;
     }
   });
+
+  // Track which categories are already downloaded (cannot be removed)
+  $: downloadedCategories = offline.getSavedCategories() || [];
 
   // Get current offline state
   $: state = $offline;
@@ -58,6 +63,8 @@
      */
   function toggleCategory(category) {
     if (downloading) return; // Can't change selection while downloading
+    // Can't remove already downloaded categories
+    if (downloadedCategories.includes(category)) return;
 
     if (selectedCategories.includes(category)) {
       selectedCategories = selectedCategories.filter(c => c !== category);
@@ -110,6 +117,14 @@
         </div>
       </div>
 
+      <!-- Offline requirements alert -->
+      <OfflineRequirementsAlert />
+
+      <!-- Offline indicator showing preparation status -->
+      <div class="offline-indicator-container">
+        <OfflineIndicator />
+      </div>
+
       {#if !$louvoresLoaded}
         <p class="loading-text">Carregando lista de louvores...</p>
       {:else if !louvoresReady}
@@ -128,17 +143,21 @@
           {#each CATEGORY_OPTIONS as category}
             {@const isSelected = selectedCategories.includes(category)}
             {@const categorySize = categorySizes[category] || 0}
-            <label class="category-item">
+            {@const isDownloaded = downloadedCategories.includes(category)}
+            <label class="category-item" class:downloaded={isDownloaded}>
               <input
                 type="checkbox"
                 checked={isSelected}
                 on:change={() => toggleCategory(category)}
-                disabled={downloading}
+                disabled={downloading || isDownloaded}
               />
               <div class="category-info">
                 <span class="category-label">{category}</span>
                 {#if categorySize > 0}
                   <span class="category-size">{formatSize(categorySize)}</span>
+                {/if}
+                {#if isDownloaded}
+                  <span class="downloaded-badge">Já baixada</span>
                 {/if}
               </div>
             </label>
@@ -240,6 +259,12 @@
 
   .page-body {
     padding: 1.5rem;
+  }
+
+  .offline-indicator-container {
+    display: flex;
+    justify-content: center;
+    margin-bottom: 1.5rem;
   }
   /* Info box */
   .info-box {
@@ -376,6 +401,26 @@
 
   .category-item:has(input[type="checkbox"]:checked) .category-label {
     color: var(--light-gold);
+  }
+
+  /* Downloaded category styles */
+  .category-item.downloaded {
+    background-color: var(--background-color);
+    border-color: var(--gold-color);
+    opacity: 0.8;
+    cursor: not-allowed;
+  }
+
+  .category-item.downloaded input[type="checkbox"] {
+    cursor: not-allowed;
+    opacity: 0.6;
+  }
+
+  .downloaded-badge {
+    font-size: 0.75rem;
+    color: var(--gold-color);
+    font-weight: 600;
+    margin-top: 0.25rem;
   }
 
   /* Progress section */

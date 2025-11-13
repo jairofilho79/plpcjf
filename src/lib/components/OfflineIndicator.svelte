@@ -1,7 +1,8 @@
 <script>
-  import { CloudOff, Cloud, Download } from 'lucide-svelte';
+  import { CloudOff, Cloud, Download, CheckCircle } from 'lucide-svelte';
   import { offline, isOfflineEnabled, isDownloading } from '$lib/stores/offline';
   import { goto } from '$app/navigation';
+  import { browser } from '$app/environment';
   
   $: state = $offline;
   $: enabled = $isOfflineEnabled;
@@ -9,6 +10,12 @@
   $: cachedCount = state.cachedCount || 0;
   $: progress = state.progress || 0;
   $: isOnline = typeof navigator !== 'undefined' ? navigator.onLine : true;
+  
+  // Check if offline requirements are met
+  $: savedCategories = offline.getSavedCategories();
+  $: hasCategoryDownloaded = savedCategories && savedCategories.length > 0;
+  $: isLeitorOffline = browser ? localStorage.getItem('IS_LEITOR_OFFLINE') === 'true' : false;
+  $: isOfflineReady = hasCategoryDownloaded && isLeitorOffline;
   
   let showTooltip = false;
   /**
@@ -43,10 +50,11 @@
   }
 </script>
 
-{#if enabled || downloading}
+{#if enabled || downloading || isOfflineReady}
   <div 
     class="offline-indicator"
     class:downloading={downloading}
+    class:ready={isOfflineReady && !downloading}
     on:mouseenter={handleMouseEnter}
     on:mouseleave={handleMouseLeave}
     on:click={handleClick}
@@ -57,6 +65,10 @@
     {#if downloading}
       <div class="icon-wrapper downloading-animation">
         <Download class="w-5 h-5" />
+      </div>
+    {:else if isOfflineReady}
+      <div class="icon-wrapper ready-icon">
+        <CheckCircle class="w-5 h-5" />
       </div>
     {:else if enabled}
       <div class="icon-wrapper" class:offline={!isOnline}>
@@ -90,6 +102,10 @@
         {#if downloading}
           <p class="tooltip-title">Baixando PDFs...</p>
           <p class="tooltip-text">{progress}% concluído</p>
+        {:else if isOfflineReady}
+          <p class="tooltip-title">App Preparada para Offline</p>
+          <p class="tooltip-text">Todos os requisitos foram cumpridos</p>
+          <p class="tooltip-text">{cachedCount} PDFs em cache</p>
         {:else if enabled}
           <p class="tooltip-title">Modo Offline Ativo</p>
           <p class="tooltip-text">{cachedCount} PDFs em cache</p>
@@ -131,6 +147,15 @@
   
   .icon-wrapper.offline {
     color: #dc3545;
+  }
+
+  .icon-wrapper.ready-icon {
+    color: #28a745;
+  }
+
+  .offline-indicator.ready {
+    background-color: rgba(40, 167, 69, 0.1);
+    border-radius: 50%;
   }
   
   .downloading-animation {

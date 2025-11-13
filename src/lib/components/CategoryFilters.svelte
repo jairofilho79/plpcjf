@@ -1,8 +1,15 @@
 <script>
   import { filters, CATEGORY_OPTIONS } from '$lib/stores/filters';
+  import { offline } from '$lib/stores/offline';
+  import { browser } from '$app/environment';
+  import { WifiOff } from 'lucide-svelte';
   
   let allChecked = $filters.length === CATEGORY_OPTIONS.length;
   let indeterminate = false;
+  
+  // Check if offline and which categories are downloaded
+  $: isOffline = browser ? navigator.onLine === false : false;
+  $: downloadedCategories = offline.getSavedCategories() || [];
   
   $: {
     allChecked = $filters.length === CATEGORY_OPTIONS.length;
@@ -111,6 +118,14 @@
   function isChecked(category) {
     return $filters.includes(category);
   }
+
+  /**
+   * Check if category is disabled (offline and not downloaded)
+   * @param {string} category
+   */
+  function isCategoryDisabled(category) {
+    return isOffline && !downloadedCategories.includes(category);
+  }
   
   /**
      * @param {string | string[]} category
@@ -148,13 +163,16 @@
   {#each CATEGORY_OPTIONS as category}
     {@const isCategoryActive = $filters.includes(category)}
     {@const iconPath = getIcon(category)}
+    {@const isDisabled = isCategoryDisabled(category)}
     <button
       type="button"
       class="filter-chip"
       class:active={isCategoryActive}
-      on:click={(e) => handleCategoryClick(category, e)}
-      on:mousedown={(e) => handleCategoryMouseDown(category, e)}
-      on:mouseup={(e) => handleCategoryMouseUp(category, e)}
+      class:disabled={isDisabled}
+      disabled={isDisabled}
+      on:click={(e) => !isDisabled && handleCategoryClick(category, e)}
+      on:mousedown={(e) => !isDisabled && handleCategoryMouseDown(category, e)}
+      on:mouseup={(e) => !isDisabled && handleCategoryMouseUp(category, e)}
       on:mouseleave={(e) => {
         // Cancelar long press se o mouse sair do botão
         if (longPressTimer) {
@@ -163,8 +181,8 @@
         }
         wasLongPress = false;
       }}
-      on:touchstart={(e) => handleCategoryTouchStart(category, e)}
-      on:touchend={(e) => handleCategoryTouchEnd(category, e)}
+      on:touchstart={(e) => !isDisabled && handleCategoryTouchStart(category, e)}
+      on:touchend={(e) => !isDisabled && handleCategoryTouchEnd(category, e)}
       on:touchcancel={(e) => {
         // Cancelar long press se o touch for cancelado
         if (longPressTimer) {
@@ -174,7 +192,9 @@
         wasLongPress = false;
       }}
     >
-      {#if iconPath}
+      {#if isDisabled}
+        <WifiOff class="w-4 h-4 offline-icon" />
+      {:else if iconPath}
         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d={iconPath} />
         </svg>
@@ -297,6 +317,20 @@
   
   .filter-chip.active svg {
     color: var(--text-dark) !important;
+  }
+
+  .filter-chip.disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+    pointer-events: none;
+  }
+
+  .filter-chip.disabled .offline-icon {
+    color: #6c757d;
+  }
+
+  .filter-chip.disabled span {
+    color: #6c757d;
   }
   
   .filter-chip span {
