@@ -47,6 +47,12 @@
   let cachedPageWidthScale: number | null = null;
   let lastContainerWidth: number = 0;
   
+  // PDF validation states
+  let pdfLoading = false;
+  let pdfError: string | null = null;
+  let retryCount = 0;
+  const MAX_RETRIES = 2;
+  
   // Apply CSS class to container based on fit mode
   $: containerClass = preferredFitMode === 'page-fit' ? 'page-fit-mode' : 'page-width-mode';
   
@@ -165,15 +171,81 @@
   async function load(fileUrl: string) {
     const getDocument = (window as any).__pdfjsGetDocument as PDFJSGetDocument | undefined;
     if (!getDocument) return;
+    
     // Avoid duplicate loads of the same file
-    if (lastLoadedFile === fileUrl) return;
-    const loadingTask = getDocument({ url: fileUrl, withCredentials: false });
-    const pdfDocument = await loadingTask.promise;
-    linkService.setDocument(pdfDocument);
-    viewer.setDocument(pdfDocument);
-    totalPages = pdfDocument.numPages ?? 0;
-    currentPage = 1;
-    lastLoadedFile = fileUrl;
+    if (lastLoadedFile === fileUrl && !pdfError) return;
+    
+    pdfLoading = true;
+    pdfError = null;
+    
+    try {
+      // Extract PDF path from URL
+      const urlObj = new URL(fileUrl, window.location.origin);
+      const pdfPath = urlObj.pathname.startsWith('/') ? urlObj.pathname.substring(1) : urlObj.pathname;
+      
+      // VALIDAÇÃO: Check if PDF is available in cache
+      const { validatePdfAvailability } = await import('$lib/utils/pdfValidation');
+      const { downloadPDFsViaSW } = await import('$lib/utils/swRegistration');
+      
+      const validation = await validatePdfAvailability(pdfPath);
+      
+      if (!validation.available) {
+        // Try to download automatically if online
+        if (validation.needsDownload && navigator.onLine && retryCount < MAX_RETRIES) {
+          retryCount++;
+          console.log(`[Leitor] PDF não encontrado no cache, tentando baixar... (tentativa ${retryCount})`);
+          
+          // Show feedback
+          pdfError = 'Baixando PDF...';
+          
+          try {
+            // Download via Service Worker
+            await downloadPDFsViaSW([validation.url], 1, (progress) => {
+              if (progress.completed > 0) {
+                pdfError = null;
+                // Try to load again after download
+                setTimeout(() => load(fileUrl), 500);
+                return;
+              }
+            });
+          } catch (downloadErr) {
+            console.error('[Leitor] Download automático falhou:', downloadErr);
+            pdfError = 'Erro ao baixar PDF. Verifique sua conexão.';
+            pdfLoading = false;
+            return;
+          }
+          return;
+        } else {
+          // PDF not available and cannot be downloaded
+          pdfError = 'PDF não está disponível offline. Por favor, baixe primeiro na página de configuração offline.';
+          pdfLoading = false;
+          return;
+        }
+      }
+      
+      // PDF is available, load normally
+      const loadingTask = getDocument({ url: fileUrl, withCredentials: false });
+      const pdfDocument = await loadingTask.promise;
+      linkService.setDocument(pdfDocument);
+      viewer.setDocument(pdfDocument);
+      totalPages = pdfDocument.numPages ?? 0;
+      currentPage = 1;
+      lastLoadedFile = fileUrl;
+      retryCount = 0; // Reset retry count on success
+      pdfError = null;
+    } catch (error) {
+      console.error('[Leitor] Erro ao carregar PDF:', error);
+      pdfError = 'Erro ao carregar PDF. Verifique se o arquivo está disponível.';
+      
+      // Try retry if still have attempts
+      if (retryCount < MAX_RETRIES && navigator.onLine) {
+        retryCount++;
+        setTimeout(() => load(fileUrl), 2000);
+        return;
+      }
+    } finally {
+      pdfLoading = false;
+    }
   }
 
   function onKeyDown(e: KeyboardEvent) {
@@ -791,6 +863,75 @@
   @media (max-width: 600px) {
     .btn.zoom-minus, .btn.zoom-plus { display: none; }
   }
+  
+  .pdf-loading-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(42, 42, 42, 0.9);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    z-index: 2000;
+    color: var(--text-light);
+  }
+  
+  .loading-spinner {
+    width: 48px;
+    height: 48px;
+    border: 4px solid rgba(255, 255, 255, 0.2);
+    border-top-color: var(--gold-color);
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+    margin-bottom: 1rem;
+  }
+  
+  @keyframes spin {
+    to { transform: rotate(360deg); }
+  }
+  
+  .pdf-error-banner {
+    position: fixed;
+    top: 60px;
+    left: 50%;
+    transform: translateX(-50%);
+    max-width: 90%;
+    width: 600px;
+    background-color: rgba(220, 38, 38, 0.95);
+    color: white;
+    padding: 1rem 1.5rem;
+    border-radius: 0.5rem;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+    z-index: 2000;
+    text-align: center;
+  }
+  
+  .pdf-error-banner p {
+    margin: 0 0 0.75rem 0;
+    font-size: 0.9375rem;
+  }
+  
+  .error-button {
+    background-color: white;
+    color: #dc2626;
+    border: none;
+    padding: 0.5rem 1rem;
+    border-radius: 0.25rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background-color 0.2s;
+  }
+  
+  .error-button:hover {
+    background-color: #f3f4f6;
+  }
+  
+  .container.hidden {
+    display: none;
+  }
 </style>
 
 <div class="toolbar" bind:this={toolbarEl}>
@@ -857,7 +998,25 @@
   
 </div>
 
-<div id="viewerContainer" bind:this={containerEl} class="container {containerClass}">
+{#if pdfLoading}
+  <div class="pdf-loading-overlay">
+    <div class="loading-spinner"></div>
+    <p>Carregando PDF...</p>
+  </div>
+{/if}
+
+{#if pdfError}
+  <div class="pdf-error-banner">
+    <p>{pdfError}</p>
+    {#if !navigator.onLine}
+      <button class="error-button" on:click={() => window.location.href = '/offline'}>
+        Ir para Configuração Offline
+      </button>
+    {/if}
+  </div>
+{/if}
+
+<div id="viewerContainer" bind:this={containerEl} class="container {containerClass}" class:hidden={pdfLoading || pdfError}>
   <div bind:this={viewerEl} class="viewer pdfViewer"></div>
   <!-- pdfjs-dist css hooks on .pdfViewer and .viewer -->
   

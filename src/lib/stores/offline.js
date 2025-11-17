@@ -13,6 +13,7 @@ import { unzip } from 'fflate';
 import { louvores } from './louvores';
 import { CATEGORY_OPTIONS } from './filters';
 import { atobUTF8 } from '$lib/utils/pathUtils';
+import { findMissingPdfs, findRequiredPackages } from '$lib/utils/pdfValidation';
 
 const ALLOW_OFFLINE_KEY = 'ALLOW_OFFLINE';
 const CACHED_PDFS_KEY = 'cachedPdfsList';
@@ -522,6 +523,79 @@ function getPdfUrl(louvor) {
 }
 
 /**
+ * Identifies missing PDFs by comparing louvores-manifest.json with cache
+ * @param {Array} louvoresData - Array of louvor objects
+ * @param {Array} cachedPdfs - Array of cached PDF URLs
+ * @returns {Array} - Array of louvor objects with missing PDFs
+ */
+function identifyMissingPdfs(louvoresData, cachedPdfs) {
+  return findMissingPdfs(louvoresData, cachedPdfs);
+}
+
+/**
+ * Finds required packages based on missing PDFs and offline manifest
+ * @param {Array} missingPdfs - Array of louvor objects with missing PDFs
+ * @param {Object} offlineManifest - Offline manifest object
+ * @returns {Array} - Array of package parts that need to be downloaded
+ */
+function findRequiredPackagesForMissing(missingPdfs, offlineManifest) {
+  return findRequiredPackages(missingPdfs, offlineManifest);
+}
+
+/**
+ * Downloads only the packages needed for missing PDFs
+ * @param {Array} missingPdfs - Array of louvor objects with missing PDFs
+ * @returns {Promise<void>}
+ */
+async function downloadMissingPackages(missingPdfs) {
+  if (!browser || !missingPdfs || missingPdfs.length === 0) {
+    return;
+  }
+
+  // Get offline manifest
+  const state = get(offlineState);
+  let manifest = state.offlineManifest;
+
+  if (!manifest) {
+    try {
+      manifest = await fetchOfflineManifest();
+    } catch (error) {
+      console.error('[Offline Store] Failed to fetch manifest:', error);
+      offlineState.update(s => ({
+        ...s,
+        error: 'Não foi possível carregar o manifest de pacotes offline.'
+      }));
+      return;
+    }
+  }
+
+  // Find required packages
+  const requiredParts = findRequiredPackagesForMissing(missingPdfs, manifest);
+
+  if (requiredParts.length === 0) {
+    console.log('[Offline Store] No packages needed for missing PDFs');
+    return;
+  }
+
+  console.log(`[Offline Store] Found ${requiredParts.length} packages needed for ${missingPdfs.length} missing PDFs`);
+
+  // Group by category and download
+  const categoriesToDownload = [...new Set(requiredParts.map(part => part.category))];
+  
+  // Get all PDF URLs for these categories
+  const louvoresData = get(louvores);
+  const pdfUrls = louvoresData
+    .filter(louvor => categoriesToDownload.includes(louvor.categoria))
+    .map(getPdfUrl)
+    .filter(url => url !== null);
+
+  if (pdfUrls.length > 0) {
+    // Use existing zip download function
+    await startZipDownload(categoriesToDownload, pdfUrls);
+  }
+}
+
+/**
  * Start downloading PDFs
  */
 async function startDownload(pdfUrls, selectedCategories = []) {
@@ -579,6 +653,13 @@ async function startDownload(pdfUrls, selectedCategories = []) {
 
     // Reload cached PDFs list
     await loadCachedPdfsList();
+    
+    // Update PDF index after download
+    if (browser && !result.cancelled) {
+      const { updatePdfIndexInBackground } = await import('$lib/utils/pdfIndex');
+      const louvoresData = get(louvores);
+      updatePdfIndexInBackground(louvoresData);
+    }
 
   } catch (error) {
     console.error('[Offline Store] Download error:', error);
@@ -763,6 +844,12 @@ async function startZipDownload(categories, pdfUrls, alreadyDownloadedCategories
       if (louvoresData && louvoresData.length > 0) {
         const currentHash = getManifestHash(louvoresData);
         localStorage.setItem(LAST_MANIFEST_HASH_KEY, currentHash);
+        
+        // Update PDF index after ZIP extraction
+        if (browser) {
+          const { updatePdfIndexInBackground } = await import('$lib/utils/pdfIndex');
+          updatePdfIndexInBackground(louvoresData);
+        }
       }
 
       // Reload cached PDFs list to get updated cache
@@ -1093,7 +1180,10 @@ export const offline = {
   getSavedCategories,
   getDownloadedCategories,
   checkAndUpdateDownloadedCategories,
-  fetchOfflineManifest
+  fetchOfflineManifest,
+  identifyMissingPdfs,
+  findRequiredPackagesForMissing,
+  downloadMissingPackages
 };
 
 // Derived store for offline status

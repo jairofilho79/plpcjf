@@ -12,6 +12,12 @@ export async function loadLouvores() {
       louvores.set(data);
       louvoresLoaded.set(true);
       console.log(`Loaded ${data.length} louvores from manifest`);
+      
+      // Update PDF index in background after loading louvores
+      if (typeof window !== 'undefined') {
+        const { updatePdfIndexInBackground } = await import('$lib/utils/pdfIndex');
+        updatePdfIndexInBackground(data);
+      }
     } else {
       console.error('Failed to load louvores manifest:', response.status);
       louvoresLoaded.set(true);

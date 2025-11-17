@@ -12,11 +12,15 @@
     openPdfNewTabOfflineFirst 
   } from '$lib/utils/pdfUtils';
   import { sharePlaylistLink, generatePlaylistShareUrl } from '$lib/utils/playlistUtils';
+  import { isPdfAvailableInIndex } from '$lib/utils/pdfIndex';
+  import { ensurePdfAvailable } from '$lib/utils/pdfValidation';
   
   /**
      * @type {number | null}
      */
   let draggedIndex = null;
+  let checkingPdfId = null;
+  let pdfError = null;
   /**
      * @type {number | null}
      */
@@ -113,12 +117,43 @@
     const mode = $pdfViewer;
     
     if (mode === 'leitor') {
-      const fileParam = encodeURIComponent(`/${pdfPath}`);
-      const tituloParam = encodeURIComponent(louvor.nome || '');
-      const subtituloText = `${louvor.categoria || ''} | ${louvor.classificacao || ''}`.trim();
-      const subtituloParam = encodeURIComponent(subtituloText);
-      const url = `/leitor?file=${fileParam}&titulo=${tituloParam}&subtitulo=${subtituloParam}`;
-      window.open(url, '_blank', 'noopener');
+      // VALIDAÇÃO PRÉ-NAVEGAÇÃO
+      checkingPdfId = louvor.pdfId;
+      pdfError = null;
+      
+      try {
+        // Quick check via index first
+        const indexCheck = isPdfAvailableInIndex(louvor.pdfId);
+        
+        if (indexCheck === false) {
+          // Index says not available
+          pdfError = 'PDF não está disponível offline. Por favor, baixe primeiro na página de configuração offline.';
+          checkingPdfId = null;
+          return;
+        }
+        
+        // Full validation if index is null or true
+        const isAvailable = await ensurePdfAvailable(pdfPath);
+        
+        if (!isAvailable) {
+          pdfError = 'PDF não está disponível offline. Por favor, baixe primeiro na página de configuração offline.';
+          checkingPdfId = null;
+          return;
+        }
+        
+        // PDF is available, proceed with navigation
+        const fileParam = encodeURIComponent(`/${pdfPath}`);
+        const tituloParam = encodeURIComponent(louvor.nome || '');
+        const subtituloText = `${louvor.categoria || ''} | ${louvor.classificacao || ''}`.trim();
+        const subtituloParam = encodeURIComponent(subtituloText);
+        const url = `/leitor?file=${fileParam}&titulo=${tituloParam}&subtitulo=${subtituloParam}`;
+        window.open(url, '_blank', 'noopener');
+      } catch (err) {
+        console.error('Erro ao validar PDF:', err);
+        pdfError = 'Erro ao verificar disponibilidade do PDF.';
+      } finally {
+        checkingPdfId = null;
+      }
       return;
     }
     
@@ -364,6 +399,11 @@
       <div class="copied-message">Link copiado!</div>
     {/if}
     
+    {#if pdfError}
+      <div class="pdf-error-banner" role="alert">
+        {pdfError}
+      </div>
+    {/if}
     <div class="flex gap-2 overflow-x-auto carousel-chips-list">
       {#each $carousel as louvor, index}
         {@const categoryIcon = getCategoryIcon(louvor.categoria)}
@@ -379,6 +419,7 @@
           class="carousel-chip"
           class:dragging={draggedIndex === index}
           class:drag-over={dragOverIndex === index}
+          class:checking={checkingPdfId === louvor.pdfId}
         >
           <div class="drag-handle" on:mousedown|stopPropagation>
             <GripVertical class="w-4 h-4" />
@@ -657,6 +698,24 @@
   .carousel-chips-list::-webkit-scrollbar-thumb {
     background: var(--gold-color);
     border-radius: 3px;
+  }
+  
+  .pdf-error-banner {
+    grid-column: 1 / -1;
+    padding: 0.5rem;
+    margin-bottom: 0.5rem;
+    background-color: rgba(220, 38, 38, 0.1);
+    border: 1px solid rgba(220, 38, 38, 0.3);
+    border-radius: 0.25rem;
+    color: var(--text-light);
+    font-size: 0.875rem;
+    text-align: center;
+  }
+  
+  .carousel-chip.checking {
+    opacity: 0.6;
+    cursor: wait;
+    pointer-events: none;
   }
 </style>
 

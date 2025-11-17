@@ -10,6 +10,8 @@
   } from '$lib/utils/pdfUtils';
   import { carousel } from '$lib/stores/carousel';
   import { pdfViewer } from '$lib/stores/pdfViewer';
+  import { isPdfAvailableInIndex } from '$lib/utils/pdfIndex';
+  import { ensurePdfAvailable, validatePdfWithStrategies } from '$lib/utils/pdfValidation';
   
   export let louvor;
   
@@ -17,6 +19,9 @@
   $: isInCarousel = $carousel.some(item => 
     item.pdfId === louvor.pdfId
   );
+  
+  let isCheckingAvailability = false;
+  let availabilityError = null;
   
   function getCategoryIcon(category) {
     if (!category) return null;
@@ -51,12 +56,43 @@
     }
     
     if (mode === 'leitor') {
-      const fileParam = encodeURIComponent(`/${pdfPath}`);
-      const tituloParam = encodeURIComponent(louvor.nome || '');
-      const subtituloText = `${louvor.categoria || ''} | ${louvor.classificacao || ''}`.trim();
-      const subtituloParam = encodeURIComponent(subtituloText);
-      const url = `/leitor?file=${fileParam}&titulo=${tituloParam}&subtitulo=${subtituloParam}`;
-      window.open(url, '_blank', 'noopener');
+      // VALIDAÇÃO PRÉ-NAVEGAÇÃO
+      isCheckingAvailability = true;
+      availabilityError = null;
+      
+      try {
+        // Quick check via index first
+        const indexCheck = isPdfAvailableInIndex(louvor.pdfId);
+        
+        if (indexCheck === false) {
+          // Index says not available
+          availabilityError = 'PDF não está disponível offline. Por favor, baixe primeiro na página de configuração offline.';
+          isCheckingAvailability = false;
+          return;
+        }
+        
+        // Full validation if index is null or true
+        const isAvailable = await ensurePdfAvailable(pdfPath);
+        
+        if (!isAvailable) {
+          availabilityError = 'PDF não está disponível offline. Por favor, baixe primeiro na página de configuração offline.';
+          isCheckingAvailability = false;
+          return;
+        }
+        
+        // PDF is available, proceed with navigation
+        const fileParam = encodeURIComponent(`/${pdfPath}`);
+        const tituloParam = encodeURIComponent(louvor.nome || '');
+        const subtituloText = `${louvor.categoria || ''} | ${louvor.classificacao || ''}`.trim();
+        const subtituloParam = encodeURIComponent(subtituloText);
+        const url = `/leitor?file=${fileParam}&titulo=${tituloParam}&subtitulo=${subtituloParam}`;
+        window.open(url, '_blank', 'noopener');
+      } catch (err) {
+        console.error('Erro ao validar PDF:', err);
+        availabilityError = 'Erro ao verificar disponibilidade do PDF.';
+      } finally {
+        isCheckingAvailability = false;
+      }
       return;
     }
     
@@ -80,10 +116,16 @@
 </script>
 
 <div class="louvor-card">
+  {#if availabilityError}
+    <div class="availability-error" role="alert">
+      {availabilityError}
+    </div>
+  {/if}
   <a
     href={pdfPath}
     on:click|preventDefault={handleCardClick}
     class="louvor-info"
+    class:checking={isCheckingAvailability}
   >
     <div class="louvor-title">
       <strong>#{louvor.numero || 'N/A'}</strong> - {louvor.nome || 'Sem título'}
@@ -215,6 +257,24 @@
     background-color: var(--badge-gray-bg);
     cursor: not-allowed;
     opacity: 0.6;
+  }
+  
+  .availability-error {
+    grid-column: 1 / -1;
+    padding: 0.5rem;
+    margin-bottom: 0.5rem;
+    background-color: rgba(220, 38, 38, 0.1);
+    border: 1px solid rgba(220, 38, 38, 0.3);
+    border-radius: 0.25rem;
+    color: var(--text-light);
+    font-size: 0.875rem;
+    text-align: center;
+  }
+  
+  .louvor-info.checking {
+    opacity: 0.6;
+    cursor: wait;
+    pointer-events: none;
   }
 </style>
 
