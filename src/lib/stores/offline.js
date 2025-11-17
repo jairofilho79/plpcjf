@@ -270,8 +270,44 @@ async function startZipDownloadWithSpecificParts(categories, pdfUrls, partsByCat
   isZipDownloadActive = true;
 
   const total = pdfUrls.length;
-  const pdfSet = new Set(pdfUrls);
-  const remainingSet = new Set(pdfUrls);
+  // Normalize PDF URLs for comparison (handle encoding, case, path separators)
+  const normalizeForSet = (url) => {
+    if (!url) return '';
+    try {
+      // Remove protocol and domain if present
+      let normalized = url.replace(/^https?:\/\/[^/]+/, '');
+      // Remove leading/trailing slashes
+      normalized = normalized.replace(/^\/+/, '').replace(/\/+$/, '');
+      // Decode URI encoding (handle multiple encodings)
+      try {
+        for (let i = 0; i < 3; i++) {
+          if (normalized.includes('%')) {
+            const decoded = decodeURIComponent(normalized);
+            if (decoded !== normalized) {
+              normalized = decoded;
+            } else {
+              break;
+            }
+          } else {
+            break;
+          }
+        }
+      } catch {
+        // If decoding fails, continue with original
+      }
+      // Normalize to lowercase and path separators
+      normalized = normalized.toLowerCase().replace(/\\/g, '/');
+      // Ensure starts with / for consistency
+      return `/${normalized}`;
+    } catch {
+      return url.toLowerCase().replace(/\\/g, '/').replace(/^\/+/, '');
+    }
+  };
+  
+  // Create normalized sets for comparison
+  const pdfSet = new Set(pdfUrls.map(normalizeForSet));
+  const pdfSetOriginal = new Set(pdfUrls); // Keep original for exact match
+  const remainingSet = new Set(pdfUrls.map(normalizeForSet));
   let completed = 0;
 
   offlineState.update(state => ({
@@ -346,8 +382,29 @@ async function startZipDownloadWithSpecificParts(categories, pdfUrls, partsByCat
             continue;
           }
 
+          // Normalize path for comparison (same normalization as pdfSet)
+          const normalizedForComparison = normalizeForSet(normalizedPath);
+          
           // Só cachear se o PDF está na lista de PDFs necessários
-          if (!pdfSet.has(normalizedPath) || !remainingSet.has(normalizedPath)) {
+          // Check both normalized and original sets for maximum compatibility
+          const isInSet = pdfSet.has(normalizedForComparison) || 
+                         pdfSetOriginal.has(normalizedPath) ||
+                         pdfSetOriginal.has(normalizedPath.replace(/^\/+/, '')) ||
+                         Array.from(pdfSetOriginal).some(url => {
+                           const urlNormalized = normalizeForSet(url);
+                           return urlNormalized === normalizedForComparison ||
+                                  urlNormalized.endsWith(normalizedForComparison) ||
+                                  normalizedForComparison.endsWith(urlNormalized);
+                         });
+          
+          const isInRemaining = remainingSet.has(normalizedForComparison) ||
+                                Array.from(remainingSet).some(rem => {
+                                  return rem === normalizedForComparison ||
+                                         rem.endsWith(normalizedForComparison) ||
+                                         normalizedForComparison.endsWith(rem);
+                                });
+          
+          if (!isInSet || !isInRemaining) {
             delete entries[entryName];
             continue;
           }
@@ -960,8 +1017,44 @@ async function startZipDownload(categories, pdfUrls, alreadyDownloadedCategories
   isZipDownloadActive = true;
 
   const total = pdfUrls.length;
-  const pdfSet = new Set(pdfUrls);
-  const remainingSet = new Set(pdfUrls);
+  // Normalize PDF URLs for comparison (handle encoding, case, path separators)
+  const normalizeForSet = (url) => {
+    if (!url) return '';
+    try {
+      // Remove protocol and domain if present
+      let normalized = url.replace(/^https?:\/\/[^/]+/, '');
+      // Remove leading/trailing slashes
+      normalized = normalized.replace(/^\/+/, '').replace(/\/+$/, '');
+      // Decode URI encoding (handle multiple encodings)
+      try {
+        for (let i = 0; i < 3; i++) {
+          if (normalized.includes('%')) {
+            const decoded = decodeURIComponent(normalized);
+            if (decoded !== normalized) {
+              normalized = decoded;
+            } else {
+              break;
+            }
+          } else {
+            break;
+          }
+        }
+      } catch {
+        // If decoding fails, continue with original
+      }
+      // Normalize to lowercase and path separators
+      normalized = normalized.toLowerCase().replace(/\\/g, '/');
+      // Ensure starts with / for consistency
+      return `/${normalized}`;
+    } catch {
+      return url.toLowerCase().replace(/\\/g, '/').replace(/^\/+/, '');
+    }
+  };
+  
+  // Create normalized sets for comparison
+  const pdfSet = new Set(pdfUrls.map(normalizeForSet));
+  const pdfSetOriginal = new Set(pdfUrls); // Keep original for exact match
+  const remainingSet = new Set(pdfUrls.map(normalizeForSet));
   let completed = 0;
 
   // Get manifest
@@ -1051,7 +1144,29 @@ async function startZipDownload(categories, pdfUrls, alreadyDownloadedCategories
             continue;
           }
 
-          if (!pdfSet.has(normalizedPath) || !remainingSet.has(normalizedPath)) {
+          // Normalize path for comparison (same normalization as pdfSet)
+          const normalizedForComparison = normalizeForSet(normalizedPath);
+          
+          // Só cachear se o PDF está na lista de PDFs necessários
+          // Check both normalized and original sets for maximum compatibility
+          const isInSet = pdfSet.has(normalizedForComparison) || 
+                         pdfSetOriginal.has(normalizedPath) ||
+                         pdfSetOriginal.has(normalizedPath.replace(/^\/+/, '')) ||
+                         Array.from(pdfSetOriginal).some(url => {
+                           const urlNormalized = normalizeForSet(url);
+                           return urlNormalized === normalizedForComparison ||
+                                  urlNormalized.endsWith(normalizedForComparison) ||
+                                  normalizedForComparison.endsWith(urlNormalized);
+                         });
+          
+          const isInRemaining = remainingSet.has(normalizedForComparison) ||
+                                Array.from(remainingSet).some(rem => {
+                                  return rem === normalizedForComparison ||
+                                         rem.endsWith(normalizedForComparison) ||
+                                         normalizedForComparison.endsWith(rem);
+                                });
+          
+          if (!isInSet || !isInRemaining) {
             delete entries[entryName];
             continue;
           }

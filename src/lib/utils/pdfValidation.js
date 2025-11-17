@@ -125,6 +125,53 @@ export async function ensurePdfAvailable(pdfPath) {
 }
 
 /**
+ * Normalize path for comparison (handles encoding, case, and path variations)
+ * @param {string} path - Path to normalize
+ * @returns {string} - Normalized path
+ */
+function normalizePathForComparison(path) {
+  if (!path) return '';
+  
+  try {
+    // Remove protocol and domain if present
+    let normalized = path.replace(/^https?:\/\/[^/]+/, '');
+    
+    // Remove leading/trailing slashes
+    normalized = normalized.replace(/^\/+/, '').replace(/\/+$/, '');
+    
+    // Decode URI encoding (handle multiple encodings)
+    try {
+      // Try decoding up to 3 times to handle double/triple encoding
+      for (let i = 0; i < 3; i++) {
+        if (normalized.includes('%')) {
+          const decoded = decodeURIComponent(normalized);
+          if (decoded !== normalized) {
+            normalized = decoded;
+          } else {
+            break;
+          }
+        } else {
+          break;
+        }
+      }
+    } catch {
+      // If decoding fails, continue with original
+    }
+    
+    // Normalize to lowercase
+    normalized = normalized.toLowerCase();
+    
+    // Normalize path separators
+    normalized = normalized.replace(/\\/g, '/');
+    
+    return normalized;
+  } catch {
+    // Fallback: simple normalization
+    return path.toLowerCase().replace(/^\/+/, '').replace(/\\/g, '/');
+  }
+}
+
+/**
  * Finds missing PDFs by comparing louvores with cached PDFs
  * @param {Array} louvores - Array of louvor objects
  * @param {Array} cachedPdfs - Array of cached PDF URLs
@@ -140,19 +187,35 @@ export function findMissingPdfs(louvores, cachedPdfs) {
     return louvores.filter(l => l.pdfId);
   }
 
-  // Normalize cached PDFs for comparison
-  const normalizedCache = new Set(
-    cachedPdfs.map(url => {
-      try {
-        const urlObj = new URL(url);
-        return urlObj.pathname.replace(/^\/+/, '').toLowerCase();
-      } catch {
-        return url.replace(/^\/+/, '').toLowerCase();
+  // Normalize cached PDFs for comparison - create multiple variations
+  const normalizedCacheSet = new Set();
+  const normalizedCacheVariations = new Map(); // Map normalized -> original for debugging
+  
+  cachedPdfs.forEach(url => {
+    const normalized = normalizePathForComparison(url);
+    normalizedCacheSet.add(normalized);
+    normalizedCacheVariations.set(normalized, url);
+    
+    // Also add variations (filename only, without directory)
+    try {
+      const urlObj = new URL(url);
+      const filename = urlObj.pathname.split('/').pop();
+      if (filename) {
+        const normalizedFilename = normalizePathForComparison(filename);
+        normalizedCacheSet.add(normalizedFilename);
       }
-    })
-  );
+    } catch {
+      const parts = url.split('/');
+      const filename = parts[parts.length - 1];
+      if (filename) {
+        const normalizedFilename = normalizePathForComparison(filename);
+        normalizedCacheSet.add(normalizedFilename);
+      }
+    }
+  });
 
   const missing = [];
+  const debugInfo = []; // Collect debug info for first few misses
 
   for (const louvor of louvores) {
     if (!louvor.pdfId) {
@@ -164,15 +227,72 @@ export function findMissingPdfs(louvores, cachedPdfs) {
       continue;
     }
 
-    const normalizedPath = pdfPath.toLowerCase().replace(/^\/+/, '');
-    const isCached = normalizedCache.has(normalizedPath) ||
-      Array.from(normalizedCache).some(cached => {
-        return cached.endsWith(normalizedPath) || normalizedPath.endsWith(cached);
+    // Normalize expected path
+    const normalizedPath = normalizePathForComparison(pdfPath);
+    
+    // Check multiple matching strategies
+    let isCached = false;
+    
+    // Strategy 1: Exact match
+    if (normalizedCacheSet.has(normalizedPath)) {
+      isCached = true;
+    }
+    
+    // Strategy 2: Filename match (handle different directory structures)
+    if (!isCached) {
+      const filename = normalizedPath.split('/').pop();
+      if (filename && normalizedCacheSet.has(filename)) {
+        isCached = true;
+      }
+    }
+    
+    // Strategy 3: Partial match (check if any cached path ends with expected path or vice versa)
+    if (!isCached) {
+      isCached = Array.from(normalizedCacheSet).some(cached => {
+        // Check if paths match (handling different URL formats)
+        if (cached === normalizedPath) return true;
+        if (cached.endsWith(normalizedPath)) return true;
+        if (normalizedPath.endsWith(cached)) return true;
+        
+        // Check filename match
+        const cachedFilename = cached.split('/').pop();
+        const expectedFilename = normalizedPath.split('/').pop();
+        if (cachedFilename && expectedFilename && cachedFilename === expectedFilename) {
+          return true;
+        }
+        
+        // Check if both contain the same filename (handling encoding differences)
+        if (cachedFilename && expectedFilename) {
+          // Remove file extension and compare
+          const cachedBase = cachedFilename.replace(/\.pdf$/i, '');
+          const expectedBase = expectedFilename.replace(/\.pdf$/i, '');
+          if (cachedBase && expectedBase && cachedBase === expectedBase) {
+            return true;
+          }
+        }
+        
+        return false;
       });
+    }
 
     if (!isCached) {
       missing.push(louvor);
+      
+      // Collect debug info for first 10 missing PDFs
+      if (debugInfo.length < 10) {
+        debugInfo.push({
+          louvor: louvor.nome || louvor.pdfId,
+          expectedPath: pdfPath,
+          normalizedPath: normalizedPath,
+          sampleCached: Array.from(normalizedCacheSet).slice(0, 3)
+        });
+      }
     }
+  }
+
+  // Log debug info if there are missing PDFs
+  if (missing.length > 0 && debugInfo.length > 0) {
+    console.warn(`[PDF Validation] Found ${missing.length} missing PDFs. Sample debug info:`, debugInfo);
   }
 
   return missing;
