@@ -170,10 +170,27 @@ export async function cancelDownload() {
  */
 export async function getCachedPDFs() {
   try {
+    // Verificar se service worker está disponível
+    if (!('serviceWorker' in navigator)) {
+      console.warn('[SW Message] Service workers not supported');
+      return [];
+    }
+
+    // Aguardar service worker estar pronto (com timeout curto)
+    const isReady = await waitForServiceWorker(2000);
+    
+    if (!isReady || !navigator.serviceWorker.controller) {
+      console.warn('[SW Message] Service worker not ready, returning empty list');
+      return [];
+    }
+
     const response = await sendMessageToSW({ type: 'GET_CACHED_PDFS', data: {} });
     return response.pdfs || [];
   } catch (error) {
-    console.error('[SW Message] Failed to get cached PDFs:', error);
+    // Log apenas se for erro diferente de "no controller"
+    if (!error.message.includes('No service worker controller')) {
+      console.error('[SW Message] Failed to get cached PDFs:', error);
+    }
     return [];
   }
 }
