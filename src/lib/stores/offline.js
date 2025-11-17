@@ -414,6 +414,11 @@ async function startZipDownloadWithSpecificParts(categories, pdfUrls, partsByCat
         if (browser) {
           const { updatePdfIndexInBackground } = await import('$lib/utils/pdfIndex');
           updatePdfIndexInBackground(louvoresData);
+          
+          // Notify cache update for sync
+          const { notifyCacheUpdate, updateCacheVersion } = await import('$lib/utils/cacheSync');
+          notifyCacheUpdate({ source: 'zip-download' });
+          await updateCacheVersion();
         }
       }
 
@@ -918,6 +923,11 @@ async function startDownload(pdfUrls, selectedCategories = []) {
       const { updatePdfIndexInBackground } = await import('$lib/utils/pdfIndex');
       const louvoresData = get(louvores);
       updatePdfIndexInBackground(louvoresData);
+      
+      // Notify cache update for sync
+      const { notifyCacheUpdate, updateCacheVersion } = await import('$lib/utils/cacheSync');
+      notifyCacheUpdate({ source: 'pdf-download' });
+      await updateCacheVersion();
     }
 
   } catch (error) {

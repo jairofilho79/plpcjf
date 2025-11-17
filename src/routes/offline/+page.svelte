@@ -1,11 +1,13 @@
 <script>
   import { onMount } from 'svelte';
-  import { Download, AlertCircle, CheckCircle, Info, Package, TrendingUp } from 'lucide-svelte';
+  import { Download, AlertCircle, CheckCircle, Info, Package, TrendingUp, RefreshCw } from 'lucide-svelte';
   import { offline, isDownloading } from '$lib/stores/offline';
   import { CATEGORY_OPTIONS } from '$lib/stores/filters';
   import { louvores, loadLouvores, louvoresLoaded } from '$lib/stores/louvores';
   import OfflineRequirementsAlert from '$lib/components/OfflineRequirementsAlert.svelte';
   import OfflineIndicator from '$lib/components/OfflineIndicator.svelte';
+  import { setupCacheSync, onCacheSync, checkCacheVersionChanged, updateCacheVersion } from '$lib/utils/cacheSync';
+  import { clearPdfIndex } from '$lib/utils/pdfIndex';
 
   // Selected categories for download
   /**
@@ -32,6 +34,10 @@
   let requiredPackagesInfo = null;
   
   let isLoadingStats = false;
+  let needsSync = false;
+  let isSyncing = false;
+  let lastSyncTime = null;
+  let syncUnsubscribe = null;
 
   // Load saved categories and check downloaded categories on mount
   onMount(async () => {
@@ -53,7 +59,83 @@
     
     // Load initial stats
     await loadCategoryStats();
+    
+    // Setup cache sync listener
+    setupCacheSync();
+    syncUnsubscribe = onCacheSync(async () => {
+      needsSync = true;
+      console.log('[Offline Page] Cache sync required from another tab');
+    });
+    
+    // Listen for cache sync events
+    window.addEventListener('cache-sync-required', handleCacheSyncRequired);
+    
+    // Check for sync needed on window focus
+    window.addEventListener('focus', checkSyncOnFocus);
+    
+    // Check sync status periodically
+    const syncCheckInterval = setInterval(async () => {
+      const changed = await checkCacheVersionChanged();
+      if (changed) {
+        needsSync = true;
+      }
+    }, 30000); // Check every 30 seconds
+    
+    // Cleanup
+    return () => {
+      if (syncUnsubscribe) {
+        syncUnsubscribe();
+      }
+      window.removeEventListener('cache-sync-required', handleCacheSyncRequired);
+      window.removeEventListener('focus', checkSyncOnFocus);
+      clearInterval(syncCheckInterval);
+    };
   });
+  
+  async function handleCacheSyncRequired(event) {
+    needsSync = true;
+    console.log('[Offline Page] Cache sync required:', event.detail);
+  }
+  
+  async function checkSyncOnFocus() {
+    const changed = await checkCacheVersionChanged();
+    if (changed) {
+      needsSync = true;
+    }
+  }
+  
+  async function forceSync() {
+    if (isSyncing) return;
+    
+    isSyncing = true;
+    try {
+      console.log('[Offline Page] Forcing sync...');
+      
+      // Clear PDF index
+      clearPdfIndex();
+      
+      // Reload cached PDFs list
+      await offline.loadCachedPdfsList();
+      
+      // Reload category stats
+      await loadCategoryStats();
+      
+      // Update cache version
+      await updateCacheVersion();
+      
+      // Update downloaded categories
+      downloadedCategories = await offline.checkAndUpdateDownloadedCategories();
+      
+      lastSyncTime = new Date();
+      needsSync = false;
+      
+      console.log('[Offline Page] Sync completed');
+    } catch (error) {
+      console.error('[Offline Page] Sync error:', error);
+    } finally {
+      isSyncing = false;
+    }
+  }
 
   // Load category availability statistics
   async function loadCategoryStats() {
@@ -245,6 +327,29 @@
   <!-- Body -->
   <div class="page-body">
     {#if !downloading && progress < 100}
+
+      <!-- Sync banner -->
+      {#if needsSync}
+        <div class="sync-banner">
+          <div class="sync-banner-content">
+            <AlertCircle class="w-4 h-4 sync-icon" />
+            <span class="sync-text">Os dados podem estar desatualizados</span>
+            <button 
+              class="sync-button" 
+              on:click={forceSync} 
+              disabled={isSyncing}
+            >
+              {#if isSyncing}
+                <RefreshCw class="w-4 h-4 spinning" />
+                <span>Sincronizando...</span>
+              {:else}
+                <RefreshCw class="w-4 h-4" />
+                <span>Sincronizar Agora</span>
+              {/if}
+            </button>
+          </div>
+        </div>
+      {/if}
 
       <!-- Overall availability summary -->
       {#if totalStats.total > 0}

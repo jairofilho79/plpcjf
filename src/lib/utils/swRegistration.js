@@ -239,3 +239,44 @@ export function getRegistration() {
   return swRegistration;
 }
 
+/**
+ * Setup Service Worker message listener for cache updates
+ * @returns {Function} Cleanup function
+ */
+export function setupServiceWorkerMessageListener() {
+  if (!('serviceWorker' in navigator)) {
+    return () => {};
+  }
+
+  const messageHandler = async (event) => {
+    if (event.data && event.data.type === 'CACHE_UPDATED') {
+      console.log('[SW Registration] Cache updated notification received from Service Worker');
+      
+      // Import and notify cache sync system
+      const { notifyCacheUpdate, updateCacheVersion } = await import('$lib/utils/cacheSync');
+      notifyCacheUpdate({ source: 'service-worker' });
+      
+      // Update cache version
+      await updateCacheVersion();
+      
+      // Dispatch custom event for components
+      if (typeof window !== 'undefined' && window.dispatchEvent) {
+        window.dispatchEvent(new CustomEvent('cache-sync-required', {
+          detail: { 
+            source: 'service-worker', 
+            timestamp: event.data.timestamp,
+            cleared: event.data.cleared || false
+          }
+        }));
+      }
+    }
+  };
+
+  navigator.serviceWorker.addEventListener('message', messageHandler);
+
+  // Return cleanup function
+  return () => {
+    navigator.serviceWorker.removeEventListener('message', messageHandler);
+  };
+}
+

@@ -96,13 +96,15 @@ self.addEventListener('fetch', (event) => {
           return fetch(event.request)
             .then(response => {
               // Only cache successful responses
-              if (response && response.status === 200) {
-                const responseClone = response.clone();
-                caches.open(PDF_CACHE).then(cache => {
-                  cache.put(event.request, responseClone);
-                  console.log('[SW] Cached PDF:', url.pathname);
-                });
-              }
+            if (response && response.status === 200) {
+              const responseClone = response.clone();
+              caches.open(PDF_CACHE).then(cache => {
+                cache.put(event.request, responseClone);
+                console.log('[SW] Cached PDF:', url.pathname);
+                // Notify clients that cache was updated
+                notifyClientsCacheUpdated();
+              });
+            }
               return response;
             })
             .catch(err => {
@@ -306,6 +308,8 @@ async function handleDownloadPDFs(event, data) {
             
             if (response && response.status === 200) {
               await cache.put(request, response);
+              // Notify clients that cache was updated
+              notifyClientsCacheUpdated();
               return { success: true, url: pdfUrl };
             } else {
               throw new Error(`HTTP ${response.status}`);
@@ -405,6 +409,8 @@ async function handleClearCache(event) {
     await caches.delete(PDF_CACHE);
     await caches.delete(APP_CACHE);
     console.log('[SW] All caches cleared');
+    // Notify clients that cache was cleared
+    notifyClientsCacheUpdated({ cleared: true });
     event.ports[0].postMessage({ type: 'CACHE_CLEARED' });
   } catch (err) {
     console.error('[SW] Error clearing cache:', err);
@@ -412,6 +418,23 @@ async function handleClearCache(event) {
       type: 'ERROR',
       error: err.message
     });
+  }
+}
+
+// Notify all clients that cache was updated
+async function notifyClientsCacheUpdated(data = {}) {
+  try {
+    const clients = await self.clients.matchAll({ includeUncontrolled: true });
+    clients.forEach(client => {
+      client.postMessage({
+        type: 'CACHE_UPDATED',
+        timestamp: Date.now(),
+        ...data
+      });
+    });
+    console.log(`[SW] Notified ${clients.length} client(s) of cache update`);
+  } catch (err) {
+    console.error('[SW] Failed to notify clients:', err);
   }
 }
 

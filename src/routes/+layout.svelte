@@ -6,7 +6,8 @@
   import { goto } from '$app/navigation';
   import { CloudOff } from 'lucide-svelte';
   import OfflineIndicator from '$lib/components/OfflineIndicator.svelte';
-  import { registerServiceWorker } from '$lib/utils/swRegistration';
+  import { registerServiceWorker, setupServiceWorkerMessageListener } from '$lib/utils/swRegistration';
+  import { setupCacheSync } from '$lib/utils/cacheSync';
   
   // Handle overflow for /leitor route
   $: if (browser && $page.url.pathname.startsWith('/leitor')) {
@@ -17,10 +18,16 @@
     document.body.style.overflow = '';
   }
   
-  // Register service worker on mount
+  // Register service worker and setup sync on mount
   onMount(() => {
     if (browser) {
-      registerServiceWorker();
+      registerServiceWorker().then(() => {
+        // Setup Service Worker message listener
+        setupServiceWorkerMessageListener();
+        
+        // Setup BroadcastChannel for cross-tab sync
+        setupCacheSync();
+      });
     }
   });
   
