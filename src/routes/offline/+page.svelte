@@ -37,6 +37,7 @@
   let needsSync = false;
   let isSyncing = false;
   let lastSyncTime = null;
+  /** @type {(() => void) | null} */
   let syncUnsubscribe = null;
 
   // Load saved categories and check downloaded categories on mount
@@ -62,10 +63,11 @@
     
     // Setup cache sync listener
     setupCacheSync();
-    syncUnsubscribe = onCacheSync(async () => {
+    const unsubscribe = onCacheSync(() => {
       needsSync = true;
       console.log('[Offline Page] Cache sync required from another tab');
     });
+    syncUnsubscribe = unsubscribe;
     
     // Listen for cache sync events
     window.addEventListener('cache-sync-required', handleCacheSyncRequired);
@@ -92,9 +94,14 @@
     };
   });
   
-  async function handleCacheSyncRequired(event) {
+  /**
+   * @param {Event} event
+   */
+  function handleCacheSyncRequired(event) {
     needsSync = true;
-    console.log('[Offline Page] Cache sync required:', event.detail);
+    if (event instanceof CustomEvent) {
+      console.log('[Offline Page] Cache sync required:', event.detail);
+    }
   }
   
   async function checkSyncOnFocus() {
@@ -144,7 +151,8 @@
     isLoadingStats = true;
     try {
       const state = $offline;
-      let cachedPdfs = state.cachedPdfs;
+      /** @type {string[]} */
+      let cachedPdfs = state.cachedPdfs || [];
       
       // Ensure cached PDFs are loaded
       if (!cachedPdfs || cachedPdfs.length === 0) {
@@ -154,6 +162,7 @@
       }
       
       // Get stats for each category
+      /** @type {Record<string, {total: number, available: number, missing: number, percentage: number}>} */
       const stats = {};
       for (const category of CATEGORY_OPTIONS) {
         stats[category] = await offline.getCategoryAvailabilityStats(
@@ -216,7 +225,8 @@
   }
 
   // React to category selection changes (debounced to avoid excessive calls)
-  let categorySelectionTimeout;
+  /** @type {ReturnType<typeof setTimeout> | null} */
+  let categorySelectionTimeout = null;
   $: if (selectedCategories.length > 0 && $louvores.length > 0 && !isLoadingStats) {
     if (categorySelectionTimeout) {
       clearTimeout(categorySelectionTimeout);
@@ -238,7 +248,7 @@
   $: categorySizes = state.categorySizes || {};
   
   // Calculate total availability stats
-  $: totalStats = Object.values(categoryStats).reduce((acc, stats) => {
+  $: totalStats = Object.values(categoryStats).reduce((/** @type {{total: number, available: number, missing: number}} */ acc, stats) => {
     return {
       total: acc.total + stats.total,
       available: acc.available + stats.available,
@@ -668,6 +678,13 @@
     cursor: pointer;
     transition: all 0.2s;
   }
+  
+  /* Garantir que textos em category-item tenham contraste adequado */
+  .category-item .category-label,
+  .category-item .category-stats,
+  .category-item .category-size {
+    color: var(--text-dark);
+  }
 
   .category-item:hover {
     border-color: var(--gold-color);
@@ -695,7 +712,7 @@
 
   .category-size {
     font-size: 0.8125rem;
-    color: #6c757d;
+    color: #495057;
     font-weight: 500;
   }
   
@@ -726,7 +743,35 @@
   }
 
   .category-item:has(input[type="checkbox"]:checked) .category-label {
-    color: var(--light-gold);
+    color: var(--text-light);
+  }
+  
+  /* Garantir contraste nos textos quando selecionado */
+  .category-item:has(input[type="checkbox"]:checked) .category-stats,
+  .category-item:has(input[type="checkbox"]:checked) .stat-text {
+    color: var(--text-light);
+  }
+  
+  .category-item:has(input[type="checkbox"]:checked) .missing-text {
+    color: #ff6b6b;
+  }
+  
+  .category-item:has(input[type="checkbox"]:checked) .category-size {
+    color: var(--text-light);
+    opacity: 0.9;
+  }
+  
+  /* Ajustar badges quando selecionado */
+  .category-item:has(input[type="checkbox"]:checked) .partial-badge {
+    background-color: rgba(255, 193, 7, 0.3);
+    border-color: rgba(255, 193, 7, 0.6);
+    color: #ffd700;
+  }
+  
+  .category-item:has(input[type="checkbox"]:checked) .downloaded-badge {
+    background-color: rgba(212, 175, 55, 0.3);
+    border: 1px solid rgba(212, 175, 55, 0.6);
+    color: var(--gold-color);
   }
 
   /* Downloaded category styles */
@@ -753,11 +798,12 @@
   
   .partial-badge {
     font-size: 0.75rem;
-    color: #ffc107;
+    color: #856404;
     font-weight: 600;
     padding: 0.25rem 0.5rem;
-    background-color: rgba(255, 193, 7, 0.1);
+    background-color: rgba(255, 193, 7, 0.25);
     border-radius: 0.25rem;
+    border: 1px solid rgba(255, 193, 7, 0.4);
   }
   
   .category-header {
@@ -773,8 +819,8 @@
     align-items: center;
     gap: 0.5rem;
     font-size: 0.8125rem;
-    color: var(--text-light);
-    opacity: 0.9;
+    color: var(--text-dark);
+    opacity: 0.85;
     margin: 0.5rem 0;
   }
   
@@ -813,11 +859,16 @@
   
   /* Availability summary styles */
   .availability-summary {
-    background: linear-gradient(135deg, var(--background-color) 0%, var(--placeholder-color) 100%);
+    background-color: var(--background-color);
     border: 2px solid var(--gold-color);
     border-radius: 0.75rem;
     padding: 1.5rem;
     margin-bottom: 1.5rem;
+  }
+  
+  /* Garantir contraste no summary */
+  .availability-summary .summary-title {
+    color: var(--text-light);
   }
   
   .summary-header {
@@ -829,6 +880,27 @@
   
   .summary-icon {
     color: var(--gold-color);
+  }
+  
+  /* Ajustar cores dos stat items para fundo escuro */
+  .availability-summary .stat-item {
+    background-color: rgba(212, 175, 55, 0.15);
+    border: 1px solid rgba(212, 175, 55, 0.4);
+  }
+  
+  .availability-summary .stat-value,
+  .availability-summary .stat-label {
+    color: var(--text-light);
+  }
+  
+  .availability-summary .stat-item.highlight {
+    background-color: var(--gold-color);
+    border-color: var(--gold-color);
+  }
+  
+  .availability-summary .stat-item.highlight .stat-value,
+  .availability-summary .stat-item.highlight .stat-label {
+    color: var(--text-dark);
   }
   
   .summary-title {
@@ -850,9 +922,9 @@
     flex-direction: column;
     align-items: center;
     padding: 0.75rem;
-    background-color: var(--background-color);
+    background-color: rgba(255, 255, 255, 0.1);
     border-radius: 0.5rem;
-    border: 1px solid var(--placeholder-color);
+    border: 1px solid rgba(212, 175, 55, 0.3);
   }
   
   .stat-item.highlight {
@@ -863,7 +935,7 @@
   .stat-value {
     font-size: 1.5rem;
     font-weight: 700;
-    color: var(--text-light);
+    color: var(--text-dark);
   }
   
   .stat-item.highlight .stat-value {
@@ -872,14 +944,14 @@
   
   .stat-label {
     font-size: 0.75rem;
-    color: var(--text-light);
-    opacity: 0.8;
+    color: var(--text-dark);
+    opacity: 0.85;
     margin-top: 0.25rem;
   }
   
   .stat-item.highlight .stat-label {
     color: var(--text-dark);
-    opacity: 0.9;
+    opacity: 0.95;
   }
   
   .summary-progress-bar {
