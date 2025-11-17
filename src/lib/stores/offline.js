@@ -794,6 +794,67 @@ async function downloadMissingPackages(missingPdfs) {
 }
 
 /**
+ * Get availability statistics for a category
+ * @param {string} category - Category name
+ * @param {Array} louvoresData - All louvores
+ * @param {Array} cachedPdfs - Cached PDF URLs
+ * @returns {Promise<{total: number, available: number, missing: number, percentage: number}>}
+ */
+async function getCategoryAvailabilityStats(category, louvoresData, cachedPdfs) {
+  if (!category || !louvoresData || !cachedPdfs) {
+    return { total: 0, available: 0, missing: 0, percentage: 0 };
+  }
+
+  const categoryLouvores = louvoresData.filter(l => l.categoria === category);
+  const total = categoryLouvores.length;
+  
+  if (total === 0) {
+    return { total: 0, available: 0, missing: 0, percentage: 0 };
+  }
+
+  const missing = identifyMissingPdfs(categoryLouvores, cachedPdfs);
+  const available = total - missing.length;
+  const percentage = total > 0 ? Math.round((available / total) * 100) : 0;
+
+  return { total, available, missing: missing.length, percentage };
+}
+
+/**
+ * Get required packages info for selected categories
+ * @param {Array} categories - Selected categories
+ * @param {Array} louvoresData - All louvores
+ * @param {Array} cachedPdfs - Cached PDF URLs
+ * @param {Object} manifest - Offline manifest
+ * @returns {Promise<{totalParts: number, totalSize: number, partsByCategory: Object}>}
+ */
+async function getRequiredPackagesInfo(categories, louvoresData, cachedPdfs, manifest) {
+  if (!categories || categories.length === 0 || !manifest) {
+    return { totalParts: 0, totalSize: 0, partsByCategory: {} };
+  }
+
+  const filteredLouvores = louvoresData.filter(l => categories.includes(l.categoria));
+  const missingPdfs = identifyMissingPdfs(filteredLouvores, cachedPdfs);
+  const requiredParts = findRequiredPackagesForMissing(missingPdfs, manifest);
+
+  const partsByCategory = {};
+  let totalSize = 0;
+
+  for (const part of requiredParts) {
+    if (!partsByCategory[part.category]) {
+      partsByCategory[part.category] = [];
+    }
+    partsByCategory[part.category].push(part);
+    totalSize += part.size || 0;
+  }
+
+  return {
+    totalParts: requiredParts.length,
+    totalSize,
+    partsByCategory
+  };
+}
+
+/**
  * Start downloading PDFs
  */
 async function startDownload(pdfUrls, selectedCategories = []) {
@@ -1417,7 +1478,9 @@ export const offline = {
   fetchOfflineManifest,
   identifyMissingPdfs,
   findRequiredPackagesForMissing,
-  downloadMissingPackages
+  downloadMissingPackages,
+  getCategoryAvailabilityStats,
+  getRequiredPackagesInfo
 };
 
 // Derived store for offline status

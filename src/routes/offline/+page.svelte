@@ -1,6 +1,6 @@
 <script>
   import { onMount } from 'svelte';
-  import { Download, AlertCircle, CheckCircle, Info } from 'lucide-svelte';
+  import { Download, AlertCircle, CheckCircle, Info, Package, TrendingUp } from 'lucide-svelte';
   import { offline, isDownloading } from '$lib/stores/offline';
   import { CATEGORY_OPTIONS } from '$lib/stores/filters';
   import { louvores, loadLouvores, louvoresLoaded } from '$lib/stores/louvores';
@@ -18,6 +18,20 @@
      * @type {string[]}
      */
   let downloadedCategories = [];
+  
+  // Category availability stats
+  /**
+     * @type {Record<string, {total: number, available: number, missing: number, percentage: number}>}
+     */
+  let categoryStats = {};
+  
+  // Required packages info
+  /**
+     * @type {{totalParts: number, totalSize: number, partsByCategory: Object} | null}
+     */
+  let requiredPackagesInfo = null;
+  
+  let isLoadingStats = false;
 
   // Load saved categories and check downloaded categories on mount
   onMount(async () => {
@@ -36,7 +50,61 @@
     // Merge downloaded categories with saved categories, ensuring downloaded ones are included
     const allCategories = [...new Set([...selectedCategories, ...downloadedCategories])];
     selectedCategories = allCategories;
+    
+    // Load initial stats
+    await loadCategoryStats();
   });
+
+  // Load category availability statistics
+  async function loadCategoryStats() {
+    if (!$louvores.length) return;
+    
+    isLoadingStats = true;
+    try {
+      const state = $offline;
+      let cachedPdfs = state.cachedPdfs;
+      
+      // Ensure cached PDFs are loaded
+      if (!cachedPdfs || cachedPdfs.length === 0) {
+        await offline.loadCachedPdfsList();
+        const updatedState = $offline;
+        cachedPdfs = updatedState.cachedPdfs || [];
+      }
+      
+      // Get stats for each category
+      const stats = {};
+      for (const category of CATEGORY_OPTIONS) {
+        stats[category] = await offline.getCategoryAvailabilityStats(
+          category,
+          $louvores,
+          cachedPdfs
+        );
+      }
+      categoryStats = stats;
+      
+      // Get required packages info for selected categories
+      if (selectedCategories.length > 0) {
+        let manifest = state.offlineManifest;
+        if (!manifest) {
+          manifest = await offline.fetchOfflineManifest();
+        }
+        if (manifest) {
+          requiredPackagesInfo = await offline.getRequiredPackagesInfo(
+            selectedCategories,
+            $louvores,
+            cachedPdfs,
+            manifest
+          );
+        }
+      } else {
+        requiredPackagesInfo = null;
+      }
+    } catch (error) {
+      console.error('[Offline Page] Failed to load stats:', error);
+    } finally {
+      isLoadingStats = false;
+    }
+  }
 
   // Track download completion to update categories
   let lastCompletedCount = 0;
@@ -59,8 +127,21 @@
             selectedCategories = [...selectedCategories, cat];
           }
         });
+        // Reload stats after download
+        await loadCategoryStats();
       }
     }, 1000);
+  }
+
+  // React to category selection changes (debounced to avoid excessive calls)
+  let categorySelectionTimeout;
+  $: if (selectedCategories.length > 0 && $louvores.length > 0 && !isLoadingStats) {
+    if (categorySelectionTimeout) {
+      clearTimeout(categorySelectionTimeout);
+    }
+    categorySelectionTimeout = setTimeout(() => {
+      loadCategoryStats();
+    }, 300);
   }
 
   // Get current offline state
@@ -73,6 +154,19 @@
   $: failed = state.failed || 0;
   $: total = state.total || 0;
   $: categorySizes = state.categorySizes || {};
+  
+  // Calculate total availability stats
+  $: totalStats = Object.values(categoryStats).reduce((acc, stats) => {
+    return {
+      total: acc.total + stats.total,
+      available: acc.available + stats.available,
+      missing: acc.missing + stats.missing
+    };
+  }, { total: 0, available: 0, missing: 0 });
+  
+  $: overallPercentage = totalStats.total > 0 
+    ? Math.round((totalStats.available / totalStats.total) * 100) 
+    : 0;
   
   /**
    * Format bytes to human readable size
@@ -152,6 +246,40 @@
   <div class="page-body">
     {#if !downloading && progress < 100}
 
+      <!-- Overall availability summary -->
+      {#if totalStats.total > 0}
+        <div class="availability-summary">
+          <div class="summary-header">
+            <TrendingUp class="w-5 h-5 summary-icon" />
+            <h3 class="summary-title">Disponibilidade Geral</h3>
+          </div>
+          <div class="summary-stats">
+            <div class="stat-item">
+              <span class="stat-value">{totalStats.available}</span>
+              <span class="stat-label">Disponíveis</span>
+            </div>
+            <div class="stat-item">
+              <span class="stat-value">{totalStats.missing}</span>
+              <span class="stat-label">Faltantes</span>
+            </div>
+            <div class="stat-item">
+              <span class="stat-value">{totalStats.total}</span>
+              <span class="stat-label">Total</span>
+            </div>
+            <div class="stat-item highlight">
+              <span class="stat-value">{overallPercentage}%</span>
+              <span class="stat-label">Completo</span>
+            </div>
+          </div>
+          <div class="summary-progress-bar">
+            <div 
+              class="summary-progress-fill" 
+              style="width: {overallPercentage}%"
+            ></div>
+          </div>
+        </div>
+      {/if}
+
       <!-- Info about category persistence and cache limitation -->
       <div class="info-box">
         <Info class="w-5 h-5 info-icon" />
@@ -190,7 +318,10 @@
             {@const isSelected = selectedCategories.includes(category)}
             {@const categorySize = ((/** @type {Record<string, number>} */ (categorySizes))[category] || 0)}
             {@const isDownloaded = downloadedCategories.includes(category)}
-            <label class="category-item" class:downloaded={isDownloaded}>
+            {@const stats = categoryStats[category] || { total: 0, available: 0, missing: 0, percentage: 0 }}
+            {@const isComplete = stats.percentage === 100}
+            
+            <label class="category-item" class:downloaded={isDownloaded} class:complete={isComplete}>
               <input
                 type="checkbox"
                 checked={isSelected}
@@ -198,17 +329,66 @@
                 disabled={downloading || isDownloaded}
               />
               <div class="category-info">
-                <span class="category-label">{category}</span>
+                <div class="category-header">
+                  <span class="category-label">{category}</span>
+                  {#if isDownloaded || isComplete}
+                    <span class="downloaded-badge">✓ Completo</span>
+                  {:else if stats.missing > 0}
+                    <span class="partial-badge">{stats.percentage}% disponível</span>
+                  {/if}
+                </div>
+                
+                <!-- Availability stats -->
+                {#if stats.total > 0}
+                  <div class="category-stats">
+                    <span class="stat-text">
+                      {stats.available} de {stats.total} PDFs disponíveis
+                    </span>
+                    {#if stats.missing > 0}
+                      <span class="missing-text">({stats.missing} faltantes)</span>
+                    {/if}
+                  </div>
+                  
+                  <!-- Progress bar per category -->
+                  <div class="category-progress-bar">
+                    <div 
+                      class="category-progress-fill" 
+                      style="width: {stats.percentage}%"
+                      class:complete={isComplete}
+                    ></div>
+                  </div>
+                {/if}
+                
                 {#if categorySize > 0}
                   <span class="category-size">{formatSize(categorySize)}</span>
-                {/if}
-                {#if isDownloaded}
-                  <span class="downloaded-badge">Já baixada</span>
                 {/if}
               </div>
             </label>
           {/each}
         </div>
+        
+        <!-- Required packages info -->
+        {#if requiredPackagesInfo && requiredPackagesInfo.totalParts > 0}
+          <div class="packages-info">
+            <Package class="w-5 h-5 packages-icon" />
+            <div class="packages-content">
+              <p class="packages-title">Lotes necessários para download</p>
+              <p class="packages-text">
+                Serão baixados <strong>{requiredPackagesInfo.totalParts} lotes</strong> 
+                ({formatSize(requiredPackagesInfo.totalSize)}) contendo os PDFs faltantes.
+              </p>
+              {#if Object.keys(requiredPackagesInfo.partsByCategory).length > 0}
+                <div class="packages-breakdown">
+                  {#each Object.entries(requiredPackagesInfo.partsByCategory) as [category, parts]}
+                    <div class="package-category">
+                      <strong>{category}:</strong> {parts.length} lote(s)
+                    </div>
+                  {/each}
+                </div>
+              {/if}
+            </div>
+          </div>
+        {/if}
         
         {#if selectedCategories.length > 0 && totalSelectedSize > 0}
           <div class="total-size-info">
@@ -461,7 +641,205 @@
     font-size: 0.75rem;
     color: var(--gold-color);
     font-weight: 600;
+    padding: 0.25rem 0.5rem;
+    background-color: rgba(212, 175, 55, 0.1);
+    border-radius: 0.25rem;
+  }
+  
+  .partial-badge {
+    font-size: 0.75rem;
+    color: #ffc107;
+    font-weight: 600;
+    padding: 0.25rem 0.5rem;
+    background-color: rgba(255, 193, 7, 0.1);
+    border-radius: 0.25rem;
+  }
+  
+  .category-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+    margin-bottom: 0.5rem;
+  }
+  
+  .category-stats {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.8125rem;
+    color: var(--text-light);
+    opacity: 0.9;
+    margin: 0.5rem 0;
+  }
+  
+  .stat-text {
+    font-weight: 500;
+  }
+  
+  .missing-text {
+    color: #dc3545;
+    font-weight: 600;
+  }
+  
+  .category-progress-bar {
+    width: 100%;
+    height: 0.5rem;
+    background-color: var(--background-color);
+    border-radius: 0.25rem;
+    overflow: hidden;
+    margin: 0.5rem 0;
+    border: 1px solid var(--placeholder-color);
+  }
+  
+  .category-progress-fill {
+    height: 100%;
+    background: linear-gradient(90deg, var(--gold-color), #ffd700);
+    transition: width 0.3s ease;
+  }
+  
+  .category-progress-fill.complete {
+    background: linear-gradient(90deg, #28a745, #20c997);
+  }
+  
+  .category-item.complete {
+    border-color: #28a745;
+  }
+  
+  /* Availability summary styles */
+  .availability-summary {
+    background: linear-gradient(135deg, var(--background-color) 0%, var(--placeholder-color) 100%);
+    border: 2px solid var(--gold-color);
+    border-radius: 0.75rem;
+    padding: 1.5rem;
+    margin-bottom: 1.5rem;
+  }
+  
+  .summary-header {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-bottom: 1rem;
+  }
+  
+  .summary-icon {
+    color: var(--gold-color);
+  }
+  
+  .summary-title {
+    font-size: 1.125rem;
+    font-weight: 700;
+    color: var(--text-light);
+    margin: 0;
+  }
+  
+  .summary-stats {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+    gap: 1rem;
+    margin-bottom: 1rem;
+  }
+  
+  .stat-item {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 0.75rem;
+    background-color: var(--background-color);
+    border-radius: 0.5rem;
+    border: 1px solid var(--placeholder-color);
+  }
+  
+  .stat-item.highlight {
+    background-color: var(--gold-color);
+    border-color: var(--gold-color);
+  }
+  
+  .stat-value {
+    font-size: 1.5rem;
+    font-weight: 700;
+    color: var(--text-light);
+  }
+  
+  .stat-item.highlight .stat-value {
+    color: var(--text-dark);
+  }
+  
+  .stat-label {
+    font-size: 0.75rem;
+    color: var(--text-light);
+    opacity: 0.8;
     margin-top: 0.25rem;
+  }
+  
+  .stat-item.highlight .stat-label {
+    color: var(--text-dark);
+    opacity: 0.9;
+  }
+  
+  .summary-progress-bar {
+    width: 100%;
+    height: 1rem;
+    background-color: var(--background-color);
+    border-radius: 0.5rem;
+    overflow: hidden;
+    border: 1px solid var(--placeholder-color);
+  }
+  
+  .summary-progress-fill {
+    height: 100%;
+    background: linear-gradient(90deg, var(--gold-color), #ffd700);
+    transition: width 0.3s ease;
+  }
+  
+  /* Packages info styles */
+  .packages-info {
+    display: flex;
+    gap: 1rem;
+    padding: 1rem;
+    background-color: #e7f3ff;
+    border: 2px solid #17a2b8;
+    border-radius: 0.5rem;
+    margin-top: 1rem;
+  }
+  
+  .packages-icon {
+    color: #17a2b8;
+    flex-shrink: 0;
+    margin-top: 0.125rem;
+  }
+  
+  .packages-content {
+    flex: 1;
+  }
+  
+  .packages-title {
+    font-weight: 700;
+    color: #0c5460;
+    margin: 0 0 0.5rem 0;
+    font-size: 0.9375rem;
+  }
+  
+  .packages-text {
+    color: #0c5460;
+    margin: 0 0 0.5rem 0;
+    font-size: 0.875rem;
+    line-height: 1.5;
+  }
+  
+  .packages-breakdown {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    margin-top: 0.5rem;
+  }
+  
+  .package-category {
+    font-size: 0.8125rem;
+    color: #0c5460;
+    padding: 0.25rem 0.5rem;
+    background-color: rgba(23, 162, 184, 0.1);
+    border-radius: 0.25rem;
   }
 
   /* Progress section */
