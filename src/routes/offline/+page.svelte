@@ -39,10 +39,33 @@
   let lastSyncTime = null;
   /** @type {(() => void) | null} */
   let syncUnsubscribe = null;
+  
+  // Variáveis para sistema híbrido de atualização
+  /** @type {Array<{priority: 'high' | 'normal', timestamp: number}>} */
+  let statsUpdateQueue = [];
+  let isProcessingStatsUpdate = false;
+  let lastCachedCount = 0;
+  let lastCachedPdfsHash = '';
+  /** @type {(() => void) | null} */
+  let offlineUnsubscribe = null;
+  /** @type {ReturnType<typeof setInterval> | null} */
+  let pollInterval = null;
+  /** @type {ReturnType<typeof setInterval> | null} */
+  let syncCheckInterval = null;
+  
+  // Handlers para cleanup
+  /** @type {((event: Event) => void) | null} */
+  let handleCacheUpdated = null;
+  /** @type {(() => void) | null} */
+  let handleWindowFocus = null;
+  /** @type {(() => void) | null} */
+  let handleVisibilityChange = null;
 
   // Load saved categories and check downloaded categories on mount
-  onMount(async () => {
-    await loadLouvores();
+  onMount(() => {
+    // Inicialização assíncrona
+    (async () => {
+      await loadLouvores();
 
     // Check and update downloaded categories based on cache
     downloadedCategories = await offline.checkAndUpdateDownloadedCategories();
@@ -64,36 +87,187 @@
     // Validate and clear error if no longer relevant
     await offline.validateAndClearError();
     
-    // Setup cache sync listener
-    setupCacheSync();
-    const unsubscribe = onCacheSync(() => {
-      needsSync = true;
-      console.log('[Offline Page] Cache sync required from another tab');
-    });
-    syncUnsubscribe = unsubscribe;
-    
-    // Listen for cache sync events
-    window.addEventListener('cache-sync-required', handleCacheSyncRequired);
-    
-    // Check for sync needed on window focus
-    window.addEventListener('focus', checkSyncOnFocus);
-    
-    // Check sync status periodically
-    const syncCheckInterval = setInterval(async () => {
-      const changed = await checkCacheVersionChanged();
-      if (changed) {
+      // Setup cache sync listener
+      setupCacheSync();
+      const unsubscribe = onCacheSync(() => {
         needsSync = true;
-      }
-    }, 30000); // Check every 30 seconds
+        console.log('[Offline Page] Cache sync required from another tab');
+      });
+      syncUnsubscribe = /** @type {(() => void) | null} */ (unsubscribe) || null;
+      
+      // Listen for cache sync events
+      window.addEventListener('cache-sync-required', handleCacheSyncRequired);
+      
+      // Check for sync needed on window focus
+      window.addEventListener('focus', checkSyncOnFocus);
+      
+      // Check sync status periodically
+      syncCheckInterval = setInterval(async () => {
+        const changed = await checkCacheVersionChanged();
+        if (changed) {
+          needsSync = true;
+        }
+      }, 30000); // Check every 30 seconds
+      
+      // ============================================
+      // SOLUÇÃO 5: Sistema Híbrido de Atualização Automática
+      // ============================================
     
-    // Cleanup
+    /**
+     * Função centralizada para atualizar stats com rate limiting
+     * @param {'high' | 'normal'} priority
+     */
+    async function refreshStats(priority = 'normal') {
+      const now = Date.now();
+      const state = $offline;
+      /** @type {string[]} */
+      const cachedPdfs = state.cachedPdfs || [];
+      const currentCount = state.cachedCount || 0;
+      
+      // Criar hash rápido dos PDFs para detectar mudanças
+      const currentHash = cachedPdfs.length > 0 
+        ? cachedPdfs.slice(0, 10).map((/** @type {string} */ url) => url.split('/').pop()).join('|')
+        : '';
+      
+      // Verificar se realmente houve mudança
+      if (currentCount === lastCachedCount && currentHash === lastCachedPdfsHash && priority !== 'high') {
+        return; // Sem mudanças, não precisa atualizar
+      }
+      
+      lastCachedCount = currentCount;
+      lastCachedPdfsHash = currentHash;
+      
+      try {
+        await loadCategoryStats(priority === 'high');
+        const newCats = await offline.checkAndUpdateDownloadedCategories();
+        downloadedCategories = newCats;
+        console.log('[Offline Page] Stats refreshed automatically');
+      } catch (error) {
+        console.error('[Offline Page] Error refreshing stats:', error);
+      }
+    }
+    
+    /**
+     * Processar fila de atualizações
+     */
+    async function processStatsUpdateQueue() {
+      if (isProcessingStatsUpdate || statsUpdateQueue.length === 0) return;
+      
+      isProcessingStatsUpdate = true;
+      
+      // Processar item de maior prioridade
+      statsUpdateQueue.sort((a, b) => {
+        if (a.priority === 'high') return -1;
+        if (b.priority === 'high') return 1;
+        return a.timestamp - b.timestamp;
+      });
+      
+      const update = statsUpdateQueue.shift();
+      if (!update) {
+        isProcessingStatsUpdate = false;
+        return;
+      }
+      
+      statsUpdateQueue = []; // Limpar fila (só processar o mais recente)
+      
+      try {
+        await refreshStats(update.priority);
+      } finally {
+        isProcessingStatsUpdate = false;
+        
+        // Processar próximo se houver
+        if (statsUpdateQueue.length > 0) {
+          setTimeout(processStatsUpdateQueue, 500);
+        }
+      }
+    }
+    
+    /**
+     * Adicionar atualização à fila
+     * @param {'high' | 'normal'} priority
+     */
+    function queueStatsUpdate(priority = 'normal') {
+      statsUpdateQueue.push({ priority, timestamp: Date.now() });
+      if (!isProcessingStatsUpdate) {
+        // Debounce: processar após 300ms
+        setTimeout(processStatsUpdateQueue, 300);
+      }
+    }
+    
+    // ESTRATÉGIA 1: Subscription ao store offline (reativo)
+    offlineUnsubscribe = offline.subscribe((state) => {
+      // Detectar mudança em cachedCount ou cachedPdfs
+      const currentCount = state.cachedCount || 0;
+      if (currentCount !== lastCachedCount && currentCount > 0) {
+        queueStatsUpdate('normal');
+      }
+    });
+    
+      // ESTRATÉGIA 2: Event listeners (event-driven)
+      handleCacheUpdated = (/** @type {Event} */ event) => {
+        const customEvent = event instanceof CustomEvent ? event : null;
+        console.log('[Offline Page] Cache updated event received:', customEvent?.detail?.source);
+        queueStatsUpdate('high'); // Alta prioridade para eventos
+      };
+      
+      window.addEventListener('offline-cache-updated', handleCacheUpdated);
+      window.addEventListener('cache-sync-required', handleCacheUpdated);
+      
+      // ESTRATÉGIA 3: Polling de fallback (garantia)
+      pollInterval = setInterval(() => {
+        const state = $offline;
+        if (state.cachedCount > 0 && !isProcessingStatsUpdate) {
+          // Verificar se há mudanças sem atualizar (só verificar hash)
+          /** @type {string[]} */
+          const cachedPdfs = state.cachedPdfs || [];
+          const currentHash = cachedPdfs.length > 0 
+            ? cachedPdfs.slice(0, 10).map((/** @type {string} */ url) => url.split('/').pop()).join('|')
+            : '';
+          
+          if (currentHash !== lastCachedPdfsHash) {
+            queueStatsUpdate('normal');
+          }
+        }
+      }, 5000); // A cada 5 segundos como fallback
+      
+      // ESTRATÉGIA 4: Visibility change (quando usuário volta à aba)
+      handleVisibilityChange = () => {
+        if (!document.hidden) {
+          console.log('[Offline Page] Page visible, refreshing stats...');
+          queueStatsUpdate('high'); // Alta prioridade quando usuário volta
+        }
+      };
+      document.addEventListener('visibilitychange', handleVisibilityChange);
+      
+      // ESTRATÉGIA 5: Focus event (quando janela ganha foco)
+      handleWindowFocus = () => {
+        queueStatsUpdate('normal');
+      };
+      window.addEventListener('focus', handleWindowFocus);
+    })();
+    
+    // Retornar função de cleanup síncrona
     return () => {
       if (syncUnsubscribe) {
         syncUnsubscribe();
       }
+      if (offlineUnsubscribe) {
+        offlineUnsubscribe();
+      }
       window.removeEventListener('cache-sync-required', handleCacheSyncRequired);
+      if (handleCacheUpdated) {
+        window.removeEventListener('offline-cache-updated', handleCacheUpdated);
+        window.removeEventListener('cache-sync-required', handleCacheUpdated);
+      }
       window.removeEventListener('focus', checkSyncOnFocus);
-      clearInterval(syncCheckInterval);
+      if (handleWindowFocus) {
+        window.removeEventListener('focus', handleWindowFocus);
+      }
+      if (handleVisibilityChange) {
+        document.removeEventListener('visibilitychange', handleVisibilityChange);
+      }
+      if (syncCheckInterval) clearInterval(syncCheckInterval);
+      if (pollInterval) clearInterval(pollInterval);
     };
   });
   

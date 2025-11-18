@@ -164,6 +164,15 @@ async function loadCachedPdfsList() {
     // Save to localStorage for quick access
     if (browser) {
       localStorage.setItem(CACHED_PDFS_KEY, JSON.stringify(cachedUrls));
+      
+      // Dispatch event to notify UI of cache update
+      window.dispatchEvent(new CustomEvent('offline-cache-updated', {
+        detail: {
+          source: 'cache-reload',
+          cachedCount: cachedUrls.length,
+          timestamp: Date.now()
+        }
+      }));
     }
   } catch (error) {
     console.error('[Offline Store] Failed to load cached PDFs:', error);
@@ -552,6 +561,17 @@ async function startZipDownloadWithSpecificParts(categories, pdfUrls, partsByCat
 
       // Sync all information after download
       await syncAfterDownload();
+      
+      // Dispatch event to notify UI of cache update
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('offline-cache-updated', {
+          detail: {
+            source: 'zip-download-specific',
+            cachedCount: get(offlineState).cachedCount,
+            timestamp: Date.now()
+          }
+        }));
+      }
     }
 
   } catch (error) {
@@ -1318,6 +1338,17 @@ async function startZipDownload(categories, pdfUrls, alreadyDownloadedCategories
         saveDownloadedCategories(allDownloaded);
         
         console.log('[Offline Store] Updated downloaded categories:', allDownloaded);
+      }
+      
+      // Dispatch event to notify UI of cache update
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('offline-cache-updated', {
+          detail: {
+            source: 'zip-download',
+            cachedCount: get(offlineState).cachedCount,
+            timestamp: Date.now()
+          }
+        }));
       }
 
       // Check if IS_LEITOR_OFFLINE flag exists, if not open PDF in leitor
