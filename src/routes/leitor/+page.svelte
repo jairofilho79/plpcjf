@@ -172,6 +172,12 @@
   let hasMoved = false;
   const TOUCH_MOVE_THRESHOLD = 10; // pixels
   const TOUCH_TIME_THRESHOLD = 300; // milliseconds
+  
+  // Long press navigation state (for first/last page)
+  let navigationLongPressTimer: ReturnType<typeof setTimeout> | null = null;
+  let isProcessingNavigationLongPress = false;
+  let navigationLongPressExecuted = false; // Track if long press already executed
+  let navigationSide: 'left' | 'right' | null = null; // Track which side was touched
 
   async function load(fileUrl: string) {
     const getDocument = (window as any).__pdfjsGetDocument as PDFJSGetDocument | undefined;
@@ -446,6 +452,10 @@
       clearTimeout(fullscreenLongPressTimer);
       fullscreenLongPressTimer = null;
     }
+    if (navigationLongPressTimer) {
+      clearTimeout(navigationLongPressTimer);
+      navigationLongPressTimer = null;
+    }
     if (pageWidthAdjustTimeout) {
       clearTimeout(pageWidthAdjustTimeout);
       pageWidthAdjustTimeout = null;
@@ -707,6 +717,17 @@
     const prev = Math.max(((viewer as any).currentPageNumber ?? 1) - 1, 1);
     (viewer as any).currentPageNumber = prev;
   }
+  
+  function goToFirstPage() {
+    if (!viewer) return;
+    (viewer as any).currentPageNumber = 1;
+  }
+  
+  function goToLastPage() {
+    if (!viewer) return;
+    const maxPages = totalPages || (viewer as any)._pagesCount || 1;
+    (viewer as any).currentPageNumber = maxPages;
+  }
 
   // Calculate distance between two touch points
   function getTouchDistance(touch1: Touch, touch2: Touch): number {
@@ -736,6 +757,49 @@
       touchStartY = touches[0].clientY;
       touchStartTime = Date.now();
       hasMoved = false;
+      
+      // Check if touch is in navigation area (left or right quarter)
+      const containerRect = containerEl.getBoundingClientRect();
+      const containerWidth = containerRect.width;
+      const relativeX = touchStartX - containerRect.left;
+      const quarterWidth = containerWidth / 4;
+      
+      // Clear any existing navigation long press timer
+      if (navigationLongPressTimer) {
+        clearTimeout(navigationLongPressTimer);
+        navigationLongPressTimer = null;
+      }
+      isProcessingNavigationLongPress = false;
+      navigationSide = null;
+      
+      // Check if in left quarter (0-25%)
+      if (relativeX < quarterWidth) {
+        navigationSide = 'left';
+        isProcessingNavigationLongPress = true;
+        navigationLongPressExecuted = false;
+        navigationLongPressTimer = setTimeout(() => {
+          // Long press detected - go to first page
+          goToFirstPage();
+          navigationLongPressExecuted = true;
+          navigationLongPressTimer = null;
+          isProcessingNavigationLongPress = false;
+          navigationSide = null;
+        }, LONG_PRESS_DURATION);
+      }
+      // Check if in right quarter (75-100%)
+      else if (relativeX > containerWidth - quarterWidth) {
+        navigationSide = 'right';
+        isProcessingNavigationLongPress = true;
+        navigationLongPressExecuted = false;
+        navigationLongPressTimer = setTimeout(() => {
+          // Long press detected - go to last page
+          goToLastPage();
+          navigationLongPressExecuted = true;
+          navigationLongPressTimer = null;
+          isProcessingNavigationLongPress = false;
+          navigationSide = null;
+        }, LONG_PRESS_DURATION);
+      }
     }
   }
 
@@ -766,6 +830,14 @@
       
       if (dx > TOUCH_MOVE_THRESHOLD || dy > TOUCH_MOVE_THRESHOLD) {
         hasMoved = true;
+        // Cancel navigation long press if user moved
+        if (navigationLongPressTimer) {
+          clearTimeout(navigationLongPressTimer);
+          navigationLongPressTimer = null;
+          isProcessingNavigationLongPress = false;
+          navigationLongPressExecuted = false;
+          navigationSide = null;
+        }
       }
     }
   }
@@ -785,8 +857,16 @@
       return;
     }
     
-    // Single touch navigation: check if it was a tap (not a scroll)
-    if (touches.length === 0 && !isPinching && !hasMoved) {
+    // Cancel navigation long press timer if it's still running (wasn't a long press)
+    if (navigationLongPressTimer) {
+      clearTimeout(navigationLongPressTimer);
+      navigationLongPressTimer = null;
+      navigationLongPressExecuted = false;
+    }
+    
+    // Single touch navigation: check if it was a tap (not a scroll or long press)
+    // Don't do normal navigation if long press already executed
+    if (touches.length === 0 && !isPinching && !hasMoved && !isProcessingNavigationLongPress && !navigationLongPressExecuted) {
       const touchDuration = Date.now() - touchStartTime;
       
       // Only process if it was a quick tap (not a long press or scroll)
@@ -806,6 +886,11 @@
         }
       }
     }
+    
+    // Reset navigation state
+    isProcessingNavigationLongPress = false;
+    navigationLongPressExecuted = false;
+    navigationSide = null;
     
     // Reset state
     touchStartX = 0;
