@@ -382,7 +382,7 @@
         </div>
       </div>
     {:else if $louvores.length > 0}
-      <p class="text-center text-gray-600 mt-8">Nenhum louvor encontrado com os filtros selecionados.</p>
+      <p class="text-center mt-8 no-results-message">Nenhum louvor encontrado com os filtros selecionados.</p>
     {/if}
   </div>
 </div>
@@ -604,6 +604,11 @@
     .pagination-input-group {
       justify-content: center;
     }
+  }
+  
+  .no-results-message {
+    color: var(--text-light);
+    opacity: 0.9;
   }
 </style>
 

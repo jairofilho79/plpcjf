@@ -274,7 +274,7 @@
         </div>
       </div>
     {:else if searchQuery}
-      <p class="text-center text-gray-600 mt-8">Nenhum resultado encontrado.</p>
+      <p class="text-center mt-8 no-results-message">Nenhum resultado encontrado.</p>
     {/if}
   </div>
 </div>
@@ -307,6 +307,11 @@
     display: flex;
     flex-direction: column;
     gap: 0.5rem;
+  }
+  
+  .no-results-message {
+    color: var(--text-light);
+    opacity: 0.9;
   }
 </style>
 
