@@ -41,6 +41,7 @@
    */
   let longPressTimer = null;
   let wasLongPress = false;
+  let isProcessingLongPress = false;
   const LONG_PRESS_DURATION = 500; // 500ms
   
   /**
@@ -48,7 +49,9 @@
    * @param {MouseEvent & { currentTarget: EventTarget & HTMLButtonElement; }} event
    */
   function handleClassificationMouseDown(classification, event) {
+    event.preventDefault(); // Prevenir seleção de texto e comportamento padrão
     wasLongPress = false;
+    isProcessingLongPress = true; // Marcar que estamos processando um possível long press
     
     if (longPressTimer) {
       clearTimeout(longPressTimer);
@@ -58,6 +61,7 @@
       wasLongPress = true;
       classificationFilters.selectOnly(classification);
       longPressTimer = null;
+      isProcessingLongPress = false; // Resetar após long press ser detectado
     }, LONG_PRESS_DURATION);
   }
   
@@ -66,11 +70,15 @@
    * @param {MouseEvent & { currentTarget: EventTarget & HTMLButtonElement; }} event
    */
   function handleClassificationMouseUp(classification, event) {
+    // Se o timer ainda está rodando, cancelar (o toggle será feito no click)
     if (longPressTimer) {
       clearTimeout(longPressTimer);
       longPressTimer = null;
       wasLongPress = false;
+      isProcessingLongPress = false;
     }
+    // Se longPressTimer é null e wasLongPress é true, significa que o long press já aconteceu
+    // Neste caso, NÃO resetar wasLongPress aqui - deixar para o click handler
   }
   
   /**
@@ -78,9 +86,16 @@
    * @param {MouseEvent & { currentTarget: EventTarget & HTMLButtonElement; }} event
    */
   function handleClassificationClick(classification, event) {
-    if (wasLongPress) {
+    // Se foi long press ou está processando, não fazer toggle
+    if (isProcessingLongPress || wasLongPress) {
       event.preventDefault();
-      wasLongPress = false;
+      event.stopPropagation();
+      event.stopImmediatePropagation();
+      // Resetar flags após um pequeno delay para garantir que o click não seja processado
+      setTimeout(() => {
+        wasLongPress = false;
+        isProcessingLongPress = false;
+      }, 100);
       return;
     }
     classificationFilters.toggleClassification(classification);
@@ -91,7 +106,9 @@
    * @param {TouchEvent & { currentTarget: EventTarget & HTMLButtonElement; }} event
    */
   function handleClassificationTouchStart(classification, event) {
+    event.preventDefault(); // Prevenir comportamento padrão
     wasLongPress = false;
+    isProcessingLongPress = true; // Marcar que estamos processando um possível long press
     
     if (longPressTimer) {
       clearTimeout(longPressTimer);
@@ -101,6 +118,7 @@
       wasLongPress = true;
       classificationFilters.selectOnly(classification);
       longPressTimer = null;
+      isProcessingLongPress = false; // Resetar após long press ser detectado
     }, LONG_PRESS_DURATION);
   }
   
@@ -110,11 +128,15 @@
    * @param {TouchEvent & { currentTarget: EventTarget & HTMLButtonElement; }} event
    */
   function handleClassificationTouchEnd(classification, event) {
+    // Se o timer ainda está rodando, cancelar (o toggle será feito no click simulado)
     if (longPressTimer) {
       clearTimeout(longPressTimer);
       longPressTimer = null;
       wasLongPress = false;
+      isProcessingLongPress = false;
     }
+    // Se longPressTimer é null e wasLongPress é true, significa que o long press já aconteceu
+    // Neste caso, NÃO resetar wasLongPress aqui - deixar para o click handler
   }
 </script>
 
@@ -147,6 +169,7 @@
             longPressTimer = null;
           }
           wasLongPress = false;
+          isProcessingLongPress = false;
         }}
         on:touchstart={(e) => handleClassificationTouchStart(classification, e)}
         on:touchend={(e) => handleClassificationTouchEnd(classification, e)}
@@ -156,6 +179,7 @@
             longPressTimer = null;
           }
           wasLongPress = false;
+          isProcessingLongPress = false;
         }}
         on:selectstart|preventDefault
         on:contextmenu|preventDefault

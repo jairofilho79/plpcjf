@@ -42,6 +42,7 @@
      */
   let longPressTimer = null;
   let wasLongPress = false;
+  let isProcessingLongPress = false;
   const LONG_PRESS_DURATION = 500; // 500ms
   
   /**
@@ -49,7 +50,9 @@
      * @param {MouseEvent & { currentTarget: EventTarget & HTMLButtonElement; }} event
      */
   function handleCategoryMouseDown(category, event) {
+    event.preventDefault(); // Prevenir seleção de texto e comportamento padrão
     wasLongPress = false;
+    isProcessingLongPress = true; // Marcar que estamos processando um possível long press
     
     // Limpar qualquer timer existente
     if (longPressTimer) {
@@ -62,6 +65,7 @@
       wasLongPress = true;
       filters.selectOnly(category);
       longPressTimer = null;
+      isProcessingLongPress = false; // Resetar após long press ser detectado
     }, LONG_PRESS_DURATION);
   }
   
@@ -75,7 +79,10 @@
       clearTimeout(longPressTimer);
       longPressTimer = null;
       wasLongPress = false;
+      isProcessingLongPress = false;
     }
+    // Se longPressTimer é null e wasLongPress é true, significa que o long press já aconteceu
+    // Neste caso, NÃO resetar wasLongPress aqui - deixar para o click handler
   }
   
   /**
@@ -83,10 +90,16 @@
      * @param {MouseEvent & { currentTarget: EventTarget & HTMLButtonElement; }} event
      */
   function handleCategoryClick(category, event) {
-    // Se foi long press, não fazer toggle (já foi tratado no mousedown/touchstart)
-    if (wasLongPress) {
+    // Se foi long press ou está processando, não fazer toggle
+    if (isProcessingLongPress || wasLongPress) {
       event.preventDefault();
-      wasLongPress = false;
+      event.stopPropagation();
+      event.stopImmediatePropagation();
+      // Resetar flags após um pequeno delay para garantir que o click não seja processado
+      setTimeout(() => {
+        wasLongPress = false;
+        isProcessingLongPress = false;
+      }, 100);
       return;
     }
     // Click normal - fazer toggle (funciona tanto para mouse quanto touch)
@@ -98,7 +111,9 @@
      * @param {TouchEvent & { currentTarget: EventTarget & HTMLButtonElement; }} event
      */
   function handleCategoryTouchStart(category, event) {
+    event.preventDefault(); // Prevenir comportamento padrão
     wasLongPress = false;
+    isProcessingLongPress = true; // Marcar que estamos processando um possível long press
     
     if (longPressTimer) {
       clearTimeout(longPressTimer);
@@ -108,6 +123,7 @@
       wasLongPress = true;
       filters.selectOnly(category);
       longPressTimer = null;
+      isProcessingLongPress = false; // Resetar após long press ser detectado
     }, LONG_PRESS_DURATION);
   }
   
@@ -122,7 +138,10 @@
       clearTimeout(longPressTimer);
       longPressTimer = null;
       wasLongPress = false;
+      isProcessingLongPress = false;
     }
+    // Se longPressTimer é null e wasLongPress é true, significa que o long press já aconteceu
+    // Neste caso, NÃO resetar wasLongPress aqui - deixar para o click handler
   }
   
   /**
@@ -193,6 +212,7 @@
           longPressTimer = null;
         }
         wasLongPress = false;
+        isProcessingLongPress = false;
       }}
       on:touchstart={(e) => !isDisabled && handleCategoryTouchStart(category, e)}
       on:touchend={(e) => !isDisabled && handleCategoryTouchEnd(category, e)}
@@ -203,6 +223,7 @@
           longPressTimer = null;
         }
         wasLongPress = false;
+        isProcessingLongPress = false;
       }}
       on:selectstart|preventDefault
       on:contextmenu|preventDefault
