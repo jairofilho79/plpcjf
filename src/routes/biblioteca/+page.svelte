@@ -44,13 +44,18 @@
     .sort();
   
   // Filter louvores based on selected categories and classifications (inclusive filter)
-  // If no filters selected OR all filters selected, show all louvores
+  // If no filters selected, show nothing. If all filters selected, show all louvores
   $: filteredLouvores = (() => {
     if (!$louvores || $louvores.length === 0) return [];
     
     // First, apply category filter (with inclusive logic for Cifra)
     const activeCategories = $filters;
     const allCategoriesSelected = activeCategories.length === CATEGORY_OPTIONS.length;
+    
+    // If no categories selected, show nothing (not all)
+    if (activeCategories.length === 0) {
+      return [];
+    }
     
     let categoryFiltered = $louvores;
     if (!allCategoriesSelected && activeCategories.length > 0) {
@@ -65,9 +70,9 @@
     // Then, apply classification filter
     const selectedFilters = $classificationFilters;
     
-    // If no classification filters selected, return category-filtered results
+    // If no classification filters selected, show nothing (not all)
     if (selectedFilters.length === 0) {
-      return categoryFiltered;
+      return [];
     }
     
     // If all unique normalized classifications are selected, return category-filtered results

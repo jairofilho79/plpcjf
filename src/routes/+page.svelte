@@ -141,6 +141,12 @@
     const activeCategories = $filters;
     const allCategoriesSelected = activeCategories.length === CATEGORY_OPTIONS.length;
     
+    // If no categories selected, show nothing (not all)
+    if (activeCategories.length === 0) {
+      filteredResults = [];
+      return;
+    }
+    
     let categoryFiltered = $louvores;
     if (!allCategoriesSelected && activeCategories.length > 0) {
       // Expand "Cifra" to include "Cifra nível I" and "Cifra nível II"
@@ -153,22 +159,27 @@
     
     // Then, apply classification filter
     const selectedFilters = $classificationFilters;
+    
+    // If no classification filters selected, show nothing (not all)
+    if (selectedFilters.length === 0) {
+      filteredResults = [];
+      return;
+    }
+    
     let classificationFiltered = categoryFiltered;
     
-    if (selectedFilters.length > 0) {
-      // If all unique normalized classifications are selected, show all
-      const allSelected = uniqueNormalizedClassifications.length > 0 &&
-                         selectedFilters.length === uniqueNormalizedClassifications.length &&
-                         uniqueNormalizedClassifications.every(c => selectedFilters.includes(c));
-      
-      if (!allSelected) {
-        // Otherwise, filter by selected classifications
-        classificationFiltered = categoryFiltered.filter(louvor => {
-          if (!louvor.classificacao) return false;
-          const normalized = normalizeClassification(louvor.classificacao);
-          return selectedFilters.includes(normalized);
-        });
-      }
+    // If all unique normalized classifications are selected, show all
+    const allSelected = uniqueNormalizedClassifications.length > 0 &&
+                       selectedFilters.length === uniqueNormalizedClassifications.length &&
+                       uniqueNormalizedClassifications.every(c => selectedFilters.includes(c));
+    
+    if (!allSelected) {
+      // Otherwise, filter by selected classifications
+      classificationFiltered = categoryFiltered.filter(louvor => {
+        if (!louvor.classificacao) return false;
+        const normalized = normalizeClassification(louvor.classificacao);
+        return selectedFilters.includes(normalized);
+      });
     }
     
     // Apply search filter
