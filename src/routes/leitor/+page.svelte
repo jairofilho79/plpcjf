@@ -522,8 +522,20 @@
     const naturalHeight = naturalViewport.height;
     
     // Get available dimensions
-    const availableWidth = containerEl.clientWidth;
-    const availableHeight = containerEl.clientHeight;
+    // When in fullscreen, use window dimensions directly
+    // Otherwise, use container dimensions (which account for toolbar)
+    let availableWidth: number;
+    let availableHeight: number;
+    
+    if (isFullscreen) {
+      // In fullscreen, container should occupy entire viewport
+      availableWidth = window.innerWidth;
+      availableHeight = window.innerHeight;
+    } else {
+      // When toolbar is visible, use container dimensions
+      availableWidth = containerEl.clientWidth;
+      availableHeight = containerEl.clientHeight;
+    }
     
     // Calculate scale to fit both width and height
     const scaleX = availableWidth / naturalWidth;
