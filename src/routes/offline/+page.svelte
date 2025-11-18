@@ -247,7 +247,16 @@
   $: downloading = $isDownloading;
   $: louvoresReady = $louvores.length > 0;
   // Filter out already downloaded categories from selection for download button
-  $: categoriesToDownload = selectedCategories.filter(cat => !downloadedCategories.includes(cat));
+  // Also check if category is actually complete (100% with no missing PDFs)
+  $: categoriesToDownload = selectedCategories.filter(cat => {
+    // Don't include if already marked as downloaded
+    if (downloadedCategories.includes(cat)) return false;
+    // Check if category is actually 100% complete
+    const stats = categoryStats[cat] || { total: 0, available: 0, missing: 0, percentage: 0 };
+    const isActuallyComplete = stats.percentage === 100 && stats.missing === 0;
+    // Only include if not actually complete (needs download)
+    return !isActuallyComplete;
+  });
   $: canDownload = categoriesToDownload.length > 0 && !downloading && louvoresReady;
   $: progress = state.progress || 0;
   $: completed = state.completed || 0;
@@ -457,7 +466,7 @@
                   <span class="category-label">{category}</span>
                   {#if shouldShowCompleteBadge}
                     <span class="downloaded-badge">✓ Completo</span>
-                  {:else if stats.missing > 0 && stats.total > 0}
+                  {:else if stats.total > 0}
                     <span class="partial-badge">{stats.percentage}% disponível</span>
                   {/if}
                 </div>
@@ -529,6 +538,7 @@
           class="btn btn-primary"
           on:click={startDownload}
           disabled={!canDownload}
+          title={!louvoresReady ? 'Aguardando carregamento dos louvores...' : categoriesToDownload.length === 0 ? 'Selecione categorias que precisam ser baixadas' : ''}
         >
           <Download class="w-5 h-5" />
           <span>Baixar PDFs</span>
