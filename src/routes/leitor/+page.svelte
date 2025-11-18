@@ -461,6 +461,7 @@
   }
   
   function handleZoomFitMouseDown(e: MouseEvent) {
+    e.preventDefault(); // Prevenir seleção de texto
     isLongPressing = false;
     if (longPressTimer) clearTimeout(longPressTimer);
     longPressTimer = setTimeout(() => {
@@ -490,6 +491,7 @@
   }
   
   function handleZoomFitTouchStart(e: TouchEvent) {
+    e.preventDefault(); // Prevenir seleção de texto e comportamento padrão
     isLongPressing = false;
     if (longPressTimer) clearTimeout(longPressTimer);
     longPressTimer = setTimeout(() => {
@@ -497,7 +499,6 @@
       toggleFitMode();
       longPressTimer = null;
     }, LONG_PRESS_DURATION);
-    // Don't prevent default to allow normal click behavior
   }
   
   function handleZoomFitTouchEnd() {
@@ -718,6 +719,10 @@
     display: flex;
     align-items: center;
     justify-content: center;
+    user-select: none;
+    -webkit-user-select: none;
+    -moz-user-select: none;
+    -ms-user-select: none;
   }
   .btn:hover { filter: brightness(1.05); }
   .btn .icon {
