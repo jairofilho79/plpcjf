@@ -429,7 +429,9 @@
     viewer.currentScale = viewer.currentScale / 1.1;
   }
   function zoomFit() {
-    if (!viewer || isLongPressing) return;
+    if (!viewer) return;
+    // Don't execute if long press just happened (allow a small delay for flag reset)
+    if (isLongPressing) return;
     // Reset to the preferred fit mode
     if (preferredFitMode === 'page-width') {
       // For page-width, calculate manually instead of using PDF.js algorithm
@@ -491,7 +493,7 @@
   }
   
   function handleZoomFitTouchStart(e: TouchEvent) {
-    e.preventDefault(); // Prevenir seleção de texto e comportamento padrão
+    // Don't prevent default to allow click event to fire
     isLongPressing = false;
     if (longPressTimer) clearTimeout(longPressTimer);
     longPressTimer = setTimeout(() => {
@@ -501,10 +503,21 @@
     }, LONG_PRESS_DURATION);
   }
   
-  function handleZoomFitTouchEnd() {
+  function handleZoomFitTouchEnd(e: TouchEvent) {
+    const wasLongPressTimerActive = !!longPressTimer;
     if (longPressTimer) {
       clearTimeout(longPressTimer);
       longPressTimer = null;
+    }
+    // If it was a simple tap (timer was still active, meaning long press didn't complete), trigger zoomFit
+    if (wasLongPressTimerActive && !isLongPressing) {
+      // It was a simple tap, trigger zoomFit directly
+      // Use a small delay to ensure isLongPressing flag doesn't interfere
+      setTimeout(() => {
+        if (!isLongPressing) {
+          zoomFit();
+        }
+      }, 10);
     }
     // Reset flag after a short delay
     setTimeout(() => {
