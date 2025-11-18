@@ -49,7 +49,7 @@
    * @param {MouseEvent & { currentTarget: EventTarget & HTMLButtonElement; }} event
    */
   function handleClassificationMouseDown(classification, event) {
-    event.preventDefault(); // Prevenir seleção de texto e comportamento padrão
+    // Não prevenir default aqui - permite que o click funcione normalmente
     wasLongPress = false;
     isProcessingLongPress = true; // Marcar que estamos processando um possível long press
     
@@ -86,18 +86,26 @@
    * @param {MouseEvent & { currentTarget: EventTarget & HTMLButtonElement; }} event
    */
   function handleClassificationClick(classification, event) {
-    // Se foi long press ou está processando, não fazer toggle
-    if (isProcessingLongPress || wasLongPress) {
+    // Se foi long press, não fazer toggle (já foi tratado)
+    if (wasLongPress) {
       event.preventDefault();
       event.stopPropagation();
-      event.stopImmediatePropagation();
-      // Resetar flags após um pequeno delay para garantir que o click não seja processado
+      // Resetar flag após um pequeno delay
       setTimeout(() => {
         wasLongPress = false;
         isProcessingLongPress = false;
       }, 100);
       return;
     }
+    
+    // Se ainda está processando (timer rodando), cancelar o timer e fazer toggle normal
+    if (isProcessingLongPress && longPressTimer) {
+      clearTimeout(longPressTimer);
+      longPressTimer = null;
+      isProcessingLongPress = false;
+      // Continuar para fazer o toggle normalmente
+    }
+    
     classificationFilters.toggleClassification(classification);
   }
   
@@ -106,7 +114,7 @@
    * @param {TouchEvent & { currentTarget: EventTarget & HTMLButtonElement; }} event
    */
   function handleClassificationTouchStart(classification, event) {
-    event.preventDefault(); // Prevenir comportamento padrão
+    // Não prevenir default aqui - permite que o click simulado funcione normalmente
     wasLongPress = false;
     isProcessingLongPress = true; // Marcar que estamos processando um possível long press
     
