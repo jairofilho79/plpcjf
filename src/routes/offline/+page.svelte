@@ -487,7 +487,7 @@
                     <div 
                       class="category-progress-fill" 
                       style="width: {stats.percentage}%"
-                      class:complete={isComplete}
+                      class:complete={isActuallyComplete}
                     ></div>
                   </div>
                 {/if}
