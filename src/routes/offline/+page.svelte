@@ -58,8 +58,8 @@
     const allCategories = [...new Set([...selectedCategories, ...downloadedCategories])];
     selectedCategories = allCategories;
     
-    // Load initial stats
-    await loadCategoryStats();
+    // Load initial stats (force on mount)
+    await loadCategoryStats(true);
     
     // Validate and clear error if no longer relevant
     await offline.validateAndClearError();
@@ -97,10 +97,22 @@
     };
   });
   
+  // Track last sync trigger to prevent excessive syncs
+  let lastSyncTriggerTime = 0;
+  const MIN_SYNC_INTERVAL = 5000; // Minimum 5 seconds between sync triggers
+  
   /**
    * @param {Event} event
    */
   function handleCacheSyncRequired(event) {
+    const now = Date.now();
+    // Prevent excessive sync triggers
+    if ((now - lastSyncTriggerTime) < MIN_SYNC_INTERVAL) {
+      console.log('[Offline Page] Sync trigger ignored - too soon since last trigger');
+      return;
+    }
+    
+    lastSyncTriggerTime = now;
     needsSync = true;
     if (event instanceof CustomEvent) {
       console.log('[Offline Page] Cache sync required:', event.detail);
@@ -130,8 +142,8 @@
       // Update downloaded categories from sync result
       downloadedCategories = syncResult.downloaded;
       
-      // Reload category stats to reflect any fixes
-      await loadCategoryStats();
+      // Reload category stats to reflect any fixes (force to bypass rate limiting)
+      await loadCategoryStats(true);
       
       // Update cache version
       await updateCacheVersion();
@@ -150,11 +162,30 @@
     }
   }
 
+  // Track last stats load time to prevent excessive calls
+  let lastStatsLoadTime = 0;
+  const MIN_STATS_LOAD_INTERVAL = 2000; // Minimum 2 seconds between loads
+
   // Load category availability statistics
-  async function loadCategoryStats() {
+  async function loadCategoryStats(force = false) {
     if (!$louvores.length) return;
     
+    // Prevent excessive calls - only allow if forced or enough time has passed
+    const now = Date.now();
+    if (!force && (now - lastStatsLoadTime) < MIN_STATS_LOAD_INTERVAL) {
+      console.log('[Offline Page] Skipping stats load - too soon since last load');
+      return;
+    }
+    
+    // Prevent concurrent loads
+    if (isLoadingStats) {
+      console.log('[Offline Page] Stats already loading, skipping');
+      return;
+    }
+    
     isLoadingStats = true;
+    lastStatsLoadTime = now;
+    
     try {
       const state = $offline;
       /** @type {string[]} */
@@ -224,8 +255,8 @@
             selectedCategories = [...selectedCategories, cat];
           }
         });
-        // Reload stats after download
-        await loadCategoryStats();
+        // Reload stats after download (force to bypass rate limiting)
+        await loadCategoryStats(true);
       }
     }, 1000);
   }
@@ -233,13 +264,19 @@
   // React to category selection changes (debounced to avoid excessive calls)
   /** @type {ReturnType<typeof setTimeout> | null} */
   let categorySelectionTimeout = null;
-  $: if (selectedCategories.length > 0 && $louvores.length > 0 && !isLoadingStats) {
-    if (categorySelectionTimeout) {
-      clearTimeout(categorySelectionTimeout);
+  let lastSelectedCategoriesHash = '';
+  
+  $: {
+    const currentHash = selectedCategories.sort().join(',');
+    if (currentHash !== lastSelectedCategoriesHash && selectedCategories.length > 0 && $louvores.length > 0 && !isLoadingStats) {
+      lastSelectedCategoriesHash = currentHash;
+      if (categorySelectionTimeout) {
+        clearTimeout(categorySelectionTimeout);
+      }
+      categorySelectionTimeout = setTimeout(() => {
+        loadCategoryStats();
+      }, 500); // Increased debounce to 500ms
     }
-    categorySelectionTimeout = setTimeout(() => {
-      loadCategoryStats();
-    }, 300);
   }
 
   // Get current offline state

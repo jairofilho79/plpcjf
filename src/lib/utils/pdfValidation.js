@@ -291,9 +291,15 @@ export function findMissingPdfs(louvores, cachedPdfs) {
     }
   }
 
-  // Log debug info if there are missing PDFs
+  // Log debug info if there are missing PDFs (only log once per unique count to reduce console spam)
+  // Use a simple cache to track what we've already logged
   if (missing.length > 0 && debugInfo.length > 0) {
-    console.warn(`[PDF Validation] Found ${missing.length} missing PDFs. Sample debug info:`, debugInfo);
+    // Only log if this is a new count or significant change
+    const cacheKey = `missing_${missing.length}_${louvores.length}`;
+    if (!findMissingPdfs._lastLog || findMissingPdfs._lastLog !== cacheKey) {
+      findMissingPdfs._lastLog = cacheKey;
+      console.warn(`[PDF Validation] Found ${missing.length} missing PDFs. Sample debug info:`, debugInfo);
+    }
   }
 
   return missing;
