@@ -18,11 +18,11 @@ export async function validatePdfAvailability(pdfPath) {
   const normalizedPath = pdfPath.startsWith('/') ? pdfPath.substring(1) : pdfPath;
   const fullUrl = new URL(`/${normalizedPath}`, window.location.origin).href;
 
-  // Wait for Service Worker to be ready
-  const swReady = await waitForServiceWorker(5000);
+  // Wait for Service Worker to be ready (mas não bloqueia se não estiver pronto)
+  const swReady = await waitForServiceWorker(3000); // Reduzido para 3s para ser mais responsivo
   if (!swReady) {
-    console.warn('[PDF Validation] Service Worker not ready');
-    return { available: false, needsDownload: navigator.onLine, url: fullUrl };
+    console.warn('[PDF Validation] Service Worker not ready, but allowing check to proceed');
+    // Não retornar false imediatamente - tentar verificar cache mesmo assim
   }
 
   try {

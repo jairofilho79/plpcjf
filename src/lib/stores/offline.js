@@ -547,10 +547,10 @@ async function startZipDownloadWithSpecificParts(categories, pdfUrls, partsByCat
         const currentHash = getManifestHash(louvoresData);
         localStorage.setItem(LAST_MANIFEST_HASH_KEY, currentHash);
         
-        // Update PDF index after ZIP extraction
+        // Update PDF index after ZIP extraction (immediate update after download)
         if (browser) {
           const { updatePdfIndexInBackground } = await import('$lib/utils/pdfIndex');
-          updatePdfIndexInBackground(louvoresData);
+          updatePdfIndexInBackground(louvoresData, true); // immediate = true
           
           // Notify cache update for sync
           const { notifyCacheUpdate, updateCacheVersion } = await import('$lib/utils/cacheSync');
@@ -1065,7 +1065,7 @@ async function startDownload(pdfUrls, selectedCategories = []) {
     if (browser && !result.cancelled) {
       const { updatePdfIndexInBackground } = await import('$lib/utils/pdfIndex');
       const louvoresData = get(louvores);
-      updatePdfIndexInBackground(louvoresData);
+      updatePdfIndexInBackground(louvoresData, true); // immediate = true after sync
       
       // Notify cache update for sync
       const { notifyCacheUpdate, updateCacheVersion } = await import('$lib/utils/cacheSync');
@@ -1324,7 +1324,7 @@ async function startZipDownload(categories, pdfUrls, alreadyDownloadedCategories
         // Update PDF index after ZIP extraction
         if (browser) {
           const { updatePdfIndexInBackground } = await import('$lib/utils/pdfIndex');
-          updatePdfIndexInBackground(louvoresData);
+          updatePdfIndexInBackground(louvoresData, true); // immediate = true after download
         }
       }
 

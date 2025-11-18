@@ -3,6 +3,7 @@
 
 import { getCachedPDFs, waitForServiceWorker } from '$lib/utils/swRegistration';
 import { getPdfRelPath } from '$lib/utils/pathUtils';
+import { normalizePathForComparison } from '$lib/utils/pdfValidation';
 
 const PDF_INDEX_KEY = 'pdfAvailabilityIndex';
 const INDEX_VERSION = 1;
@@ -30,19 +31,31 @@ export async function generatePdfIndex(louvores) {
   try {
     const cachedPdfs = await getCachedPDFs();
 
-    // Normalize cached PDF URLs for comparison
-    const normalizedCache = new Set(
-      cachedPdfs.map(url => {
-        try {
-          const urlObj = new URL(url);
-          return urlObj.pathname.replace(/^\/+/, '').toLowerCase();
-        } catch {
-          return url.replace(/^\/+/, '').toLowerCase();
+    // Normalize cached PDF URLs using centralized function (same as findMissingPdfs)
+    const normalizedCacheSet = new Set();
+    cachedPdfs.forEach(url => {
+      const normalized = normalizePathForComparison(url);
+      normalizedCacheSet.add(normalized);
+      
+      // Also add filename-only variation (same logic as findMissingPdfs)
+      try {
+        const urlObj = new URL(url);
+        const filename = urlObj.pathname.split('/').pop();
+        if (filename) {
+          const normalizedFilename = normalizePathForComparison(filename);
+          normalizedCacheSet.add(normalizedFilename);
         }
-      })
-    );
+      } catch {
+        const parts = url.split('/');
+        const filename = parts[parts.length - 1];
+        if (filename) {
+          const normalizedFilename = normalizePathForComparison(filename);
+          normalizedCacheSet.add(normalizedFilename);
+        }
+      }
+    });
 
-    // Validate each PDF
+    // Validate each PDF using same strategies as findMissingPdfs
     for (const louvor of louvores) {
       if (!louvor.pdfId) {
         continue;
@@ -54,12 +67,49 @@ export async function generatePdfIndex(louvores) {
         continue;
       }
 
-      const normalizedPath = pdfPath.toLowerCase().replace(/^\/+/, '');
-      const isAvailable = normalizedCache.has(normalizedPath) ||
-        Array.from(normalizedCache).some(cached => {
-          // Check if paths match (handling different URL formats)
-          return cached.endsWith(normalizedPath) || normalizedPath.endsWith(cached);
+      // Normalize expected path using centralized function
+      const normalizedPath = normalizePathForComparison(pdfPath);
+      
+      // Check using same strategies as findMissingPdfs
+      let isAvailable = false;
+      
+      // Strategy 1: Exact match
+      if (normalizedCacheSet.has(normalizedPath)) {
+        isAvailable = true;
+      }
+      
+      // Strategy 2: Filename match
+      if (!isAvailable) {
+        const filename = normalizedPath.split('/').pop();
+        if (filename && normalizedCacheSet.has(filename)) {
+          isAvailable = true;
+        }
+      }
+      
+      // Strategy 3: Partial match (same logic as findMissingPdfs)
+      if (!isAvailable) {
+        isAvailable = Array.from(normalizedCacheSet).some(cached => {
+          if (cached === normalizedPath) return true;
+          if (cached.endsWith(normalizedPath)) return true;
+          if (normalizedPath.endsWith(cached)) return true;
+          
+          const cachedFilename = cached.split('/').pop();
+          const expectedFilename = normalizedPath.split('/').pop();
+          if (cachedFilename && expectedFilename && cachedFilename === expectedFilename) {
+            return true;
+          }
+          
+          if (cachedFilename && expectedFilename) {
+            const cachedBase = cachedFilename.replace(/\.pdf$/i, '');
+            const expectedBase = expectedFilename.replace(/\.pdf$/i, '');
+            if (cachedBase && expectedBase && cachedBase === expectedBase) {
+              return true;
+            }
+          }
+          
+          return false;
         });
+      }
 
       index.set(louvor.pdfId, isAvailable);
     }
