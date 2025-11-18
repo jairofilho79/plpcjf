@@ -28,39 +28,87 @@ export async function validatePdfAvailability(pdfPath) {
   try {
     // Check cache via Service Worker
     const cachedPdfs = await getCachedPDFs();
-    const isCached = cachedPdfs.some(cachedUrl => {
+    
+    // Normalize target path using centralized function
+    const normalizedTarget = normalizePathForComparison(normalizedPath);
+    
+    // Create normalized set of cached PDFs (same logic as findMissingPdfs)
+    const normalizedCacheSet = new Set();
+    cachedPdfs.forEach(url => {
+      const normalized = normalizePathForComparison(url);
+      normalizedCacheSet.add(normalized);
+      
+      // Also add filename-only variation
       try {
-        const cachedPath = new URL(cachedUrl).pathname;
-        const normalizedCached = cachedPath.replace(/^\/+/, '').toLowerCase();
-        const normalizedTarget = normalizedPath.toLowerCase();
-        
-        // Exact match
-        if (normalizedCached === normalizedTarget) {
-          return true;
-        }
-        
-        // Check if paths match (handling different URL formats)
-        if (normalizedCached.endsWith(normalizedTarget) || normalizedTarget.endsWith(normalizedCached)) {
-          return true;
-        }
-        
-        // Check filename match
-        const cachedFilename = cachedPath.split('/').pop();
-        const targetFilename = normalizedPath.split('/').pop();
-        if (cachedFilename && targetFilename && cachedFilename.toLowerCase() === targetFilename.toLowerCase()) {
-          return true;
+        const urlObj = new URL(url);
+        const filename = urlObj.pathname.split('/').pop();
+        if (filename) {
+          const normalizedFilename = normalizePathForComparison(filename);
+          normalizedCacheSet.add(normalizedFilename);
         }
       } catch {
-        // If URL parsing fails, try simple string comparison
-        const normalizedCached = cachedUrl.replace(/^\/+/, '').toLowerCase();
-        const normalizedTarget = normalizedPath.toLowerCase();
-        return normalizedCached.includes(normalizedTarget) || normalizedTarget.includes(normalizedCached);
+        const parts = url.split('/');
+        const filename = parts[parts.length - 1];
+        if (filename) {
+          const normalizedFilename = normalizePathForComparison(filename);
+          normalizedCacheSet.add(normalizedFilename);
+        }
       }
-      return false;
     });
+    
+    // Check using same strategies as findMissingPdfs
+    let isCached = false;
+    
+    // Strategy 1: Exact match
+    if (normalizedCacheSet.has(normalizedTarget)) {
+      isCached = true;
+    }
+    
+    // Strategy 2: Filename match
+    if (!isCached) {
+      const filename = normalizedTarget.split('/').pop();
+      if (filename && normalizedCacheSet.has(filename)) {
+        isCached = true;
+      }
+    }
+    
+    // Strategy 3: Partial match (same logic as findMissingPdfs)
+    if (!isCached) {
+      isCached = Array.from(normalizedCacheSet).some(cached => {
+        if (cached === normalizedTarget) return true;
+        if (cached.endsWith(normalizedTarget)) return true;
+        if (normalizedTarget.endsWith(cached)) return true;
+        
+        const cachedFilename = cached.split('/').pop();
+        const expectedFilename = normalizedTarget.split('/').pop();
+        if (cachedFilename && expectedFilename && cachedFilename === expectedFilename) {
+          return true;
+        }
+        
+        if (cachedFilename && expectedFilename) {
+          const cachedBase = cachedFilename.replace(/\.pdf$/i, '');
+          const expectedBase = expectedFilename.replace(/\.pdf$/i, '');
+          if (cachedBase && expectedBase && cachedBase === expectedBase) {
+            return true;
+          }
+        }
+        
+        return false;
+      });
+    }
 
     if (isCached) {
       return { available: true, needsDownload: false, url: fullUrl };
+    }
+    
+    // Debug: Log when PDF is not found (only for first few misses to avoid spam)
+    if (!validatePdfAvailability._missCount) {
+      validatePdfAvailability._missCount = 0;
+    }
+    if (validatePdfAvailability._missCount < 3) {
+      validatePdfAvailability._missCount++;
+      console.warn(`[PDF Validation] PDF not found in cache: ${pdfPath} (normalized: ${normalizedTarget})`);
+      console.warn(`[PDF Validation] Sample cached PDFs:`, Array.from(normalizedCacheSet).slice(0, 5));
     }
 
     // If not in cache, check if it can be downloaded (online)
