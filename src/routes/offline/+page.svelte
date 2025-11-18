@@ -246,7 +246,9 @@
   $: state = $offline;
   $: downloading = $isDownloading;
   $: louvoresReady = $louvores.length > 0;
-  $: canDownload = selectedCategories.length > 0 && !downloading && louvoresReady;
+  // Filter out already downloaded categories from selection for download button
+  $: categoriesToDownload = selectedCategories.filter(cat => !downloadedCategories.includes(cat));
+  $: canDownload = categoriesToDownload.length > 0 && !downloading && louvoresReady;
   $: progress = state.progress || 0;
   $: completed = state.completed || 0;
   $: failed = state.failed || 0;
@@ -441,7 +443,6 @@
             {@const stats = categoryStats[category] || { total: 0, available: 0, missing: 0, percentage: 0 }}
             {@const isActuallyComplete = stats.percentage === 100 && stats.missing === 0}
             {@const isDownloaded = downloadedCategories.includes(category)}
-            // Ensure consistency: badge only shows if actually complete
             {@const shouldShowCompleteBadge = isActuallyComplete && (isDownloaded || stats.available === stats.total)}
             
             <label class="category-item" class:downloaded={isDownloaded} class:complete={isActuallyComplete}>
