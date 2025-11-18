@@ -126,10 +126,11 @@ export async function ensurePdfAvailable(pdfPath) {
 
 /**
  * Normalize path for comparison (handles encoding, case, and path variations)
+ * Centralized function to ensure consistent normalization across all PDF comparison operations
  * @param {string} path - Path to normalize
  * @returns {string} - Normalized path
  */
-function normalizePathForComparison(path) {
+export function normalizePathForComparison(path) {
   if (!path) return '';
   
   try {

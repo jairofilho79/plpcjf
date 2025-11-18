@@ -61,6 +61,9 @@
     // Load initial stats
     await loadCategoryStats();
     
+    // Validate and clear error if no longer relevant
+    await offline.validateAndClearError();
+    
     // Setup cache sync listener
     setupCacheSync();
     const unsubscribe = onCacheSync(() => {
@@ -121,17 +124,20 @@
       // Clear PDF index
       clearPdfIndex();
       
-      // Reload cached PDFs list
-      await offline.loadCachedPdfsList();
+      // Validate and sync all stats (this will reload everything and fix inconsistencies)
+      const syncResult = await offline.validateAndSyncStats();
       
-      // Reload category stats
+      // Update downloaded categories from sync result
+      downloadedCategories = syncResult.downloaded;
+      
+      // Reload category stats to reflect any fixes
       await loadCategoryStats();
       
       // Update cache version
       await updateCacheVersion();
       
-      // Update downloaded categories
-      downloadedCategories = await offline.checkAndUpdateDownloadedCategories();
+      // Validate and clear error if no longer relevant
+      await offline.validateAndClearError();
       
       lastSyncTime = new Date();
       needsSync = false;
@@ -432,11 +438,13 @@
           {#each CATEGORY_OPTIONS as category}
             {@const isSelected = selectedCategories.includes(category)}
             {@const categorySize = ((/** @type {Record<string, number>} */ (categorySizes))[category] || 0)}
-            {@const isDownloaded = downloadedCategories.includes(category)}
             {@const stats = categoryStats[category] || { total: 0, available: 0, missing: 0, percentage: 0 }}
-            {@const isComplete = stats.percentage === 100}
+            {@const isActuallyComplete = stats.percentage === 100 && stats.missing === 0}
+            {@const isDownloaded = downloadedCategories.includes(category)}
+            // Ensure consistency: badge only shows if actually complete
+            {@const shouldShowCompleteBadge = isActuallyComplete && (isDownloaded || stats.available === stats.total)}
             
-            <label class="category-item" class:downloaded={isDownloaded} class:complete={isComplete}>
+            <label class="category-item" class:downloaded={isDownloaded} class:complete={isActuallyComplete}>
               <input
                 type="checkbox"
                 checked={isSelected}
@@ -446,9 +454,9 @@
               <div class="category-info">
                 <div class="category-header">
                   <span class="category-label">{category}</span>
-                  {#if isDownloaded || isComplete}
+                  {#if shouldShowCompleteBadge}
                     <span class="downloaded-badge">✓ Completo</span>
-                  {:else if stats.missing > 0}
+                  {:else if stats.missing > 0 && stats.total > 0}
                     <span class="partial-badge">{stats.percentage}% disponível</span>
                   {/if}
                 </div>
@@ -575,10 +583,13 @@
     {/if}
 
     {#if state.error}
-      <div class="error-box">
-        <AlertCircle class="w-5 h-5 error-icon" />
-        <p class="error-text">{state.error}</p>
-      </div>
+      {@const hasActualMissing = Object.values(categoryStats).some(s => s && s.missing > 0)}
+      {#if hasActualMissing}
+        <div class="error-box">
+          <AlertCircle class="w-5 h-5 error-icon" />
+          <p class="error-text">{state.error}</p>
+        </div>
+      {/if}
     {/if}
   </div>
 </div>

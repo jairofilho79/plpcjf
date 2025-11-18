@@ -11,6 +11,7 @@ import {
 } from '$lib/utils/swRegistration';
 import { unzip } from 'fflate';
 import { louvores } from './louvores';
+import { normalizePathForComparison } from '$lib/utils/pdfValidation';
 import { CATEGORY_OPTIONS } from './filters';
 import { atobUTF8 } from '$lib/utils/pathUtils';
 import { findMissingPdfs, findRequiredPackages } from '$lib/utils/pdfValidation';
@@ -166,6 +167,69 @@ async function loadCachedPdfsList() {
     }
   } catch (error) {
     console.error('[Offline Store] Failed to load cached PDFs:', error);
+  }
+}
+
+/**
+ * Sync all information after download completion
+ * Reloads cached PDFs, updates downloaded categories, and validates consistency
+ */
+async function syncAfterDownload() {
+  if (!browser) return;
+  
+  try {
+    // Wait a bit for Service Worker to process all cached PDFs
+    await new Promise(resolve => setTimeout(resolve, 500));
+    
+    // Reload cached PDFs list to get updated cache
+    await loadCachedPdfsList();
+    
+    // Get updated state
+    const updatedState = get(offlineState);
+    const updatedCachedPdfs = updatedState.cachedPdfs || [];
+    const louvoresData = get(louvores);
+    
+    if (!louvoresData || louvoresData.length === 0) {
+      return;
+    }
+    
+    // Update downloaded categories list
+    // After successful download, verify which categories are now completely downloaded
+    const completelyDownloaded = await getCompletelyDownloadedCategories(louvoresData, updatedCachedPdfs);
+    
+    // Save to OFFLINE_CATEGORIAS_SALVAS flag
+    saveDownloadedCategories(completelyDownloaded);
+    
+    // Validate and clear error if no PDFs are actually missing
+    const currentState = get(offlineState);
+    if (currentState.error) {
+      // Check if error is still valid by verifying actual missing PDFs
+      const allCategories = [...new Set(louvoresData.map(l => l.categoria).filter(Boolean))];
+      let hasAnyMissing = false;
+      
+      for (const category of allCategories) {
+        const missing = identifyMissingPdfs(
+          louvoresData.filter(l => l.categoria === category),
+          updatedCachedPdfs
+        );
+        if (missing.length > 0) {
+          hasAnyMissing = true;
+          break;
+        }
+      }
+      
+      // Clear error if no PDFs are actually missing
+      if (!hasAnyMissing) {
+        offlineState.update(state => ({
+          ...state,
+          error: null
+        }));
+      }
+    }
+    
+    console.log('[Offline Store] Post-download sync completed');
+  } catch (error) {
+    console.error('[Offline Store] Error during post-download sync:', error);
   }
 }
 
@@ -451,13 +515,20 @@ async function startZipDownloadWithSpecificParts(categories, pdfUrls, partsByCat
     const finalCompleted = Math.min(completed, total - failed);
     const finalProgress = total === 0 ? 100 : Math.floor((finalCompleted / total) * 100);
 
+    // Calculate error message based on actual failed count
+    // Only set error if there are actually failed PDFs after verification
+    let errorMessage = null;
+    if (failed > 0) {
+      errorMessage = `${failed} PDFs não foram encontrados nos pacotes selecionados.`;
+    }
+
     offlineState.update(state => ({
       ...state,
       downloading: false,
       progress: finalProgress,
       completed: finalCompleted,
       failed,
-      error: failed > 0 ? `${failed} PDFs não foram encontrados nos pacotes selecionados.` : null
+      error: errorMessage
     }));
 
     if (!zipDownloadCancelled) {
@@ -479,17 +550,8 @@ async function startZipDownloadWithSpecificParts(categories, pdfUrls, partsByCat
         }
       }
 
-      // Reload cached PDFs list to get updated cache
-      await loadCachedPdfsList();
-
-      // Update downloaded categories list
-      // After successful download, verify which categories are now completely downloaded
-      const updatedState = get(offlineState);
-      const updatedCachedPdfs = updatedState.cachedPdfs;
-      const completelyDownloaded = await getCompletelyDownloadedCategories(louvoresData, updatedCachedPdfs);
-      
-      // Save to OFFLINE_CATEGORIAS_SALVAS flag
-      saveDownloadedCategories(completelyDownloaded);
+      // Sync all information after download
+      await syncAfterDownload();
     }
 
   } catch (error) {
@@ -588,25 +650,10 @@ function saveDownloadedCategories(categories) {
 }
 
 /**
- * Normalize URL for comparison (remove protocol and domain)
- */
-function normalizeUrlForComparison(url) {
-  if (!url) return '';
-  // Remove protocol and domain, keep only path
-  let normalized = url.replace(/^https?:\/\/[^/]+/, '');
-  // Ensure starts with /
-  if (!normalized.startsWith('/')) {
-    normalized = '/' + normalized;
-  }
-  // Remove trailing slashes (except root)
-  normalized = normalized.replace(/\/+$/, '') || '/';
-  return normalized.toLowerCase();
-}
-
-/**
  * Check if a category is completely downloaded (all PDFs are in cache storage)
  * IMPORTANT: This checks PDFs in cache storage, NOT ZIP files.
  * ZIP files are removed from cache after extraction, so we verify PDFs directly.
+ * Uses unified normalization function for consistency.
  */
 async function isCategoryCompletelyDownloaded(category, cachedPdfs, louvoresData) {
   if (!category || !louvoresData || !cachedPdfs) {
@@ -620,8 +667,10 @@ async function isCategoryCompletelyDownloaded(category, cachedPdfs, louvoresData
     return false;
   }
 
-  // Normalize cached PDFs URLs for comparison
-  const normalizedCachedPdfs = cachedPdfs.map(url => normalizeUrlForComparison(url));
+  // Normalize cached PDFs URLs for comparison using unified function
+  const normalizedCachedPdfs = new Set(
+    cachedPdfs.map(url => normalizePathForComparison(url))
+  );
 
   // Check if all PDFs for this category are in cache
   for (const louvor of categoryLouvores) {
@@ -630,40 +679,57 @@ async function isCategoryCompletelyDownloaded(category, cachedPdfs, louvoresData
       continue;
     }
 
-    // Normalize PDF URL for comparison
-    const normalizedPdfUrl = normalizeUrlForComparison(pdfUrl);
+    // Normalize PDF URL for comparison using unified function
+    const normalizedPdfUrl = normalizePathForComparison(pdfUrl);
 
-    // Check if PDF is in cache
-    const isCached = normalizedCachedPdfs.some(cached => {
-      // Exact match
-      if (cached === normalizedPdfUrl) {
-        return true;
+    // Check if PDF is in cache using multiple strategies
+    let isCached = false;
+    
+    // Strategy 1: Exact match
+    if (normalizedCachedPdfs.has(normalizedPdfUrl)) {
+      isCached = true;
+    }
+    
+    // Strategy 2: Filename match (handle different directory structures)
+    if (!isCached) {
+      const filename = normalizedPdfUrl.split('/').pop();
+      if (filename && normalizedCachedPdfs.has(filename)) {
+        isCached = true;
       }
-      // Check if cached URL ends with PDF URL (handles full URLs vs relative paths)
-      if (cached.endsWith(normalizedPdfUrl)) {
-        return true;
-      }
-      // Check if PDF URL ends with cached URL (handles different path formats)
-      if (normalizedPdfUrl.endsWith(cached)) {
-        return true;
-      }
-      // Check if both URLs contain the same path segments
-      const cachedSegments = cached.split('/').filter(s => s);
-      const pdfSegments = normalizedPdfUrl.split('/').filter(s => s);
-      if (cachedSegments.length > 0 && pdfSegments.length > 0) {
-        // Check if the last segments match (filename)
-        const cachedFilename = cachedSegments[cachedSegments.length - 1];
-        const pdfFilename = pdfSegments[pdfSegments.length - 1];
-        if (cachedFilename === pdfFilename && cachedFilename.endsWith('.pdf')) {
+    }
+    
+    // Strategy 3: Partial match (check if any cached path ends with expected path or vice versa)
+    if (!isCached) {
+      isCached = Array.from(normalizedCachedPdfs).some(cached => {
+        // Check if paths match (handling different URL formats)
+        if (cached === normalizedPdfUrl) return true;
+        if (cached.endsWith(normalizedPdfUrl)) return true;
+        if (normalizedPdfUrl.endsWith(cached)) return true;
+        
+        // Check filename match
+        const cachedFilename = cached.split('/').pop();
+        const expectedFilename = normalizedPdfUrl.split('/').pop();
+        if (cachedFilename && expectedFilename && cachedFilename === expectedFilename) {
           return true;
         }
-      }
-      return false;
-    });
+        
+        // Check if both contain the same filename (handling encoding differences)
+        if (cachedFilename && expectedFilename) {
+          // Remove file extension and compare
+          const cachedBase = cachedFilename.replace(/\.pdf$/i, '');
+          const expectedBase = expectedFilename.replace(/\.pdf$/i, '');
+          if (cachedBase && expectedBase && cachedBase === expectedBase) {
+            return true;
+          }
+        }
+        
+        return false;
+      });
+    }
 
     if (!isCached) {
       console.log(`[Offline Store] PDF not found in cache: ${pdfUrl} (normalized: ${normalizedPdfUrl})`);
-      console.log(`[Offline Store] Cached PDFs (first 5):`, normalizedCachedPdfs.slice(0, 5));
+      console.log(`[Offline Store] Cached PDFs sample:`, Array.from(normalizedCachedPdfs).slice(0, 5));
       return false;
     }
   }
@@ -1213,13 +1279,19 @@ async function startZipDownload(categories, pdfUrls, alreadyDownloadedCategories
     const finalCompleted = Math.min(completed, total - failed);
     const finalProgress = total === 0 ? 100 : Math.floor((finalCompleted / total) * 100);
 
+    // Calculate error message based on actual failed count
+    let errorMessage = null;
+    if (failed > 0) {
+      errorMessage = `${failed} PDFs não foram encontrados nos pacotes selecionados.`;
+    }
+
     offlineState.update(state => ({
       ...state,
       downloading: false,
       progress: finalProgress,
       completed: finalCompleted,
       failed,
-      error: failed > 0 ? `${failed} PDFs nao foram encontrados nos pacotes selecionados.` : null
+      error: errorMessage
     }));
 
     if (!zipDownloadCancelled) {
@@ -1236,21 +1308,13 @@ async function startZipDownload(categories, pdfUrls, alreadyDownloadedCategories
         }
       }
 
-      // Reload cached PDFs list to get updated cache
-      await loadCachedPdfsList();
-
-      // Update downloaded categories list
-      // After successful download, verify which categories are now completely downloaded
-      const updatedState = get(offlineState);
-      const updatedCachedPdfs = updatedState.cachedPdfs;
+      // Sync all information after download
+      await syncAfterDownload();
       
-      if (updatedCachedPdfs && updatedCachedPdfs.length > 0 && louvoresData && louvoresData.length > 0) {
-        // Check which categories are now completely downloaded
-        const completelyDownloaded = await getCompletelyDownloadedCategories(louvoresData, updatedCachedPdfs);
-        
-        // Merge with already downloaded categories
+      // Merge with already downloaded categories if provided
+      if (alreadyDownloadedCategories && alreadyDownloadedCategories.length > 0) {
         const currentDownloaded = getDownloadedCategories();
-        const allDownloaded = [...new Set([...currentDownloaded, ...completelyDownloaded, ...alreadyDownloadedCategories])];
+        const allDownloaded = [...new Set([...currentDownloaded, ...alreadyDownloadedCategories])];
         saveDownloadedCategories(allDownloaded);
         
         console.log('[Offline Store] Updated downloaded categories:', allDownloaded);
@@ -1537,6 +1601,188 @@ if (browser) {
 }
 
 /**
+ * Validate and clear error if it's no longer relevant
+ * Checks if there are actually missing PDFs and clears error if not
+ */
+async function validateAndClearError() {
+  if (!browser) return;
+  
+  try {
+    const state = get(offlineState);
+    if (!state.error) {
+      return; // No error to validate
+    }
+    
+    // Reload cached PDFs to get latest state
+    await loadCachedPdfsList();
+    const updatedState = get(offlineState);
+    const cachedPdfs = updatedState.cachedPdfs || [];
+    const louvoresData = get(louvores);
+    
+    if (!louvoresData || louvoresData.length === 0) {
+      return;
+    }
+    
+    // Check if there are actually any missing PDFs
+    const allCategories = [...new Set(louvoresData.map(l => l.categoria).filter(Boolean))];
+    let hasAnyMissing = false;
+    let totalMissing = 0;
+    
+    for (const category of allCategories) {
+      const categoryLouvores = louvoresData.filter(l => l.categoria === category);
+      const missing = identifyMissingPdfs(categoryLouvores, cachedPdfs);
+      if (missing.length > 0) {
+        hasAnyMissing = true;
+        totalMissing += missing.length;
+      }
+    }
+    
+    // Clear error if no PDFs are actually missing
+    if (!hasAnyMissing) {
+      offlineState.update(s => ({
+        ...s,
+        error: null
+      }));
+      console.log('[Offline Store] Error cleared - no PDFs are actually missing');
+    } else {
+      // Update error message with accurate count if different
+      const currentError = state.error;
+      const expectedError = `${totalMissing} PDFs não foram encontrados nos pacotes selecionados.`;
+      
+      // Only update if the count is significantly different (more than 10% difference)
+      if (currentError && !currentError.includes(String(totalMissing))) {
+        // Check if the error message contains a number
+        const errorMatch = currentError.match(/(\d+)\s+PDFs/);
+        if (errorMatch) {
+          const errorCount = parseInt(errorMatch[1], 10);
+          const difference = Math.abs(errorCount - totalMissing);
+          const percentDifference = (difference / Math.max(errorCount, totalMissing)) * 100;
+          
+          // Update if difference is more than 10%
+          if (percentDifference > 10) {
+            offlineState.update(s => ({
+              ...s,
+              error: expectedError
+            }));
+            console.log(`[Offline Store] Error message updated: ${errorCount} -> ${totalMissing} missing PDFs`);
+          }
+        }
+      }
+    }
+  } catch (error) {
+    console.error('[Offline Store] Error validating error message:', error);
+  }
+}
+
+/**
+ * Validate and sync all statistics to ensure consistency
+ * This function:
+ * 1. Reloads cached PDFs
+ * 2. Recalculates all category stats
+ * 3. Recalculates downloaded categories
+ * 4. Verifies consistency between stats and downloaded categories
+ * 5. Fixes inconsistencies automatically
+ * 6. Clears errors if no PDFs are actually missing
+ * 
+ * @returns {Promise<{stats: Object, downloaded: string[], fixed: boolean}>}
+ */
+async function validateAndSyncStats() {
+  if (!browser) {
+    return { stats: {}, downloaded: [], fixed: false };
+  }
+  
+  try {
+    console.log('[Offline Store] Starting validation and sync...');
+    
+    // 1. Reload PDFs in cache
+    await loadCachedPdfsList();
+    
+    // 2. Get updated state
+    const updatedState = get(offlineState);
+    const cachedPdfs = updatedState.cachedPdfs || [];
+    const louvoresData = get(louvores);
+    
+    if (!louvoresData || louvoresData.length === 0) {
+      return { stats: {}, downloaded: [], fixed: false };
+    }
+    
+    // 3. Recalculate all category stats
+    const allStats = {};
+    const categories = [...new Set(louvoresData.map(l => l.categoria).filter(Boolean))];
+    
+    for (const category of categories) {
+      allStats[category] = await getCategoryAvailabilityStats(category, louvoresData, cachedPdfs);
+    }
+    
+    // 4. Recalculate downloaded categories
+    const downloaded = await getCompletelyDownloadedCategories(louvoresData, cachedPdfs);
+    
+    // 5. Verify consistency and fix if needed
+    let fixed = false;
+    const correctedDownloaded = [...downloaded];
+    
+    for (const category of categories) {
+      const stats = allStats[category];
+      const isDownloaded = downloaded.includes(category);
+      const isActuallyComplete = stats.percentage === 100 && stats.missing === 0;
+      
+      if (isDownloaded !== isActuallyComplete) {
+        console.warn(`[Sync] Inconsistency detected for ${category}: marked as ${isDownloaded ? 'downloaded' : 'not downloaded'}, but actually ${isActuallyComplete ? 'complete' : 'incomplete'} (${stats.missing} missing)`);
+        
+        // Fix: if marked as downloaded but not actually complete, remove from list
+        if (isDownloaded && !isActuallyComplete) {
+          const index = correctedDownloaded.indexOf(category);
+          if (index > -1) {
+            correctedDownloaded.splice(index, 1);
+            fixed = true;
+            console.log(`[Sync] Fixed: Removed ${category} from downloaded list (has ${stats.missing} missing PDFs)`);
+          }
+        }
+        // Fix: if actually complete but not marked, add to list
+        else if (!isDownloaded && isActuallyComplete) {
+          correctedDownloaded.push(category);
+          fixed = true;
+          console.log(`[Sync] Fixed: Added ${category} to downloaded list (100% complete)`);
+        }
+      }
+    }
+    
+    // 6. Save corrected downloaded categories if fixed
+    if (fixed) {
+      saveDownloadedCategories(correctedDownloaded);
+    }
+    
+    // 7. Clear error if no PDFs are actually missing
+    const hasAnyMissing = Object.values(allStats).some(s => s.missing > 0);
+    if (!hasAnyMissing && updatedState.error) {
+      offlineState.update(s => ({
+        ...s,
+        error: null
+      }));
+      fixed = true;
+      console.log('[Sync] Fixed: Cleared error message (no PDFs are actually missing)');
+    }
+    
+    // 8. Update state with new stats if available
+    if (Object.keys(allStats).length > 0) {
+      // Stats will be updated by the page component when it calls loadCategoryStats
+      // We just return them here for reference
+    }
+    
+    console.log('[Offline Store] Validation and sync completed', { fixed, downloadedCount: correctedDownloaded.length });
+    
+    return {
+      stats: allStats,
+      downloaded: correctedDownloaded,
+      fixed
+    };
+  } catch (error) {
+    console.error('[Offline Store] Error during validation and sync:', error);
+    return { stats: {}, downloaded: [], fixed: false };
+  }
+}
+
+/**
  * Check and update downloaded categories based on current cache storage
  * IMPORTANT: This function verifies PDFs in cache storage, NOT ZIP files.
  * ZIP files are removed from cache after extraction, so we check if all PDFs
@@ -1605,7 +1851,9 @@ export const offline = {
   findRequiredPackagesForMissing,
   downloadMissingPackages,
   getCategoryAvailabilityStats,
-  getRequiredPackagesInfo
+  getRequiredPackagesInfo,
+  validateAndClearError,
+  validateAndSyncStats
 };
 
 // Derived store for offline status
