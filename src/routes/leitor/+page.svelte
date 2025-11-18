@@ -39,11 +39,6 @@
   let longPressTimer: ReturnType<typeof setTimeout> | null = null;
   let isLongPressing = false;
   const LONG_PRESS_DURATION = 500; // milliseconds
-  
-  // Fullscreen mode state
-  let isFullscreen = false;
-  let fullscreenLongPressTimer: ReturnType<typeof setTimeout> | null = null;
-  let isProcessingFullscreenLongPress = false;
   // Flag to prevent PDF.js from overwriting our manual page-width calculation
   let isManuallyAdjustingPageWidth = false;
   let pageWidthAdjustTimeout: ReturnType<typeof setTimeout> | null = null;
@@ -172,12 +167,6 @@
   let hasMoved = false;
   const TOUCH_MOVE_THRESHOLD = 10; // pixels
   const TOUCH_TIME_THRESHOLD = 300; // milliseconds
-  
-  // Long press navigation state (for first/last page)
-  let navigationLongPressTimer: ReturnType<typeof setTimeout> | null = null;
-  let isProcessingNavigationLongPress = false;
-  let navigationLongPressExecuted = false; // Track if long press already executed
-  let navigationSide: 'left' | 'right' | null = null; // Track which side was touched
 
   async function load(fileUrl: string) {
     const getDocument = (window as any).__pdfjsGetDocument as PDFJSGetDocument | undefined;
@@ -284,24 +273,13 @@
     // Set IS_LEITOR_OFFLINE flag when accessing the leitor route
     if (typeof window !== 'undefined') {
       localStorage.setItem('IS_LEITOR_OFFLINE', 'true');
-      
-      // Load fullscreen state from localStorage
-      const savedFullscreen = localStorage.getItem('pdfFullscreen');
-      if (savedFullscreen === 'true') {
-        isFullscreen = true;
-      }
     }
 
     if (!containerEl || !viewerEl) return;
     // Measure toolbar height (including border) and keep it updated
     const updateToolbarHeight = () => {
-      if (isFullscreen) {
-        toolbarHeight = 0;
-        if (containerEl) containerEl.style.top = '0px';
-      } else {
-        toolbarHeight = toolbarEl ? toolbarEl.offsetHeight : 60;
-        if (containerEl) containerEl.style.top = `${toolbarHeight}px`;
-      }
+      toolbarHeight = toolbarEl ? toolbarEl.offsetHeight : 60;
+      if (containerEl) containerEl.style.top = `${toolbarHeight}px`;
     };
     updateToolbarHeight();
     const ro = new ResizeObserver(updateToolbarHeight);
@@ -364,12 +342,6 @@
       containerEl.addEventListener('touchmove', onTouchMove, { passive: false });
       containerEl.addEventListener('touchend', onTouchEnd, { passive: false });
       containerEl.addEventListener('touchcancel', onTouchEnd, { passive: false });
-      
-      // Add fullscreen long press handlers
-      containerEl.addEventListener('mousedown', handleFullscreenMouseDown, { passive: false });
-      containerEl.addEventListener('mouseup', handleFullscreenMouseUp);
-      containerEl.addEventListener('touchstart', handleFullscreenTouchStart, { passive: false });
-      containerEl.addEventListener('touchend', handleFullscreenTouchEnd);
     }
 
     // Define escala inicial e sincroniza estados
@@ -382,10 +354,7 @@
             applyPageWidthZoom(true);
           }, 100);
         } else {
-          // For page-fit, use manual calculation to account for fullscreen
-          setTimeout(() => {
-            applyPageFitZoom();
-          }, 100);
+          viewer.currentScaleValue = preferredFitMode;
         }
       }
     });
@@ -432,10 +401,6 @@
         containerEl.removeEventListener('touchmove', onTouchMove);
         containerEl.removeEventListener('touchend', onTouchEnd);
         containerEl.removeEventListener('touchcancel', onTouchEnd);
-        containerEl.removeEventListener('mousedown', handleFullscreenMouseDown);
-        containerEl.removeEventListener('mouseup', handleFullscreenMouseUp);
-        containerEl.removeEventListener('touchstart', handleFullscreenTouchStart);
-        containerEl.removeEventListener('touchend', handleFullscreenTouchEnd);
       }
       try { if (toolbarEl) ro.unobserve(toolbarEl); } catch {}
       // No explicit destroy API; let GC collect. Clear container contents.
@@ -448,40 +413,12 @@
       clearTimeout(longPressTimer);
       longPressTimer = null;
     }
-    if (fullscreenLongPressTimer) {
-      clearTimeout(fullscreenLongPressTimer);
-      fullscreenLongPressTimer = null;
-    }
-    if (navigationLongPressTimer) {
-      clearTimeout(navigationLongPressTimer);
-      navigationLongPressTimer = null;
-    }
     if (pageWidthAdjustTimeout) {
       clearTimeout(pageWidthAdjustTimeout);
       pageWidthAdjustTimeout = null;
     }
     cleanup?.();
   });
-  
-  // Update toolbar visibility and container position when fullscreen changes
-  $: {
-    if (toolbarEl && containerEl) {
-      if (isFullscreen) {
-        toolbarHeight = 0;
-        containerEl.style.top = '0px';
-      } else {
-        toolbarHeight = toolbarEl.offsetHeight;
-        containerEl.style.top = `${toolbarHeight}px`;
-      }
-      
-      // If in page-fit mode, recalculate zoom when fullscreen changes
-      if (viewer && preferredFitMode === 'page-fit') {
-        setTimeout(() => {
-          applyPageFitZoom();
-        }, 150);
-      }
-    }
-  }
 
   function zoomIn() {
     if (!viewer) return;
@@ -501,151 +438,7 @@
         applyPageWidthZoom(false);
       }, 100);
     } else {
-      applyPageFitZoom();
-    }
-  }
-  
-  // Function to calculate and apply page-fit zoom manually
-  function applyPageFitZoom() {
-    if (!viewer || !containerEl || !viewerEl) return;
-    if (preferredFitMode !== 'page-fit') return;
-    
-    const pageView = (viewer as any)._pages?.[(viewer as any).currentPageNumber - 1];
-    if (!pageView) return;
-    
-    const pdfPage = pageView.pdfPage;
-    if (!pdfPage) return;
-    
-    // Get viewport at scale 1.0 to get the natural dimensions
-    const naturalViewport = pdfPage.getViewport({ scale: 1.0 });
-    const naturalWidth = naturalViewport.width;
-    const naturalHeight = naturalViewport.height;
-    
-    // Get available dimensions
-    // When in fullscreen, use window dimensions directly
-    // Otherwise, use container dimensions (which account for toolbar)
-    let availableWidth: number;
-    let availableHeight: number;
-    
-    if (isFullscreen) {
-      // In fullscreen, container should occupy entire viewport
-      availableWidth = window.innerWidth;
-      availableHeight = window.innerHeight;
-    } else {
-      // When toolbar is visible, use container dimensions
-      availableWidth = containerEl.clientWidth;
-      availableHeight = containerEl.clientHeight;
-    }
-    
-    // Calculate scale to fit both width and height
-    const scaleX = availableWidth / naturalWidth;
-    const scaleY = availableHeight / naturalHeight;
-    const targetScale = Math.min(scaleX, scaleY);
-    
-    if (targetScale > 0) {
-      viewer.currentScale = targetScale;
-    }
-  }
-  
-  // Toggle fullscreen mode
-  function toggleFullscreen() {
-    isFullscreen = !isFullscreen;
-    
-    // Save to localStorage
-    if (typeof window !== 'undefined') {
-      localStorage.setItem('pdfFullscreen', isFullscreen ? 'true' : 'false');
-    }
-    
-    // If entering fullscreen and in page-fit mode, adjust zoom
-    if (isFullscreen && preferredFitMode === 'page-fit') {
-      // Wait a bit for the toolbar to hide and container to resize
-      setTimeout(() => {
-        applyPageFitZoom();
-      }, 150);
-    } else if (!isFullscreen && preferredFitMode === 'page-fit') {
-      // When exiting fullscreen, recalculate zoom
-      setTimeout(() => {
-        applyPageFitZoom();
-      }, 150);
-    }
-  }
-  
-  // Check if touch/click is in navigation area (first or last quarter)
-  function isInNavigationArea(x: number, containerRect: DOMRect): boolean {
-    const containerWidth = containerRect.width;
-    const relativeX = x - containerRect.left;
-    const quarterWidth = containerWidth / 4;
-    
-    // First quarter (0-25%): previous page
-    // Last quarter (75-100%): next page
-    return relativeX < quarterWidth || relativeX > containerWidth - quarterWidth;
-  }
-  
-  // Handle fullscreen long press on container
-  function handleFullscreenMouseDown(e: MouseEvent) {
-    if (!containerEl) return;
-    
-    const containerRect = containerEl.getBoundingClientRect();
-    
-    // Don't trigger fullscreen if clicking in navigation areas
-    if (isInNavigationArea(e.clientX, containerRect)) {
-      return;
-    }
-    
-    e.preventDefault();
-    isProcessingFullscreenLongPress = true;
-    
-    if (fullscreenLongPressTimer) {
-      clearTimeout(fullscreenLongPressTimer);
-    }
-    
-    fullscreenLongPressTimer = setTimeout(() => {
-      toggleFullscreen();
-      fullscreenLongPressTimer = null;
-      isProcessingFullscreenLongPress = false;
-    }, LONG_PRESS_DURATION);
-  }
-  
-  function handleFullscreenMouseUp() {
-    if (fullscreenLongPressTimer) {
-      clearTimeout(fullscreenLongPressTimer);
-      fullscreenLongPressTimer = null;
-      isProcessingFullscreenLongPress = false;
-    }
-  }
-  
-  function handleFullscreenTouchStart(e: TouchEvent) {
-    // Only handle single touch, and only if not in navigation area
-    if (!containerEl || e.touches.length !== 1) return;
-    
-    const containerRect = containerEl.getBoundingClientRect();
-    const touch = e.touches[0];
-    
-    // Don't trigger fullscreen if touching in navigation areas
-    if (isInNavigationArea(touch.clientX, containerRect)) {
-      return;
-    }
-    
-    // Don't prevent default - let other touch handlers work normally
-    // The long press will just toggle fullscreen without interfering
-    isProcessingFullscreenLongPress = true;
-    
-    if (fullscreenLongPressTimer) {
-      clearTimeout(fullscreenLongPressTimer);
-    }
-    
-    fullscreenLongPressTimer = setTimeout(() => {
-      toggleFullscreen();
-      fullscreenLongPressTimer = null;
-      isProcessingFullscreenLongPress = false;
-    }, LONG_PRESS_DURATION);
-  }
-  
-  function handleFullscreenTouchEnd() {
-    if (fullscreenLongPressTimer) {
-      clearTimeout(fullscreenLongPressTimer);
-      fullscreenLongPressTimer = null;
-      isProcessingFullscreenLongPress = false;
+      viewer.currentScaleValue = preferredFitMode;
     }
   }
   
@@ -729,17 +522,6 @@
     const prev = Math.max(((viewer as any).currentPageNumber ?? 1) - 1, 1);
     (viewer as any).currentPageNumber = prev;
   }
-  
-  function goToFirstPage() {
-    if (!viewer) return;
-    (viewer as any).currentPageNumber = 1;
-  }
-  
-  function goToLastPage() {
-    if (!viewer) return;
-    const maxPages = totalPages || (viewer as any)._pagesCount || 1;
-    (viewer as any).currentPageNumber = maxPages;
-  }
 
   // Calculate distance between two touch points
   function getTouchDistance(touch1: Touch, touch2: Touch): number {
@@ -769,49 +551,6 @@
       touchStartY = touches[0].clientY;
       touchStartTime = Date.now();
       hasMoved = false;
-      
-      // Check if touch is in navigation area (left or right quarter)
-      const containerRect = containerEl.getBoundingClientRect();
-      const containerWidth = containerRect.width;
-      const relativeX = touchStartX - containerRect.left;
-      const quarterWidth = containerWidth / 4;
-      
-      // Clear any existing navigation long press timer
-      if (navigationLongPressTimer) {
-        clearTimeout(navigationLongPressTimer);
-        navigationLongPressTimer = null;
-      }
-      isProcessingNavigationLongPress = false;
-      navigationSide = null;
-      
-      // Check if in left quarter (0-25%)
-      if (relativeX < quarterWidth) {
-        navigationSide = 'left';
-        isProcessingNavigationLongPress = true;
-        navigationLongPressExecuted = false;
-        navigationLongPressTimer = setTimeout(() => {
-          // Long press detected - go to first page
-          goToFirstPage();
-          navigationLongPressExecuted = true;
-          navigationLongPressTimer = null;
-          isProcessingNavigationLongPress = false;
-          navigationSide = null;
-        }, LONG_PRESS_DURATION);
-      }
-      // Check if in right quarter (75-100%)
-      else if (relativeX > containerWidth - quarterWidth) {
-        navigationSide = 'right';
-        isProcessingNavigationLongPress = true;
-        navigationLongPressExecuted = false;
-        navigationLongPressTimer = setTimeout(() => {
-          // Long press detected - go to last page
-          goToLastPage();
-          navigationLongPressExecuted = true;
-          navigationLongPressTimer = null;
-          isProcessingNavigationLongPress = false;
-          navigationSide = null;
-        }, LONG_PRESS_DURATION);
-      }
     }
   }
 
@@ -842,14 +581,6 @@
       
       if (dx > TOUCH_MOVE_THRESHOLD || dy > TOUCH_MOVE_THRESHOLD) {
         hasMoved = true;
-        // Cancel navigation long press if user moved
-        if (navigationLongPressTimer) {
-          clearTimeout(navigationLongPressTimer);
-          navigationLongPressTimer = null;
-          isProcessingNavigationLongPress = false;
-          navigationLongPressExecuted = false;
-          navigationSide = null;
-        }
       }
     }
   }
@@ -869,16 +600,8 @@
       return;
     }
     
-    // Cancel navigation long press timer if it's still running (wasn't a long press)
-    if (navigationLongPressTimer) {
-      clearTimeout(navigationLongPressTimer);
-      navigationLongPressTimer = null;
-      navigationLongPressExecuted = false;
-    }
-    
-    // Single touch navigation: check if it was a tap (not a scroll or long press)
-    // Don't do normal navigation if long press already executed
-    if (touches.length === 0 && !isPinching && !hasMoved && !isProcessingNavigationLongPress && !navigationLongPressExecuted) {
+    // Single touch navigation: check if it was a tap (not a scroll)
+    if (touches.length === 0 && !isPinching && !hasMoved) {
       const touchDuration = Date.now() - touchStartTime;
       
       // Only process if it was a quick tap (not a long press or scroll)
@@ -898,11 +621,6 @@
         }
       }
     }
-    
-    // Reset navigation state
-    isProcessingNavigationLongPress = false;
-    navigationLongPressExecuted = false;
-    navigationSide = null;
     
     // Reset state
     touchStartX = 0;
@@ -1219,13 +937,9 @@
   .container.hidden {
     display: none;
   }
-  
-  .toolbar.hidden {
-    display: none;
-  }
 </style>
 
-<div class="toolbar" bind:this={toolbarEl} class:hidden={isFullscreen}>
+<div class="toolbar" bind:this={toolbarEl}>
   <div class="brand">PLPC</div>
 
   <button class="btn prev" on:click={prevPage} aria-label="Página anterior">
@@ -1312,5 +1026,3 @@
   <!-- pdfjs-dist css hooks on .pdfViewer and .viewer -->
   
 </div>
-
-
