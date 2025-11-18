@@ -1,9 +1,45 @@
 // Service Worker for PWA Offline Mode
 // Handles caching of PDFs and app resources for offline access
 
-const CACHE_VERSION = 'plpc-v2';
+const CACHE_VERSION = 'plpc-v3-dev';
 const APP_CACHE = `${CACHE_VERSION}-app`;
 const PDF_CACHE = `${CACHE_VERSION}-pdfs`;
+
+// Detect if we're in development mode
+function isDevelopmentMode() {
+  try {
+    const hostname = self.location.hostname;
+    // Development mode: localhost, 127.0.0.1, or any local IP
+    return hostname === 'localhost' || 
+           hostname === '127.0.0.1' || 
+           hostname.startsWith('192.168.') ||
+           hostname.startsWith('10.') ||
+           hostname.startsWith('172.16.') ||
+           hostname.includes('.local');
+  } catch {
+    return false;
+  }
+}
+
+// Check if a request is a development asset (JS/CSS from Vite/SvelteKit)
+function isDevelopmentAsset(url) {
+  const pathname = url.pathname;
+  const hasQueryString = url.search.length > 0; // Vite adds query strings to dev assets
+  
+  return pathname.includes('/_app/') || 
+         pathname.includes('/node_modules/') ||
+         pathname.includes('/src/') ||
+         (pathname.endsWith('.js') && hasQueryString) ||
+         (pathname.endsWith('.mjs') && hasQueryString) ||
+         (pathname.endsWith('.css') && hasQueryString) ||
+         (pathname.endsWith('.ts') && hasQueryString);
+}
+
+const IS_DEV = isDevelopmentMode();
+
+if (IS_DEV) {
+  console.log('[SW] Development mode detected - caching disabled for JS/CSS assets');
+}
 
 // App shell resources to cache on install
 // Note: Only cache the root '/' HTML shell, not individual SPA routes like '/leitor'
@@ -126,40 +162,57 @@ self.addEventListener('fetch', (event) => {
 
   // Handle navigation requests (page loads) - SvelteKit SPA routing
   if (isNavigationRequest) {
-    event.respondWith(
-      fetch(event.request)
-        .then(response => {
-          // Cache successful navigation responses
-          if (response && response.status === 200) {
-            const responseClone = response.clone();
-            caches.open(APP_CACHE).then(cache => {
-              cache.put(event.request, responseClone);
-              console.log('[SW] Cached navigation response for:', url.pathname);
-            });
-          }
-          return response;
-        })
-        .catch(() => {
-          // When offline, serve the cached HTML shell for SvelteKit SPA routing
-          // SvelteKit's client-side router will handle the actual route based on the URL
-          console.log('[SW] Navigation request offline for:', url.pathname);
-          
-          // Try to serve the specific route from cache first (if previously visited)
-          return caches.match(event.request)
-            .then(cached => {
-              if (cached) {
-                console.log('[SW] Serving cached route:', url.pathname);
-                return cached;
-              }
-              
-              // If specific route not cached, serve the root '/' HTML shell
-              // This is the correct approach for SvelteKit SPA - the same HTML is served
-              // for all routes, and the client-side router handles the actual routing
-              console.log('[SW] Route not cached, serving / shell for SvelteKit routing:', url.pathname);
-              return caches.match('/');
-            });
-        })
-    );
+    // In development mode, always fetch from network to get latest changes
+    if (IS_DEV) {
+      event.respondWith(
+        fetch(event.request)
+          .then(response => {
+            // Don't cache navigation in development
+            return response;
+          })
+          .catch(() => {
+            // Fallback to cache only when offline in dev
+            return caches.match(event.request)
+              .then(cached => cached || caches.match('/'));
+          })
+      );
+    } else {
+      // Production: Network first, then cache
+      event.respondWith(
+        fetch(event.request)
+          .then(response => {
+            // Cache successful navigation responses
+            if (response && response.status === 200) {
+              const responseClone = response.clone();
+              caches.open(APP_CACHE).then(cache => {
+                cache.put(event.request, responseClone);
+                console.log('[SW] Cached navigation response for:', url.pathname);
+              });
+            }
+            return response;
+          })
+          .catch(() => {
+            // When offline, serve the cached HTML shell for SvelteKit SPA routing
+            // SvelteKit's client-side router will handle the actual route based on the URL
+            console.log('[SW] Navigation request offline for:', url.pathname);
+            
+            // Try to serve the specific route from cache first (if previously visited)
+            return caches.match(event.request)
+              .then(cached => {
+                if (cached) {
+                  console.log('[SW] Serving cached route:', url.pathname);
+                  return cached;
+                }
+                
+                // If specific route not cached, serve the root '/' HTML shell
+                // This is the correct approach for SvelteKit SPA - the same HTML is served
+                // for all routes, and the client-side router handles the actual routing
+                console.log('[SW] Route not cached, serving / shell for SvelteKit routing:', url.pathname);
+                return caches.match('/');
+              });
+          })
+      );
+    }
     return;
   }
 
@@ -198,36 +251,73 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // For all other requests (JS, CSS, images, etc.), cache first when offline
-  event.respondWith(
-    caches.match(event.request)
-      .then(cachedResponse => {
-        if (cachedResponse) {
-          return cachedResponse;
-        }
-        // Not in cache, try network
-        return fetch(event.request)
-          .then(response => {
-            // Cache successful responses for future offline use
-            if (response && response.status === 200) {
-              const responseClone = response.clone();
-              caches.open(APP_CACHE).then(cache => {
-                cache.put(event.request, responseClone);
-              });
-            }
-            return response;
-          })
-          .catch(() => {
-            // Offline and not in cache - fetch will fail, but let it fail gracefully
-            // Return a rejected promise so the browser can handle it
-            return Promise.reject(new Error('Network error and not in cache'));
-          });
-      })
-      .catch(() => {
-        // If cache.match fails, try network one more time
-        return fetch(event.request);
-      })
-  );
+  // Check if this is a development asset (JS/CSS from Vite/SvelteKit)
+  const isDevAsset = isDevelopmentAsset(url);
+
+  // For development assets in dev mode: Network First (bypass cache entirely)
+  if (IS_DEV && isDevAsset) {
+    event.respondWith(
+      fetch(event.request, { cache: 'no-store' })
+        .then(response => {
+          // Don't cache development assets
+          return response;
+        })
+        .catch(() => {
+          // Only use cache as last resort in dev mode
+          return caches.match(event.request);
+        })
+    );
+    return;
+  }
+
+  // For all other requests (JS, CSS, images, etc.)
+  // In production: Cache first, then network
+  // In development (non-dev assets): Network first
+  if (IS_DEV) {
+    // Development mode: Network First for non-dev assets (like images, fonts)
+    event.respondWith(
+      fetch(event.request)
+        .then(response => {
+          // Don't cache in development
+          return response;
+        })
+        .catch(() => {
+          // Fallback to cache if offline
+          return caches.match(event.request);
+        })
+    );
+  } else {
+    // Production mode: Cache First
+    event.respondWith(
+      caches.match(event.request)
+        .then(cachedResponse => {
+          if (cachedResponse) {
+            return cachedResponse;
+          }
+          // Not in cache, try network
+          return fetch(event.request)
+            .then(response => {
+              // Cache successful responses for future offline use
+              if (response && response.status === 200) {
+                const responseClone = response.clone();
+                caches.open(APP_CACHE).then(cache => {
+                  cache.put(event.request, responseClone);
+                });
+              }
+              return response;
+            })
+            .catch(() => {
+              // Offline and not in cache - fetch will fail, but let it fail gracefully
+              // Return a rejected promise so the browser can handle it
+              return Promise.reject(new Error('Network error and not in cache'));
+            });
+        })
+        .catch(() => {
+          // If cache.match fails, try network one more time
+          return fetch(event.request);
+        })
+    );
+  }
 });
 
 // Message handling for download control
