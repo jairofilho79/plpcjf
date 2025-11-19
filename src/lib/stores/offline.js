@@ -670,12 +670,53 @@ function saveDownloadedCategories(categories) {
 }
 
 /**
+ * Verify if a PDF actually exists in Cache Storage
+ * This performs a real check in the cache, not just in the list
+ */
+async function verifyPdfInCacheStorage(pdfUrl) {
+  if (!browser || typeof caches === 'undefined') {
+    return false;
+  }
+  
+  try {
+    const cache = await openPdfCache();
+    // Try multiple URL formats for compatibility
+    const urlVariations = [
+      pdfUrl,
+      pdfUrl.startsWith('/') ? pdfUrl : `/${pdfUrl}`,
+      pdfUrl.replace(/^\/+/, ''),
+      new URL(pdfUrl, location.origin).toString()
+    ];
+    
+    for (const url of urlVariations) {
+      try {
+        const request = new Request(url);
+        const response = await cache.match(request);
+        if (response) {
+          return true;
+        }
+      } catch (e) {
+        // Continue to next variation
+      }
+    }
+    
+    return false;
+  } catch (error) {
+    console.warn(`[Offline Store] Error verifying PDF in cache: ${pdfUrl}`, error);
+    return false;
+  }
+}
+
+/**
  * Check if a category is completely downloaded (all PDFs are in cache storage)
  * IMPORTANT: This checks PDFs in cache storage, NOT ZIP files.
  * ZIP files are removed from cache after extraction, so we verify PDFs directly.
  * Uses unified normalization function for consistency.
+ * 
+ * FIX: Added strict validation mode for problematic categories like "Gestos em Gravura"
+ * that verifies directly in Cache Storage to avoid false positives from filename matching.
  */
-async function isCategoryCompletelyDownloaded(category, cachedPdfs, louvoresData) {
+async function isCategoryCompletelyDownloaded(category, cachedPdfs, louvoresData, strictMode = false) {
   if (!category || !louvoresData || !cachedPdfs) {
     return false;
   }
@@ -687,10 +728,20 @@ async function isCategoryCompletelyDownloaded(category, cachedPdfs, louvoresData
     return false;
   }
 
+  // FIX: For "Gestos em Gravura", always use strict mode to avoid false positives
+  // This category has many PDFs with the same filename, causing validation issues
+  if (category === 'Gestos em Gravura') {
+    strictMode = true;
+  }
+
   // Normalize cached PDFs URLs for comparison using unified function
   const normalizedCachedPdfs = new Set(
     cachedPdfs.map(url => normalizePathForComparison(url))
   );
+
+  // Track unique PDFs found for counting validation
+  const foundPdfs = new Set();
+  let missingCount = 0;
 
   // Check if all PDFs for this category are in cache
   for (const louvor of categoryLouvores) {
@@ -705,53 +756,85 @@ async function isCategoryCompletelyDownloaded(category, cachedPdfs, louvoresData
     // Check if PDF is in cache using multiple strategies
     let isCached = false;
     
-    // Strategy 1: Exact match
+    // Strategy 1: Exact match (most reliable)
     if (normalizedCachedPdfs.has(normalizedPdfUrl)) {
       isCached = true;
+      foundPdfs.add(normalizedPdfUrl);
     }
     
-    // Strategy 2: Filename match (handle different directory structures)
-    if (!isCached) {
+    // Strategy 2: Filename match - DISABLED for strict mode or Gestos em Gravura
+    // This was causing false positives when multiple PDFs share the same filename
+    if (!isCached && !strictMode) {
       const filename = normalizedPdfUrl.split('/').pop();
       if (filename && normalizedCachedPdfs.has(filename)) {
-        isCached = true;
+        // Only accept if we can verify it's actually the right file
+        // For now, we'll be more conservative and skip this strategy
+        // isCached = true;
       }
     }
     
     // Strategy 3: Partial match (check if any cached path ends with expected path or vice versa)
-    if (!isCached) {
+    // More restrictive: only check if cached path contains the full expected path
+    if (!isCached && !strictMode) {
       isCached = Array.from(normalizedCachedPdfs).some(cached => {
         // Check if paths match (handling different URL formats)
         if (cached === normalizedPdfUrl) return true;
+        // Only accept if cached path ends with expected path (not vice versa)
+        // This prevents false matches when expected path is shorter
         if (cached.endsWith(normalizedPdfUrl)) return true;
-        if (normalizedPdfUrl.endsWith(cached)) return true;
         
-        // Check filename match
+        // Check filename match only if paths are similar
         const cachedFilename = cached.split('/').pop();
         const expectedFilename = normalizedPdfUrl.split('/').pop();
         if (cachedFilename && expectedFilename && cachedFilename === expectedFilename) {
-          return true;
-        }
-        
-        // Check if both contain the same filename (handling encoding differences)
-        if (cachedFilename && expectedFilename) {
-          // Remove file extension and compare
-          const cachedBase = cachedFilename.replace(/\.pdf$/i, '');
-          const expectedBase = expectedFilename.replace(/\.pdf$/i, '');
-          if (cachedBase && expectedBase && cachedBase === expectedBase) {
+          // Additional check: paths should be similar (same directory structure)
+          const cachedDir = cached.replace(cachedFilename, '');
+          const expectedDir = normalizedPdfUrl.replace(expectedFilename, '');
+          if (cachedDir && expectedDir && cachedDir.includes(expectedDir)) {
             return true;
           }
         }
         
         return false;
       });
+      
+      if (isCached) {
+        foundPdfs.add(normalizedPdfUrl);
+      }
+    }
+
+    // FIX: Strict mode - verify directly in Cache Storage
+    if (strictMode && !isCached) {
+      const existsInCache = await verifyPdfInCacheStorage(pdfUrl);
+      if (existsInCache) {
+        isCached = true;
+        foundPdfs.add(normalizedPdfUrl);
+      }
     }
 
     if (!isCached) {
-      console.log(`[Offline Store] PDF not found in cache: ${pdfUrl} (normalized: ${normalizedPdfUrl})`);
-      console.log(`[Offline Store] Cached PDFs sample:`, Array.from(normalizedCachedPdfs).slice(0, 5));
-      return false;
+      missingCount++;
+      if (missingCount <= 3) { // Log first 3 missing PDFs to avoid spam
+        console.warn(`[Offline Store] PDF not found in cache: ${pdfUrl} (normalized: ${normalizedPdfUrl})`);
+        if (strictMode) {
+          console.warn(`[Offline Store] Strict mode: verified directly in cache storage - NOT FOUND`);
+        }
+      }
     }
+  }
+
+  // FIX: Additional validation - count unique PDFs found vs expected
+  const expectedCount = categoryLouvores.filter(l => getPdfUrl(l)).length;
+  const foundCount = foundPdfs.size;
+  
+  if (foundCount < expectedCount) {
+    console.warn(`[Offline Store] Category "${category}": Found ${foundCount}/${expectedCount} PDFs. Marking as incomplete.`);
+    return false;
+  }
+
+  // Log success for debugging
+  if (strictMode && foundCount === expectedCount) {
+    console.log(`[Offline Store] Category "${category}": Strict validation passed - ${foundCount} PDFs verified.`);
   }
 
   return true;
@@ -1746,6 +1829,7 @@ async function validateAndSyncStats() {
     }
     
     // 4. Recalculate downloaded categories
+    // FIX: getCompletelyDownloadedCategories now automatically uses strict mode for Gestos em Gravura
     const downloaded = await getCompletelyDownloadedCategories(louvoresData, cachedPdfs);
     
     // 5. Verify consistency and fix if needed
@@ -1819,6 +1903,8 @@ async function validateAndSyncStats() {
  * ZIP files are removed from cache after extraction, so we check if all PDFs
  * from a category are present in the cache storage.
  * Uses OFFLINE_CATEGORIAS_SALVAS flag to store the list of saved categories.
+ * 
+ * FIX: Now uses strict validation for problematic categories.
  */
 async function checkAndUpdateDownloadedCategories() {
   if (!browser) return [];
@@ -1849,6 +1935,7 @@ async function checkAndUpdateDownloadedCategories() {
 
     // Check which categories are completely downloaded (all PDFs are in cache storage)
     // This verifies PDFs, not ZIPs, since ZIPs are removed after extraction
+    // FIX: Uses strict mode for Gestos em Gravura automatically
     const completelyDownloaded = await getCompletelyDownloadedCategories(louvoresData, cachedPdfs);
     
     // Save to OFFLINE_CATEGORIAS_SALVAS flag
@@ -1858,6 +1945,59 @@ async function checkAndUpdateDownloadedCategories() {
   } catch (error) {
     console.error('[Offline Store] Failed to check downloaded categories:', error);
     return getDownloadedCategories();
+  }
+}
+
+/**
+ * Force revalidation of a specific category
+ * This clears the category from the downloaded list and revalidates it
+ * Useful for fixing inconsistent states, especially for "Gestos em Gravura"
+ * 
+ * @param {string} category - Category name to revalidate
+ * @returns {Promise<boolean>} - true if category is actually downloaded, false otherwise
+ */
+async function forceRevalidateCategory(category) {
+  if (!browser || !category) {
+    return false;
+  }
+
+  try {
+    console.log(`[Offline Store] Force revalidating category: ${category}`);
+    
+    // Remove category from downloaded list temporarily
+    const currentDownloaded = getDownloadedCategories();
+    const filteredDownloaded = currentDownloaded.filter(cat => cat !== category);
+    saveDownloadedCategories(filteredDownloaded);
+    
+    // Reload cached PDFs to ensure we have the latest state
+    await loadCachedPdfsList();
+    
+    // Get updated state
+    const state = get(offlineState);
+    const cachedPdfs = state.cachedPdfs || [];
+    const louvoresData = get(louvores);
+    
+    if (!louvoresData || louvoresData.length === 0) {
+      return false;
+    }
+    
+    // Revalidate with strict mode (always use strict for revalidation)
+    const isDownloaded = await isCategoryCompletelyDownloaded(category, cachedPdfs, louvoresData, true);
+    
+    // Update downloaded categories list
+    if (isDownloaded) {
+      const updatedDownloaded = [...new Set([...filteredDownloaded, category])];
+      saveDownloadedCategories(updatedDownloaded);
+      console.log(`[Offline Store] Category "${category}" revalidated: DOWNLOADED`);
+    } else {
+      saveDownloadedCategories(filteredDownloaded);
+      console.log(`[Offline Store] Category "${category}" revalidated: NOT DOWNLOADED`);
+    }
+    
+    return isDownloaded;
+  } catch (error) {
+    console.error(`[Offline Store] Error force revalidating category "${category}":`, error);
+    return false;
   }
 }
 
@@ -1884,7 +2024,8 @@ export const offline = {
   getCategoryAvailabilityStats,
   getRequiredPackagesInfo,
   validateAndClearError,
-  validateAndSyncStats
+  validateAndSyncStats,
+  forceRevalidateCategory
 };
 
 // Derived store for offline status
