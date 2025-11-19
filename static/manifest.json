@@ -3,7 +3,7 @@
   "short_name": "PLPC",
   "description": "Pesquisador e visualizador offline de partituras de louvores",
   "start_url": "/",
-  "display": "standalone",
+  "display": "browser",
   "background_color": "#ffffff",
   "theme_color": "#D4AF37",
   "orientation": "any",
@@ -23,14 +23,6 @@
   ],
   "categories": ["music", "utilities"],
   "screenshots": [],
-  "shortcuts": [],
-  "share_target": {
-    "action": "/",
-    "method": "GET",
-    "params": {
-      "title": "title",
-      "text": "text"
-    }
-  }
+  "shortcuts": []
 }
 
