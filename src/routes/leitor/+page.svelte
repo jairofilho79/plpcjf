@@ -22,6 +22,7 @@
   $: file = searchParams.get('file') ?? '/pdfs/exemplo.pdf';
   $: titulo = searchParams.get('titulo') ?? '';
   $: subtitulo = searchParams.get('subtitulo') ?? '';
+  $: skipValidation = searchParams.get('validated') === 'true';
 
   let currentPage = 1;
   let totalPages = 0;
@@ -167,6 +168,37 @@
   let hasMoved = false;
   const TOUCH_MOVE_THRESHOLD = 10; // pixels
   const TOUCH_TIME_THRESHOLD = 300; // milliseconds
+
+  // Load PDF directly without validation (optimization: skip validation if already validated)
+  async function loadDirectly(fileUrl: string) {
+    const getDocument = (window as any).__pdfjsGetDocument as PDFJSGetDocument | undefined;
+    if (!getDocument) return;
+    
+    // Avoid duplicate loads of the same file
+    if (lastLoadedFile === fileUrl && !pdfError) return;
+    
+    pdfLoading = true;
+    pdfError = null;
+    
+    try {
+      // Try to load directly - Service Worker will intercept and serve from cache if available
+      const loadingTask = getDocument({ url: fileUrl, withCredentials: false });
+      const pdfDocument = await loadingTask.promise;
+      linkService.setDocument(pdfDocument);
+      viewer.setDocument(pdfDocument);
+      totalPages = pdfDocument.numPages ?? 0;
+      currentPage = 1;
+      lastLoadedFile = fileUrl;
+      retryCount = 0;
+      pdfError = null;
+    } catch (error) {
+      console.warn('[Leitor] Direct load failed, falling back to validation:', error);
+      // If direct load fails, fall back to full validation
+      await load(fileUrl);
+    } finally {
+      pdfLoading = false;
+    }
+  }
 
   async function load(fileUrl: string) {
     const getDocument = (window as any).__pdfjsGetDocument as PDFJSGetDocument | undefined;
@@ -391,7 +423,12 @@
       }
     });
 
-    await load(file);
+    // Use direct load if validation was already done (skipValidation flag)
+    if (skipValidation) {
+      await loadDirectly(file);
+    } else {
+      await load(file);
+    }
 
     cleanup = () => {
       window.removeEventListener('resize', resize);

@@ -176,8 +176,8 @@ export async function getCachedPDFs() {
       return [];
     }
 
-    // Aguardar service worker estar pronto (com timeout curto)
-    const isReady = await waitForServiceWorker(2000);
+    // Aguardar service worker estar pronto (reduzido para 500ms para melhor performance)
+    const isReady = await waitForServiceWorker(500);
     
     if (!isReady || !navigator.serviceWorker.controller) {
       console.warn('[SW Message] Service worker not ready, returning empty list');

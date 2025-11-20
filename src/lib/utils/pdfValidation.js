@@ -18,8 +18,8 @@ export async function validatePdfAvailability(pdfPath) {
   const normalizedPath = pdfPath.startsWith('/') ? pdfPath.substring(1) : pdfPath;
   const fullUrl = new URL(`/${normalizedPath}`, window.location.origin).href;
 
-  // Wait for Service Worker to be ready (mas não bloqueia se não estiver pronto)
-  const swReady = await waitForServiceWorker(3000); // Reduzido para 3s para ser mais responsivo
+  // Wait for Service Worker to be ready (reduzido para 500ms para melhor performance)
+  const swReady = await waitForServiceWorker(500);
   if (!swReady) {
     console.warn('[PDF Validation] Service Worker not ready, but allowing check to proceed');
     // Não retornar false imediatamente - tentar verificar cache mesmo assim

@@ -109,16 +109,18 @@
         
         if (shouldProceed) {
           // PDF está disponível ou pode ser baixado, proceder com navegação
+          // Adicionar flag validated=true para evitar validação dupla no leitor
           const fileParam = encodeURIComponent(`/${pdfPath}`);
           const tituloParam = encodeURIComponent(louvor.nome || '');
           const subtituloText = `${louvor.categoria || ''} | ${louvor.classificacao || ''}`.trim();
           const subtituloParam = encodeURIComponent(subtituloText);
-          const url = `/leitor?file=${fileParam}&titulo=${tituloParam}&subtitulo=${subtituloParam}`;
+          const url = `/leitor?file=${fileParam}&titulo=${tituloParam}&subtitulo=${subtituloParam}&validated=true`;
           window.open(url, '_blank', 'noopener');
         }
       } catch (err) {
         console.error('Erro ao validar PDF:', err);
         // Em caso de erro, permitir abertura - leitor tentará carregar
+        // Não adicionar validated=true aqui pois validação falhou
         const fileParam = encodeURIComponent(`/${pdfPath}`);
         const tituloParam = encodeURIComponent(louvor.nome || '');
         const subtituloText = `${louvor.categoria || ''} | ${louvor.classificacao || ''}`.trim();
