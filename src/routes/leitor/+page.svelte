@@ -317,17 +317,34 @@
     const ro = new ResizeObserver(updateToolbarHeight);
     if (toolbarEl) ro.observe(toolbarEl);
 
-    // Load core and viewer via URL indirection to avoid Vite optimizer issues
-    const [coreUrlMod, viewerUrlMod, workerUrlMod] = await Promise.all([
-      import('pdfjs-dist/build/pdf.mjs?url'),
-      import('pdfjs-dist/web/pdf_viewer.mjs?url'),
-      import('pdfjs-dist/build/pdf.worker.min.mjs?url')
-    ]);
-    const coreMod = await import(/* @vite-ignore */ coreUrlMod.default);
-    const viewerNS = await import(/* @vite-ignore */ viewerUrlMod.default);
-    // Register on globals for viewer expectations
+    // Verificar se PDF.js foi pré-carregado
     // @ts-ignore
-    const core = coreMod?.default ?? coreMod;
+    const preloaded = window.__pdfjsPreloaded;
+    
+    let core, viewerNS, workerUrl;
+    
+    if (preloaded) {
+      // Usar módulos pré-carregados (mais rápido)
+      console.log('[Leitor] Usando PDF.js pré-carregado');
+      core = preloaded.core;
+      viewerNS = preloaded.viewer;
+      workerUrl = preloaded.workerUrl;
+    } else {
+      // Carregar módulos normalmente (fallback)
+      console.log('[Leitor] Carregando PDF.js normalmente');
+      const [coreUrlMod, viewerUrlMod, workerUrlMod] = await Promise.all([
+        import('pdfjs-dist/build/pdf.mjs?url'),
+        import('pdfjs-dist/web/pdf_viewer.mjs?url'),
+        import('pdfjs-dist/build/pdf.worker.min.mjs?url')
+      ]);
+      const coreMod = await import(/* @vite-ignore */ coreUrlMod.default);
+      viewerNS = await import(/* @vite-ignore */ viewerUrlMod.default);
+      // @ts-ignore
+      core = coreMod?.default ?? coreMod;
+      workerUrl = workerUrlMod.default;
+    }
+    
+    // Register on globals for viewer expectations
     // @ts-ignore
     globalThis.pdfjsLib = core;
     // @ts-ignore
@@ -335,7 +352,7 @@
     // Expose getDocument for load()
     // @ts-ignore
     window.__pdfjsGetDocument = core.getDocument;
-    core.GlobalWorkerOptions.workerSrc = workerUrlMod.default;
+    core.GlobalWorkerOptions.workerSrc = workerUrl;
 
     const { EventBus, PDFLinkService, PDFSinglePageViewer } = viewerNS as any;
 

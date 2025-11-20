@@ -28,6 +28,39 @@
         // Setup BroadcastChannel for cross-tab sync
         setupCacheSync();
       });
+      
+      // Pré-carregar PDF.js em background para otimizar abertura do leitor
+      // Não bloqueia o carregamento da página
+      setTimeout(() => {
+        Promise.all([
+          import('pdfjs-dist/build/pdf.mjs?url'),
+          import('pdfjs-dist/web/pdf_viewer.mjs?url'),
+          import('pdfjs-dist/build/pdf.worker.min.mjs?url')
+        ]).then(([coreUrlMod, viewerUrlMod, workerUrlMod]) => {
+          // Carregar os módulos e armazenar para uso futuro
+          Promise.all([
+            import(/* @vite-ignore */ coreUrlMod.default),
+            import(/* @vite-ignore */ viewerUrlMod.default)
+          ]).then(([coreMod, viewerNS]) => {
+            // @ts-ignore
+            const core = coreMod?.default ?? coreMod;
+            // Armazenar globalmente para uso no leitor
+            // @ts-ignore
+            window.__pdfjsPreloaded = {
+              core,
+              viewer: viewerNS,
+              workerUrl: workerUrlMod.default,
+              coreUrl: coreUrlMod.default,
+              viewerUrl: viewerUrlMod.default
+            };
+            console.log('[Layout] PDF.js pré-carregado com sucesso');
+          }).catch(err => {
+            console.warn('[Layout] Erro ao pré-carregar PDF.js:', err);
+          });
+        }).catch(err => {
+          console.warn('[Layout] Erro ao pré-carregar URLs do PDF.js:', err);
+        });
+      }, 1000); // Aguardar 1s para não competir com recursos críticos
     }
   });
   
