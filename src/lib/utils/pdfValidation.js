@@ -1,8 +1,42 @@
 // PDF Validation Utility
 // Validates PDF availability and identifies missing PDFs
 
-import { getCachedPDFs, waitForServiceWorker, downloadPDFsViaSW } from '$lib/utils/swRegistration';
+import { getCachedPDFsFast, waitForServiceWorker, downloadPDFsViaSW } from '$lib/utils/swRegistration';
 import { getPdfRelPath } from '$lib/utils/pathUtils';
+import { isPdfAvailableInIndex } from '$lib/utils/pdfIndex';
+
+/**
+ * Validates PDF availability with fast optimization using index
+ * Checks index first (fast), then falls back to full validation if needed
+ * @param {string} pdfPath - Relative path of the PDF
+ * @param {string} pdfId - Optional PDF ID for index lookup
+ * @returns {Promise<{available: boolean, needsDownload: boolean, url: string}>}
+ */
+export async function validatePdfAvailabilityFast(pdfPath, pdfId = null) {
+  if (!pdfPath) {
+    return { available: false, needsDownload: false, url: null };
+  }
+
+  // Strategy 1: Quick index check (if PDF ID is provided)
+  if (pdfId) {
+    const indexCheck = isPdfAvailableInIndex(pdfId);
+    if (indexCheck === true) {
+      // Index says available - trust it and return quickly
+      const normalizedPath = pdfPath.startsWith('/') ? pdfPath.substring(1) : pdfPath;
+      const fullUrl = new URL(`/${normalizedPath}`, window.location.origin).href;
+      return { available: true, needsDownload: false, url: fullUrl };
+    } else if (indexCheck === false) {
+      // Index says not available - check if can be downloaded
+      const normalizedPath = pdfPath.startsWith('/') ? pdfPath.substring(1) : pdfPath;
+      const fullUrl = new URL(`/${normalizedPath}`, window.location.origin).href;
+      return { available: false, needsDownload: navigator.onLine, url: fullUrl };
+    }
+    // If indexCheck is null, index doesn't have info - continue to full validation
+  }
+
+  // Strategy 2: Full validation (index unavailable or no PDF ID provided)
+  return validatePdfAvailability(pdfPath);
+}
 
 /**
  * Validates if a PDF is available in cache
@@ -26,8 +60,8 @@ export async function validatePdfAvailability(pdfPath) {
   }
 
   try {
-    // Check cache via Service Worker
-    const cachedPdfs = await getCachedPDFs();
+    // Check cache via Service Worker (using fast version with local cache)
+    const cachedPdfs = await getCachedPDFsFast();
     
     // Normalize target path using centralized function
     const normalizedTarget = normalizePathForComparison(normalizedPath);

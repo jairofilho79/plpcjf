@@ -1,7 +1,7 @@
 // PDF Index Utility
 // Manages availability index for PDFs to enable fast validation
 
-import { getCachedPDFs, waitForServiceWorker } from '$lib/utils/swRegistration';
+import { getCachedPDFsFast, waitForServiceWorker } from '$lib/utils/swRegistration';
 import { getPdfRelPath } from '$lib/utils/pathUtils';
 import { normalizePathForComparison } from '$lib/utils/pdfValidation';
 
@@ -29,7 +29,7 @@ export async function generatePdfIndex(louvores) {
   }
 
   try {
-    const cachedPdfs = await getCachedPDFs();
+    const cachedPdfs = await getCachedPDFsFast();
 
     // Normalize cached PDF URLs using centralized function (same as findMissingPdfs)
     const normalizedCacheSet = new Set();

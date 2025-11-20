@@ -4,10 +4,11 @@ import { browser } from '$app/environment';
 import {
   downloadPDFsViaSW,
   cancelDownload as cancelDownloadSW,
-  getCachedPDFs,
+  getCachedPDFsFast,
   clearCache as clearCacheSW,
   isServiceWorkerReady,
-  waitForServiceWorker
+  waitForServiceWorker,
+  invalidateCachedPDFsLocal
 } from '$lib/utils/swRegistration';
 import { unzip } from 'fflate';
 import { louvores } from './louvores';
@@ -152,7 +153,7 @@ async function initialize() {
  */
 async function loadCachedPdfsList() {
   try {
-    const cachedUrls = await getCachedPDFs();
+    const cachedUrls = await getCachedPDFsFast();
     
     offlineState.update(state => ({
       ...state,
@@ -1488,8 +1489,8 @@ async function downloadByCategories(categories) {
   
   // If cached PDFs are not loaded, load them
   if (!cachedPdfs || cachedPdfs.length === 0) {
-    try {
-      cachedPdfs = await getCachedPDFs();
+        try {
+          cachedPdfs = await getCachedPDFsFast();
       offlineState.update(s => ({
         ...s,
         cachedPdfs,
@@ -1652,6 +1653,9 @@ async function clearAllCache() {
 
   try {
     await clearCacheSW();
+    
+    // Invalidate local PDFs cache
+    invalidateCachedPDFsLocal();
     
     // Clear localStorage
     localStorage.removeItem(ALLOW_OFFLINE_KEY);
@@ -1921,7 +1925,7 @@ async function checkAndUpdateDownloadedCategories() {
     
     if (!cachedPdfs || cachedPdfs.length === 0) {
       try {
-        cachedPdfs = await getCachedPDFs();
+        cachedPdfs = await getCachedPDFsFast();
         offlineState.update(s => ({
           ...s,
           cachedPdfs,

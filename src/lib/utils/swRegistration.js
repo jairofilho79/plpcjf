@@ -164,8 +164,66 @@ export async function cancelDownload() {
   }
 }
 
+const CACHED_PDFS_LOCAL_KEY = 'cachedPdfsListLocal';
+const CACHE_TTL = 5 * 60 * 1000; // 5 minutos
+
 /**
- * Get list of cached PDFs
+ * Get list of cached PDFs with local cache optimization
+ * Uses localStorage cache first, then falls back to Service Worker
+ * @returns {Promise<string[]>}
+ */
+export async function getCachedPDFsFast() {
+  // Verificar cache local primeiro
+  if (typeof window !== 'undefined' && typeof localStorage !== 'undefined') {
+    try {
+      const cached = localStorage.getItem(CACHED_PDFS_LOCAL_KEY);
+      if (cached) {
+        const { pdfs, timestamp } = JSON.parse(cached);
+        // Verificar se cache ainda é válido (TTL de 5 minutos)
+        if (Date.now() - timestamp < CACHE_TTL) {
+          console.log('[SW Message] Using cached PDFs list from localStorage');
+          return pdfs;
+        }
+      }
+    } catch (err) {
+      console.warn('[SW Message] Failed to read local cache:', err);
+    }
+  }
+
+  // Cache expirado ou não disponível - buscar do Service Worker
+  const pdfs = await getCachedPDFs();
+  
+  // Atualizar cache local
+  if (typeof window !== 'undefined' && typeof localStorage !== 'undefined') {
+    try {
+      localStorage.setItem(CACHED_PDFS_LOCAL_KEY, JSON.stringify({
+        pdfs,
+        timestamp: Date.now()
+      }));
+    } catch (err) {
+      console.warn('[SW Message] Failed to update local cache:', err);
+    }
+  }
+  
+  return pdfs;
+}
+
+/**
+ * Invalidate local cache of PDFs
+ */
+export function invalidateCachedPDFsLocal() {
+  if (typeof window !== 'undefined' && typeof localStorage !== 'undefined') {
+    try {
+      localStorage.removeItem(CACHED_PDFS_LOCAL_KEY);
+      console.log('[SW Message] Invalidated local PDFs cache');
+    } catch (err) {
+      console.warn('[SW Message] Failed to invalidate local cache:', err);
+    }
+  }
+}
+
+/**
+ * Get list of cached PDFs (original function - kept for compatibility)
  * @returns {Promise<string[]>}
  */
 export async function getCachedPDFs() {
@@ -268,6 +326,9 @@ export function setupServiceWorkerMessageListener() {
   const messageHandler = async (event) => {
     if (event.data && event.data.type === 'CACHE_UPDATED') {
       console.log('[SW Registration] Cache updated notification received from Service Worker');
+      
+      // Invalidate local cache when SW cache is updated
+      invalidateCachedPDFsLocal();
       
       // Import and notify cache sync system
       const { notifyCacheUpdate, updateCacheVersion } = await import('$lib/utils/cacheSync');
