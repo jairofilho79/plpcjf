@@ -291,8 +291,12 @@
     savedPlaylistsStore; // Ensure reactivity to store changes
     currentHash; // Reage a mudanças no carousel
     
-    // Só sincronizar se não acabamos de salvar
-    if (!justSaved && $carousel.length > 0) {
+    // Se acabamos de salvar, não fazer nada - deixar handleSave gerenciar o estado
+    if (justSaved) {
+      return;
+    }
+    
+    if ($carousel.length > 0) {
       const pdfIds = $carousel
         .map(l => l.pdfId)
         .filter(id => id != null && id !== '');
@@ -300,9 +304,10 @@
       if (pdfIds.length > 0) {
         const hash = pdfIds.join(',');
         
-        // Se já temos estado salvo e hash corresponde, manter
+        // Se já temos estado salvo e hash corresponde, manter (não limpar)
+        // Isso previne limpeza prematura quando o store ainda não foi atualizado
         if (savedPlaylistId !== null && savedPdfIds === hash) {
-          // Manter estado - não limpar
+          // Manter estado - não limpar, mesmo se não encontrar no store (pode ser timing)
           return;
         }
         
@@ -326,16 +331,11 @@
         savedPdfIds = null;
         savedPlaylistName = null;
       }
-    } else if (!justSaved && $carousel.length === 0) {
+    } else {
       // Empty carousel, clear saved state
       savedPlaylistId = null;
       savedPdfIds = null;
       savedPlaylistName = null;
-    }
-    
-    // Resetar flag após processamento
-    if (justSaved) {
-      justSaved = false;
     }
   }
 
@@ -350,6 +350,14 @@
     if (pdfIds.length === 0) return;
     
     const hash = pdfIds.join(',');
+    
+    // OTIMISTIC UPDATE: Atualizar estado imediatamente para "salvo" antes de validar
+    // Isso garante que a UI atualize instantaneamente
+    const previousState = {
+      savedPlaylistId,
+      savedPdfIds,
+      savedPlaylistName
+    };
     
     // Set flag to prevent reactive block from clearing state
     justSaved = true;
@@ -376,13 +384,25 @@
     // Aguardar próximo tick para garantir sincronização com o store
     await tick();
     
+    // Validar se o salvamento foi bem-sucedido
     // Buscar playlist após store ser atualizado para garantir estado correto
     const savedPlaylist = savedPlaylists.findPlaylistByPdfIds(pdfIds);
     if (savedPlaylist) {
+      // Salvamento bem-sucedido - confirmar estado
       savedPlaylistId = savedPlaylist.id;
       savedPdfIds = hash;
       savedPlaylistName = savedPlaylist.nome;
+    } else {
+      // Salvamento falhou - reverter para estado anterior
+      savedPlaylistId = previousState.savedPlaylistId;
+      savedPdfIds = previousState.savedPdfIds;
+      savedPlaylistName = previousState.savedPlaylistName;
     }
+    
+    // Resetar flag após validação completa (com pequeno delay para garantir que UI atualizou)
+    setTimeout(() => {
+      justSaved = false;
+    }, 100);
     
     // Navigate to listas page if requested (long press)
     if (navigateToListas) {
