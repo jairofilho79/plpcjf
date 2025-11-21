@@ -2,6 +2,7 @@
   /// <reference types="@sveltejs/kit" />
   import { onDestroy, onMount } from 'svelte';
   import { page } from '$app/stores';
+  import { goto } from '$app/navigation';
   import GestureButton from '$lib/components/GestureButton.svelte';
 
   // Type for PDF.js getDocument function
@@ -18,6 +19,9 @@
   let cleanup: (() => void) | null = null;
   let toolbarEl: HTMLDivElement | null = null;
   let toolbarHeight = 60;
+  // Estado para controlar visibilidade da barra superior (fullscreen)
+  // Sempre começa como true (barra visível) quando a página é carregada
+  let isToolbarVisible = true;
 
   $: searchParams = new URLSearchParams($page.url.search);
   $: file = searchParams.get('file') ?? '/pdfs/exemplo.pdf';
@@ -230,7 +234,7 @@
           
           try {
             // Download via Service Worker
-            await downloadPDFsViaSW([validation.url], 1, (progress) => {
+            await downloadPDFsViaSW([validation.url], 1, (progress: any) => {
               if (progress.completed > 0) {
                 pdfError = null;
                 // Try to load again after download
@@ -304,11 +308,18 @@
     if (typeof window !== 'undefined') {
       localStorage.setItem('IS_LEITOR_OFFLINE', 'true');
     }
+    
+    // Sempre garantir que a barra esteja visível ao carregar a página
+    isToolbarVisible = true;
 
     if (!containerEl || !viewerEl) return;
     // Measure toolbar height (including border) and keep it updated
     const updateToolbarHeight = () => {
-      toolbarHeight = toolbarEl ? toolbarEl.offsetHeight : 60;
+      if (isToolbarVisible) {
+        toolbarHeight = toolbarEl ? toolbarEl.offsetHeight : 60;
+      } else {
+        toolbarHeight = 0;
+      }
       if (containerEl) containerEl.style.top = `${toolbarHeight}px`;
     };
     updateToolbarHeight();
@@ -624,6 +635,43 @@
     touchStartTime = 0;
     hasMoved = false;
   }
+  
+  // Função para navegar para a tela inicial
+  function goToHome() {
+    goto('/');
+  }
+  
+  // Função para toggle da barra superior (fullscreen)
+  function toggleToolbar() {
+    isToolbarVisible = !isToolbarVisible;
+    // Atualizar altura do container quando a barra é toggleada
+    if (containerEl) {
+      if (isToolbarVisible) {
+        toolbarHeight = toolbarEl ? toolbarEl.offsetHeight : 60;
+      } else {
+        toolbarHeight = 0;
+      }
+      containerEl.style.top = `${toolbarHeight}px`;
+    }
+    // Recalcular zoom se estiver em page-width mode
+    if (preferredFitMode === 'page-width' && viewer) {
+      cachedPageWidthScale = null;
+      setTimeout(() => {
+        applyPageWidthZoom(true);
+      }, 150);
+    }
+  }
+  
+  // Reativo: atualizar altura do container quando a visibilidade da barra mudar
+  $: if (containerEl) {
+    if (isToolbarVisible) {
+      toolbarHeight = toolbarEl ? toolbarEl.offsetHeight : 60;
+    } else {
+      toolbarHeight = 0;
+    }
+    containerEl.style.top = `${toolbarHeight}px`;
+  }
+  
   // Reload if the file query param changes, but only when it actually changes
   $: if (viewer && file && file !== lastLoadedFile) {
     Promise.resolve().then(() => load(file));
@@ -704,6 +752,13 @@
     width: 100%;
     max-width: 100vw;
     overflow: hidden;
+    transition: transform 0.3s ease, opacity 0.3s ease;
+  }
+  
+  .toolbar.hidden {
+    transform: translateY(-100%);
+    opacity: 0;
+    pointer-events: none;
   }
   .btn {
     padding: 10px 12px;
@@ -753,6 +808,9 @@
     color: var(--placeholder-color);
     letter-spacing: .03em; /* tracking-wide */
     text-shadow: 1px 1px 2px rgba(0,0,0,0.3);
+    cursor: pointer;
+    user-select: none;
+    -webkit-user-select: none;
   }
 
   .indicator { display: flex; align-items: center; gap: 4px; min-width: 56px; justify-content: center; }
@@ -935,8 +993,16 @@
   }
 </style>
 
-<div class="toolbar" bind:this={toolbarEl}>
-  <div class="brand">PLPC</div>
+<div class="toolbar" bind:this={toolbarEl} class:hidden={!isToolbarVisible}>
+  <GestureButton
+    on:click={goToHome}
+    on:longpress={toggleToolbar}
+    longPressDuration={500}
+    hapticFeedback={true}
+    preventDefault={true}
+  >
+    <div class="brand">PLPC</div>
+  </GestureButton>
 
   <button class="btn prev" on:click={prevPage} aria-label="Página anterior">
     <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="icon">
