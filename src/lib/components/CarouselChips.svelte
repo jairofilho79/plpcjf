@@ -1,9 +1,11 @@
 <script>
   import { X, Trash2, GripVertical, Share2, Save, Check } from 'lucide-svelte';
+  import { goto } from '$app/navigation';
   import { carousel } from '$lib/stores/carousel';
   import { pdfViewer } from '$lib/stores/pdfViewer';
   import { savedPlaylists } from '$lib/stores/savedPlaylists';
   import { getPdfRelPath } from '$lib/utils/pathUtils';
+  import GestureButton from '$lib/components/GestureButton.svelte';
   import { 
     fetchPdfAsBlob, 
     sharePdf, 
@@ -264,6 +266,7 @@
   let savedPdfIds = null;
   let savedPlaylistName = null;
   let showCopiedMessage = false;
+  let justSaved = false; // Flag to prevent reactive block from clearing state immediately after save
 
   // Generate hash of current playlist for comparison
   function getCurrentPlaylistHash() {
@@ -295,6 +298,13 @@
   $: {
     // This block runs when $carousel or savedPlaylistsStore changes
     savedPlaylistsStore; // Ensure reactivity to store changes
+    
+    // If we just saved, don't clear the state - let handleSave manage it
+    if (justSaved) {
+      justSaved = false;
+      return;
+    }
+    
     if ($carousel.length > 0) {
       const pdfIds = $carousel
         .map(l => l.pdfId)
@@ -332,7 +342,7 @@
     }
   }
 
-  function handleSave() {
+  function handleSave(navigateToListas = false) {
     if (!$carousel.length) return;
     
     // Filter out invalid IDs to match getCurrentPlaylistHash logic
@@ -342,19 +352,22 @@
     
     if (pdfIds.length === 0) return;
     
+    const hash = pdfIds.join(',');
+    
+    // Set flag to prevent reactive block from clearing state
+    justSaved = true;
+    
     // Check if a playlist with the same pdfIds already exists
     const existingPlaylist = savedPlaylists.findPlaylistByPdfIds(pdfIds);
     
     if (existingPlaylist) {
       // Use existing playlist - sync with it
-      const hash = pdfIds.join(',');
       savedPlaylistId = existingPlaylist.id;
       savedPdfIds = hash;
       savedPlaylistName = existingPlaylist.nome;
     } else {
       // Create new playlist
       const playlistId = savedPlaylists.savePlaylist(pdfIds);
-      const hash = pdfIds.join(',');
       savedPlaylistId = playlistId;
       savedPdfIds = hash;
       
@@ -362,6 +375,19 @@
       const newPlaylist = savedPlaylists.getPlaylist(playlistId);
       savedPlaylistName = newPlaylist ? newPlaylist.nome : null;
     }
+    
+    // Navigate to listas page if requested (long press)
+    if (navigateToListas) {
+      goto('/listas');
+    }
+  }
+  
+  function handleSaveClick() {
+    handleSave(false);
+  }
+  
+  function handleSaveLongPress() {
+    handleSave(true);
   }
 
   /**
@@ -414,20 +440,30 @@
         <Share2 class="w-3 h-3" />
         <span>Compartilhar</span>
       </button>
-      <button
-        on:click={handleSave}
-        class="action-button-tag light-button"
-        title={isPlaylistSaved ? 'Playlist salva' : 'Salvar playlist'}
-        disabled={!canSave || isPlaylistSaved}
+      <GestureButton
+        on:click={handleSaveClick}
+        on:longpress={handleSaveLongPress}
+        longPressDuration={500}
+        visualFeedback={true}
+        hapticFeedback={true}
+        disabled={!canSave}
+        preventDefault={true}
+        preventClickOnLongPress={true}
       >
-        {#if isPlaylistSaved}
-          <Check class="w-3 h-3" />
-          <span>Salvo</span>
-        {:else}
-          <Save class="w-3 h-3" />
-          <span>Salvar</span>
-        {/if}
-      </button>
+        <div
+          class="action-button-tag light-button"
+          class:saved={isPlaylistSaved}
+          title={isPlaylistSaved ? 'Playlist salva (toque para salvar novamente, segure para ir às listas)' : 'Toque para salvar, segure para salvar e ir às listas'}
+        >
+          {#if isPlaylistSaved}
+            <Check class="w-3 h-3" />
+            <span>Salvo</span>
+          {:else}
+            <Save class="w-3 h-3" />
+            <span>Salvar</span>
+          {/if}
+        </div>
+      </GestureButton>
       <button
         on:click={() => carousel.clearCarousel()}
         class="action-button-tag clear-button-tag"
@@ -555,6 +591,16 @@
   .light-button:disabled {
     opacity: 0.6;
     cursor: not-allowed;
+  }
+
+  .light-button.saved {
+    background-color: rgba(212, 175, 55, 0.2);
+    border-color: var(--gold-color);
+    color: var(--gold-color);
+  }
+
+  .light-button.saved:hover:not(:disabled) {
+    background-color: rgba(212, 175, 55, 0.3);
   }
 
   .clear-button-tag {
