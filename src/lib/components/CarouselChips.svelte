@@ -339,7 +339,7 @@
     }
   }
 
-  async function handleSave(navigateToListas = false) {
+  async function handleSave() {
     if (!$carousel.length) return;
     
     // Filter out invalid IDs to match getCurrentPlaylistHash logic
@@ -403,19 +403,10 @@
     setTimeout(() => {
       justSaved = false;
     }, 100);
-    
-    // Navigate to listas page if requested (long press)
-    if (navigateToListas) {
-      goto('/listas');
-    }
   }
   
   function handleSaveClick() {
-    handleSave(false);
-  }
-  
-  function handleSaveLongPress() {
-    handleSave(true);
+    handleSave();
   }
 
   /**
@@ -470,18 +461,15 @@
       </button>
       <GestureButton
         on:click={handleSaveClick}
-        on:longpress={handleSaveLongPress}
-        longPressDuration={500}
         visualFeedback={true}
         hapticFeedback={true}
         disabled={!canSave}
         preventDefault={true}
-        preventClickOnLongPress={true}
       >
         <div
           class="action-button-tag light-button"
           class:saved={isPlaylistSaved}
-          title={isPlaylistSaved ? 'Playlist salva (toque para salvar novamente, segure para ir às listas)' : 'Toque para salvar, segure para salvar e ir às listas'}
+          title={isPlaylistSaved ? 'Playlist salva (toque para salvar novamente)' : 'Toque para salvar'}
         >
           {#if isPlaylistSaved}
             <Check class="w-3 h-3" />
