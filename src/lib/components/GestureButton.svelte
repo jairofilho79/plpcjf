@@ -84,8 +84,11 @@
     const dx = Math.abs(touch.clientX - touchStartPosition.x);
     const dy = Math.abs(touch.clientY - touchStartPosition.y);
     
-    // Se moveu muito, cancelar long press
-    if (dx > TOUCH_MOVE_THRESHOLD || dy > TOUCH_MOVE_THRESHOLD) {
+    // Se movimento foi principalmente vertical (scroll), cancelar gesto
+    const isVerticalScroll = dy > dx * 1.5; // 50% mais vertical que horizontal
+    
+    // Se moveu muito ou foi scroll vertical, cancelar long press
+    if (isVerticalScroll || dx > TOUCH_MOVE_THRESHOLD || dy > TOUCH_MOVE_THRESHOLD) {
       cancelLongPress();
       touchStartPosition = null;
     }

@@ -552,17 +552,34 @@
     
     const touches = e.touches;
     
-    // Pinch to zoom: 2 touches
+    // PRIORIDADE 1: Pinch to zoom (2 dedos) - processar primeiro
     if (touches.length === 2) {
       isPinching = true;
       pinchInitialDistance = getTouchDistance(touches[0], touches[1]);
       pinchInitialScale = viewer.currentScale;
       e.preventDefault();
-      return;
+      return; // Não processar GestureButton quando em pinch
     }
     
-    // Single touch for navigation
+    // PRIORIDADE 2: Verificar se toque está nas zonas de navegação
+    // Se estiver, deixar GestureButton processar
+    // Se não estiver, permitir scroll normal
     if (touches.length === 1) {
+      const containerRect = containerEl.getBoundingClientRect();
+      const relativeX = touches[0].clientX - containerRect.left;
+      const quarterWidth = containerRect.width / 4;
+      
+      const isInLeftZone = relativeX < quarterWidth;
+      const isInRightZone = relativeX > containerRect.width - quarterWidth;
+      
+      if (!isInLeftZone && !isInRightZone) {
+        // Fora das zonas de navegação, permitir scroll
+        // Não prevenir default para permitir scroll nativo
+        return;
+      }
+      
+      // Dentro das zonas, GestureButton vai processar
+      // Manter estado para compatibilidade, mas não processar navegação aqui
       touchStartX = touches[0].clientX;
       touchStartY = touches[0].clientY;
       touchStartTime = Date.now();
@@ -616,27 +633,8 @@
       return;
     }
     
-    // Single touch navigation: check if it was a tap (not a scroll)
-    if (touches.length === 0 && !isPinching && !hasMoved) {
-      const touchDuration = Date.now() - touchStartTime;
-      
-      // Only process if it was a quick tap (not a long press or scroll)
-      if (touchDuration < TOUCH_TIME_THRESHOLD) {
-        const containerRect = containerEl.getBoundingClientRect();
-        const containerWidth = containerRect.width;
-        const relativeX = touchStartX - containerRect.left;
-        const quarterWidth = containerWidth / 4;
-        
-        // First quarter (0-25%): previous page
-        if (relativeX < quarterWidth) {
-          prevPage();
-        }
-        // Last quarter (75-100%): next page
-        else if (relativeX > containerWidth - quarterWidth) {
-          nextPage();
-        }
-      }
-    }
+    // Navegação por toque simples agora é processada pelos GestureButtons
+    // Manter apenas reset de estado aqui
     
     // Reset state
     touchStartX = 0;
@@ -1088,6 +1086,42 @@
     stroke: var(--gold-color, #d4af37);
     pointer-events: none;
   }
+
+  /* Zonas de navegação nas laterais */
+  .navigation-zone {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 25%; /* Primeiro/último quarto */
+    z-index: 10; /* Acima do PDF, abaixo da toolbar */
+    pointer-events: none; /* Container não captura, mas filhos sim */
+  }
+
+  .navigation-zone.left {
+    left: 0;
+  }
+
+  .navigation-zone.right {
+    right: 0;
+  }
+
+  .navigation-zone :global(.gesture-button-wrapper) {
+    width: 100%;
+    height: 100%;
+    pointer-events: auto; /* GestureButton captura toques */
+  }
+
+  .touch-zone {
+    width: 100%;
+    height: 100%;
+    background: transparent;
+    /* Invisível, apenas para capturar toques */
+  }
+
+  /* Feedback visual opcional durante long press */
+  :global(.navigation-zone .gesture-button-wrapper.long-pressing .touch-zone) {
+    background: rgba(212, 175, 55, 0.1); /* Gold color com opacidade */
+  }
 </style>
 
 <div class="toolbar" bind:this={toolbarEl} class:hidden={!isToolbarVisible}>
@@ -1216,6 +1250,32 @@
 {/if}
 
 <div id="viewerContainer" bind:this={containerEl} class="container {containerClass}" class:hidden={pdfLoading || pdfError}>
+  <!-- Zona de navegação esquerda -->
+  <div class="navigation-zone left">
+    <GestureButton
+      on:click={prevPage}
+      on:longpress={goToFirstPage}
+      longPressDuration={500}
+      hapticFeedback={true}
+      preventDefault={false}
+    >
+      <div class="touch-zone left"></div>
+    </GestureButton>
+  </div>
+
+  <!-- Zona de navegação direita -->
+  <div class="navigation-zone right">
+    <GestureButton
+      on:click={nextPage}
+      on:longpress={goToLastPage}
+      longPressDuration={500}
+      hapticFeedback={true}
+      preventDefault={false}
+    >
+      <div class="touch-zone right"></div>
+    </GestureButton>
+  </div>
+
   <div bind:this={viewerEl} class="viewer pdfViewer"></div>
   <!-- pdfjs-dist css hooks on .pdfViewer and .viewer -->
   
