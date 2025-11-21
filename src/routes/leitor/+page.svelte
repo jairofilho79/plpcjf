@@ -832,7 +832,7 @@
     right: 0;
     height: 56px;
     display: grid;
-    grid-template-columns: 1fr max-content repeat(6, max-content);
+    grid-template-columns: 1fr max-content max-content repeat(4, max-content);
     grid-template-rows: repeat(3, 1fr);
     column-gap: 8px;
     padding: 0 calc(12px + env(safe-area-inset-right)) 0 calc(12px + env(safe-area-inset-left));
@@ -918,11 +918,26 @@
   .indicator .total { opacity: .9; }
 
   /* Grid placements for controls spanning all rows */
-  .btn.prev { grid-column: 3; grid-row: 1 / 4; align-self: center; }
-  .indicator { grid-column: 4; grid-row: 1 / 4; align-self: center; }
-  .btn.next { grid-column: 5; grid-row: 1 / 4; align-self: center; }
-  .btn.zoom-minus { grid-column: 6; grid-row: 1 / 4; align-self: center; }
-  .btn.zoom-fit { grid-column: 7; grid-row: 1 / 4; align-self: center; position: relative; }
+  /* Hide prev/next buttons on mobile */
+  .page-nav-prev { 
+    grid-column: 3; 
+    grid-row: 1 / 4; 
+    align-self: center;
+    display: none; /* Hidden on mobile by default */
+  }
+  .indicator { 
+    grid-column: 3; 
+    grid-row: 1 / 4; 
+    align-self: center; 
+  }
+  .page-nav-next { 
+    grid-column: 3; 
+    grid-row: 1 / 4; 
+    align-self: center;
+    display: none; /* Hidden on mobile by default */
+  }
+  .btn.zoom-minus { grid-column: 4; grid-row: 1 / 4; align-self: center; }
+  .btn.zoom-fit { grid-column: 5; grid-row: 1 / 4; align-self: center; position: relative; }
   
   .zoom-fit-indicator {
     position: absolute;
@@ -993,7 +1008,7 @@
     width: 0;
     height: 0;
   }
-  .btn.zoom-plus { grid-column: 8; grid-row: 1 / 4; align-self: center; }
+  .btn.zoom-plus { grid-column: 6; grid-row: 1 / 4; align-self: center; }
 
   /* Wide screens: let content breathe */
   @media (min-width: 1024px) {
@@ -1009,14 +1024,20 @@
     }
     .brand { grid-column: 1; grid-row: 1 / 4; align-self: center; }
     .title-wrap { grid-column: 2; grid-row: 1 / 4; }
-    /* Carousel navigator in column 3 */
+    /* Carousel navigator in column 3 - after title-wrap */
     :global(.toolbar > :global(.carousel-navigator)) {
       grid-column: 3;
     }
-    /* shift controls one column to the right */
-    .btn.prev { grid-column: 4; }
+    /* Show prev/next buttons on tablet+ */
+    .page-nav-prev { 
+      grid-column: 4; 
+      display: flex; /* Show on tablet+ */
+    }
     .indicator { grid-column: 5; }
-    .btn.next { grid-column: 6; }
+    .page-nav-next { 
+      grid-column: 6; 
+      display: flex; /* Show on tablet+ */
+    }
     .btn.zoom-minus { grid-column: 7; }
     .btn.zoom-fit { grid-column: 8; }
     .btn.zoom-plus { grid-column: 9; }
@@ -1181,36 +1202,55 @@
     <div class="brand">PLPC</div>
   </GestureButton>
 
-  <GestureButton
-    on:click={prevPage}
-    on:longpress={goToFirstPage}
-    longPressDuration={500}
-    hapticFeedback={true}
-    preventDefault={true}
-  >
-    <button class="btn prev" aria-label="Página anterior">
-      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="icon">
-        <path stroke-linecap="round" stroke-linejoin="round" d="M10.5 19.5 3 12m0 0 7.5-7.5M3 12h18" />
-      </svg>
-    </button>
-  </GestureButton>
+  <div class="title-wrap">
+    {#if titulo}
+      <div class="title-main" title={titulo}>{titulo}</div>
+    {/if}
+    {#if subtitulo}
+      <div class="title-sub" title={subtitulo}>{subtitulo}</div>
+    {/if}
+  </div>
+
+  <CarouselNavigator
+    currentFile={file}
+    carousel={$carousel}
+    on:navigate={(e) => navigateToPdf(e.detail.louvor)}
+  />
+
+  <div class="page-nav-prev">
+    <GestureButton
+      on:click={prevPage}
+      on:longpress={goToFirstPage}
+      longPressDuration={500}
+      hapticFeedback={true}
+      preventDefault={true}
+    >
+      <button class="btn prev" aria-label="Página anterior">
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="icon">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M10.5 19.5 3 12m0 0 7.5-7.5M3 12h18" />
+        </svg>
+      </button>
+    </GestureButton>
+  </div>
   <div class="indicator" aria-label="Página atual e total">
     <span class="current">{currentPage}</span>
     <span class="total">/ {totalPages}</span>
   </div>
-  <GestureButton
-    on:click={nextPage}
-    on:longpress={goToLastPage}
-    longPressDuration={500}
-    hapticFeedback={true}
-    preventDefault={true}
-  >
-    <button class="btn next" aria-label="Próxima página">
-      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="icon">
-        <path stroke-linecap="round" stroke-linejoin="round" d="M13.5 4.5 21 12m0 0-7.5 7.5M21 12H3" />
-      </svg>
-    </button>
-  </GestureButton>
+  <div class="page-nav-next">
+    <GestureButton
+      on:click={nextPage}
+      on:longpress={goToLastPage}
+      longPressDuration={500}
+      hapticFeedback={true}
+      preventDefault={true}
+    >
+      <button class="btn next" aria-label="Próxima página">
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="icon">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M13.5 4.5 21 12m0 0-7.5 7.5M21 12H3" />
+        </svg>
+      </button>
+    </GestureButton>
+  </div>
 
   <button class="btn zoom-minus" on:click={zoomOut} aria-label="Diminuir zoom">
     <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="icon">
@@ -1245,21 +1285,6 @@
       <path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
     </svg>
   </button>
-
-  <div class="title-wrap">
-    {#if titulo}
-      <div class="title-main" title={titulo}>{titulo}</div>
-    {/if}
-    {#if subtitulo}
-      <div class="title-sub" title={subtitulo}>{subtitulo}</div>
-    {/if}
-  </div>
-
-  <CarouselNavigator
-    currentFile={file}
-    carousel={$carousel}
-    on:navigate={(e) => navigateToPdf(e.detail.louvor)}
-  />
 
   <!-- Abra com /leitor?file=/pdfs/exemplo.pdf&titulo=Exemplo&subtitulo=Sub -->
   <!-- Atalhos: Ctrl/Cmd +/−/0, PgUp/PgDn/↑/↓ -->
