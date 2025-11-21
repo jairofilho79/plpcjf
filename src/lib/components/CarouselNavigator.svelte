@@ -66,6 +66,7 @@
     on:click={handleNext}
     on:longpress={handlePrevious}
     longPressDuration={500}
+    visualFeedback={true}
     hapticFeedback={true}
     disabled={isDisabled}
     preventDefault={true}
