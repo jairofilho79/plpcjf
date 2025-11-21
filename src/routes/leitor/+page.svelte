@@ -653,11 +653,27 @@
       }
       containerEl.style.top = `${toolbarHeight}px`;
     }
-    // Recalcular zoom se estiver em page-width mode
-    if (preferredFitMode === 'page-width' && viewer) {
+    
+    // Disparar evento resize para notificar o PDF.js sobre a mudança de tamanho
+    if (eventBus) {
+      eventBus.dispatch('resize', {});
+    }
+    
+    // Recalcular zoom baseado no modo atual após um delay para garantir que o DOM tenha atualizado
+    if (viewer) {
+      // Limpar cache de zoom para forçar recálculo
       cachedPageWidthScale = null;
+      
       setTimeout(() => {
-        applyPageWidthZoom(true);
+        if (!viewer) return;
+        
+        if (preferredFitMode === 'page-width') {
+          // Para page-width, calcular manualmente
+          applyPageWidthZoom(true);
+        } else {
+          // Para page-fit, deixar o PDF.js recalcular automaticamente
+          viewer.currentScaleValue = 'page-fit';
+        }
       }, 150);
     }
   }
