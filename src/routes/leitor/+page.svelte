@@ -7,6 +7,7 @@
   import CarouselNavigator from '$lib/components/CarouselNavigator.svelte';
   import { carousel } from '$lib/stores/carousel';
   import { getPdfRelPath } from '$lib/utils/pathUtils';
+  import { loadPdfJsComplete, loadPdfJsViewer } from '$lib/utils/pdfjsLoader';
 
   // Type for PDF.js getDocument function
   type PDFJSGetDocument = (options: { url: string; withCredentials?: boolean }) => {
@@ -346,31 +347,38 @@
     const ro = new ResizeObserver(updateToolbarHeight);
     if (toolbarEl) ro.observe(toolbarEl);
 
-    // Verificar se PDF.js foi pré-carregado
-    // @ts-ignore
-    const preloaded = window.__pdfjsPreloaded;
+    // Carregar PDF.js completo (garantir viewer disponível antes de inicializar)
+    // Mostrar feedback visual durante carregamento
+    pdfLoading = true;
     
     let core, viewerNS, workerUrl;
     
-    if (preloaded) {
-      // Usar módulos pré-carregados (mais rápido)
-      console.log('[Leitor] Usando PDF.js pré-carregado');
-      core = preloaded.core;
-      viewerNS = preloaded.viewer;
-      workerUrl = preloaded.workerUrl;
-    } else {
-      // Carregar módulos normalmente (fallback)
-      console.log('[Leitor] Carregando PDF.js normalmente');
-      const [coreUrlMod, viewerUrlMod, workerUrlMod] = await Promise.all([
-        import('pdfjs-dist/build/pdf.mjs?url'),
-        import('pdfjs-dist/web/pdf_viewer.mjs?url'),
-        import('pdfjs-dist/build/pdf.worker.min.mjs?url')
-      ]);
-      const coreMod = await import(/* @vite-ignore */ coreUrlMod.default);
-      viewerNS = await import(/* @vite-ignore */ viewerUrlMod.default);
-      // @ts-ignore
-      core = coreMod?.default ?? coreMod;
-      workerUrl = workerUrlMod.default;
+    try {
+      // Usar módulo centralizado para carregar PDF.js completo
+      const preloaded = await loadPdfJsComplete({ showProgress: true }) as any;
+      
+      if (preloaded) {
+        const isPartial = preloaded.partial;
+        console.log('[Leitor] PDF.js carregado', isPartial ? '(parcial, carregando viewer...)' : '(completo)');
+        
+        core = preloaded.core;
+        workerUrl = preloaded.workerUrl;
+        
+        // Se viewer não foi carregado, carregar agora
+        if (!preloaded.viewer) {
+          console.log('[Leitor] Carregando viewer...');
+          viewerNS = await loadPdfJsViewer();
+        } else {
+          viewerNS = preloaded.viewer;
+        }
+      } else {
+        throw new Error('Falha ao carregar PDF.js');
+      }
+    } catch (error) {
+      console.error('[Leitor] Erro ao carregar PDF.js:', error);
+      pdfError = 'Erro ao carregar biblioteca PDF.js. Por favor, recarregue a página.';
+      pdfLoading = false;
+      return;
     }
     
     // Register on globals for viewer expectations
@@ -469,6 +477,9 @@
       }
     });
 
+    // PDF.js carregado com sucesso, ocultar loading
+    pdfLoading = false;
+    
     // Use direct load if validation was already done (skipValidation flag)
     if (skipValidation) {
       await loadDirectly(file);

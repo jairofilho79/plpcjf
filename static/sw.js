@@ -4,6 +4,7 @@
 const CACHE_VERSION = 'plpc-v3-dev';
 const APP_CACHE = `${CACHE_VERSION}-app`;
 const PDF_CACHE = `${CACHE_VERSION}-pdfs`;
+const PDFJS_CACHE = `${CACHE_VERSION}-pdfjs`;
 
 // Detect if we're in development mode
 function isDevelopmentMode() {
@@ -54,6 +55,14 @@ const APP_SHELL = [
   '/icon-512.png'
 ];
 
+// PDF.js modules to cache for faster loading
+const PDFJS_MODULES = [
+  '/pdfjs/build/pdf.mjs',
+  '/pdfjs/web/pdf_viewer.mjs',
+  '/pdfjs/build/pdf.worker.min.mjs',
+  '/pdfjs/web/pdf_viewer.css'
+];
+
 // State for batch downloading
 let downloadState = {
   isDownloading: false,
@@ -61,15 +70,30 @@ let downloadState = {
   currentBatch: 0
 };
 
-// Install event - cache app shell
+// Install event - cache app shell and PDF.js
 self.addEventListener('install', (event) => {
   console.log('[SW] Installing service worker...');
   event.waitUntil(
-    caches.open(APP_CACHE)
-      .then(cache => {
-        console.log('[SW] Caching app shell');
-        return cache.addAll(APP_SHELL.map(url => new Request(url, { cache: 'no-cache' })));
-      })
+    Promise.all([
+      // Cache app shell
+      caches.open(APP_CACHE)
+        .then(cache => {
+          console.log('[SW] Caching app shell');
+          return cache.addAll(APP_SHELL.map(url => new Request(url, { cache: 'no-cache' })));
+        }),
+      // Cache PDF.js modules (cache-first strategy for faster loading)
+      caches.open(PDFJS_CACHE)
+        .then(cache => {
+          console.log('[SW] Caching PDF.js modules');
+          // Use addAll but don't fail if some files are missing
+          return Promise.allSettled(
+            PDFJS_MODULES.map(url => 
+              cache.add(new Request(url, { cache: 'no-cache' }))
+                .catch(err => console.warn(`[SW] Failed to cache ${url}:`, err))
+            )
+          );
+        })
+    ])
       .then(() => self.skipWaiting())
       .catch(err => console.error('[SW] Install failed:', err))
   );
@@ -83,7 +107,7 @@ self.addEventListener('activate', (event) => {
       .then(cacheNames => {
         return Promise.all(
           cacheNames
-            .filter(name => name.startsWith('plpc-') && name !== APP_CACHE && name !== PDF_CACHE)
+            .filter(name => name.startsWith('plpc-') && name !== APP_CACHE && name !== PDF_CACHE && name !== PDFJS_CACHE)
             .map(name => {
               console.log('[SW] Deleting old cache:', name);
               return caches.delete(name);
@@ -106,6 +130,44 @@ self.addEventListener('fetch', (event) => {
   // Check if this is a navigation request (page load)
   const isNavigationRequest = event.request.mode === 'navigate';
 
+  // Handle PDF.js module requests - Cache First strategy
+  const isPdfJsRequest = !isNavigationRequest && 
+    (url.pathname.startsWith('/pdfjs/') || url.pathname.includes('/pdfjs/'));
+  
+  if (isPdfJsRequest) {
+    // Cache First strategy for PDF.js modules (faster loading after first visit)
+    event.respondWith(
+      caches.open(PDFJS_CACHE)
+        .then(cache => {
+          return cache.match(event.request)
+            .then(cachedResponse => {
+              if (cachedResponse) {
+                console.log('[SW] Serving PDF.js from cache:', url.pathname);
+                return cachedResponse;
+              }
+              
+              // Not in cache, fetch from network and cache
+              console.log('[SW] PDF.js not in cache, fetching from network:', url.pathname);
+              return fetch(event.request)
+                .then(response => {
+                  // Only cache successful responses
+                  if (response && response.status === 200) {
+                    const responseClone = response.clone();
+                    cache.put(event.request, responseClone);
+                    console.log('[SW] Cached PDF.js module:', url.pathname);
+                  }
+                  return response;
+                })
+                .catch(err => {
+                  console.error('[SW] Failed to fetch PDF.js:', url.pathname, err);
+                  throw err;
+                });
+            });
+        })
+    );
+    return;
+  }
+  
   // Handle PDF requests (but not navigation requests for PDF URLs)
   // Intercept ALL PDF files regardless of path (/pdfs/, /assets/, etc.)
   // Exclude SvelteKit's internal assets (like JS bundles) by checking URL structure

@@ -1,4 +1,6 @@
 <script>
+  import { onMount, onDestroy } from 'svelte';
+  import { browser } from '$app/environment';
   import { Plus, Check } from 'lucide-svelte';
   import { getPdfRelPath } from '$lib/utils/pathUtils';
   import { 
@@ -12,6 +14,7 @@
   import { pdfViewer } from '$lib/stores/pdfViewer';
   import { isPdfAvailableInIndex } from '$lib/utils/pdfIndex';
   import { ensurePdfAvailable, validatePdfWithStrategies, validatePdfAvailability } from '$lib/utils/pdfValidation';
+  import { setupCardPrefetch } from '$lib/utils/pdfjsLoader';
   
   export let louvor;
   
@@ -22,6 +25,8 @@
   
   let isCheckingAvailability = false;
   let availabilityError = null;
+  let cardElement;
+  let prefetchCleanup;
   
   function getCategoryIcon(category) {
     if (!category) return null;
@@ -150,9 +155,25 @@
   }
   
   $: categoryIcon = getCategoryIcon(louvor.categoria);
+  
+  // Setup prefetch quando card estiver montado e pdfPath disponível
+  onMount(() => {
+    if (browser && cardElement && pdfPath) {
+      // Apenas prefetch se modo for leitor (não faz sentido para outros modos)
+      if ($pdfViewer === 'leitor') {
+        prefetchCleanup = setupCardPrefetch(cardElement, pdfPath);
+      }
+    }
+  });
+  
+  onDestroy(() => {
+    if (prefetchCleanup) {
+      prefetchCleanup();
+    }
+  });
 </script>
 
-<div class="louvor-card">
+<div class="louvor-card" bind:this={cardElement}>
   {#if availabilityError}
     <div class="availability-error" role="alert">
       {availabilityError}

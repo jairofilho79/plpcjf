@@ -8,6 +8,12 @@
   import OfflineIndicator from '$lib/components/OfflineIndicator.svelte';
   import { registerServiceWorker, setupServiceWorkerMessageListener } from '$lib/utils/swRegistration';
   import { setupCacheSync } from '$lib/utils/cacheSync';
+  import { 
+    getPdfJsPriority, 
+    shouldPreload, 
+    preloadPdfJs, 
+    requestIdleCallback 
+  } from '$lib/utils/pdfjsLoader';
   
   // Handle overflow for /leitor route
   $: if (browser && $page.url.pathname.startsWith('/leitor')) {
@@ -16,6 +22,40 @@
   } else if (browser) {
     document.documentElement.style.overflow = '';
     document.body.style.overflow = '';
+  }
+  
+  // Pré-carregamento inteligente baseado em rota
+  function smartPreloadPdfJs() {
+    if (!browser) return;
+    
+    // Verificar se já está carregado
+    if (window.__pdfjsPreloaded && !window.__pdfjsPreloaded.partial) return;
+    
+    const pathname = $page.url.pathname;
+    const priority = getPdfJsPriority(pathname);
+    
+    // Verificar conexão
+    const connection = (navigator as any).connection || (navigator as any).mozConnection || (navigator as any).webkitConnection;
+    
+    if (!shouldPreload(priority, connection)) {
+      return;
+    }
+    
+    // Carregar baseado na prioridade
+    if (priority === 'high') {
+      // Carregar imediatamente (rota /leitor)
+      preloadPdfJs({ priority: 'high', loadViewer: true }).catch(err => {
+        console.warn('[Layout] Erro ao pré-carregar PDF.js:', err);
+      });
+    } else if (priority === 'medium') {
+      // Carregar após recursos críticos (requestIdleCallback)
+      requestIdleCallback(() => {
+        preloadPdfJs({ priority: 'medium', loadViewer: false }).catch(err => {
+          console.warn('[Layout] Erro ao pré-carregar PDF.js:', err);
+        });
+      }, { timeout: 2000 });
+    }
+    // 'low' e 'none' não carregam automaticamente
   }
   
   // Register service worker and setup sync on mount
@@ -29,40 +69,15 @@
         setupCacheSync();
       });
       
-      // Pré-carregar PDF.js em background para otimizar abertura do leitor
-      // Não bloqueia o carregamento da página
-      setTimeout(() => {
-        Promise.all([
-          import('pdfjs-dist/build/pdf.mjs?url'),
-          import('pdfjs-dist/web/pdf_viewer.mjs?url'),
-          import('pdfjs-dist/build/pdf.worker.min.mjs?url')
-        ]).then(([coreUrlMod, viewerUrlMod, workerUrlMod]) => {
-          // Carregar os módulos e armazenar para uso futuro
-          Promise.all([
-            import(/* @vite-ignore */ coreUrlMod.default),
-            import(/* @vite-ignore */ viewerUrlMod.default)
-          ]).then(([coreMod, viewerNS]) => {
-            // @ts-ignore
-            const core = coreMod?.default ?? coreMod;
-            // Armazenar globalmente para uso no leitor
-            // @ts-ignore
-            window.__pdfjsPreloaded = {
-              core,
-              viewer: viewerNS,
-              workerUrl: workerUrlMod.default,
-              coreUrl: coreUrlMod.default,
-              viewerUrl: viewerUrlMod.default
-            };
-            console.log('[Layout] PDF.js pré-carregado com sucesso');
-          }).catch(err => {
-            console.warn('[Layout] Erro ao pré-carregar PDF.js:', err);
-          });
-        }).catch(err => {
-          console.warn('[Layout] Erro ao pré-carregar URLs do PDF.js:', err);
-        });
-      }, 1000); // Aguardar 1s para não competir com recursos críticos
+      // Pré-carregamento inteligente baseado na rota atual
+      smartPreloadPdfJs();
     }
   });
+  
+  // Reagir a mudanças de rota para pré-carregamento inteligente
+  $: if (browser) {
+    smartPreloadPdfJs();
+  }
   
   // Navigate to offline page
   function handleOfflineClick() {
