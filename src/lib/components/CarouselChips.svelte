@@ -290,7 +290,11 @@
   }
   
   // Sync with existing playlist if current playlist matches a saved one
+  // React to both carousel changes AND savedPlaylists store changes
+  $: savedPlaylistsStore = $savedPlaylists;
   $: {
+    // This block runs when $carousel or savedPlaylistsStore changes
+    savedPlaylistsStore; // Ensure reactivity to store changes
     if ($carousel.length > 0) {
       const pdfIds = $carousel
         .map(l => l.pdfId)
