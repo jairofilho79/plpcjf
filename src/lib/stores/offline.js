@@ -1713,9 +1713,19 @@ function clearError() {
   offlineState.update(state => ({ ...state, error: null }));
 }
 
-// Initialize on module load
-if (browser) {
-  initialize();
+// Lazy initialization - não inicializar automaticamente
+// Será inicializado explicitamente na página /offline quando necessário
+let isInitialized = false;
+
+/**
+ * Lazy initialization function - must be called explicitly
+ */
+async function lazyInitialize() {
+  if (!browser || isInitialized) {
+    return;
+  }
+  isInitialized = true;
+  await initialize();
 }
 
 /**
@@ -2029,7 +2039,8 @@ export const offline = {
   getRequiredPackagesInfo,
   validateAndClearError,
   validateAndSyncStats,
-  forceRevalidateCategory
+  forceRevalidateCategory,
+  lazyInitialize // Export lazy initialization function
 };
 
 // Derived store for offline status

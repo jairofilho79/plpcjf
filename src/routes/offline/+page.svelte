@@ -34,6 +34,8 @@
   let requiredPackagesInfo = null;
   
   let isLoadingStats = false;
+  let isInitializing = true; // Controla estado de carregamento inicial
+  let isValidating = false; // Controla validação de erros (background)
   let needsSync = false;
   let isSyncing = false;
   let lastSyncTime = null;
@@ -60,32 +62,212 @@
   let handleWindowFocus = null;
   /** @type {(() => void) | null} */
   let handleVisibilityChange = null;
+  
+  // Intersection Observer para lazy loading de stats
+  /** @type {IntersectionObserver | null} */
+  let categoryObserver = null;
+  /** @type {Set<string>} */
+  let categoriesToLoad = new Set();
+  /** @type {Set<string>} */
+  let loadedCategories = new Set();
+  
+  // Controla se lazy loading está ativo
+  let lazyLoadingEnabled = false;
+  
+  /**
+   * Setup Intersection Observer para lazy loading de stats
+   */
+  function setupLazyLoading() {
+    if (typeof IntersectionObserver === 'undefined' || lazyLoadingEnabled) {
+      return;
+    }
+    
+    lazyLoadingEnabled = true;
+    
+    // Configurar observer com root margin para carregar um pouco antes de entrar no viewport
+    categoryObserver = new IntersectionObserver(
+      (entries) => {
+        const visibleCategories = [];
+        entries.forEach(entry => {
+          if (entry.isIntersecting) {
+            const category = entry.target.getAttribute('data-category');
+            if (category && !loadedCategories.has(category) && !categoriesToLoad.has(category)) {
+              visibleCategories.push(category);
+              categoriesToLoad.add(category);
+            }
+          }
+        });
+        
+        // Carregar stats de categorias visíveis em chunks
+        if (visibleCategories.length > 0) {
+          processStatsInChunks(visibleCategories).catch(err => {
+            console.error('[Offline Page] Error loading visible category stats:', err);
+          });
+        }
+      },
+      {
+        rootMargin: '100px', // Carregar quando está a 100px do viewport
+        threshold: 0.1
+      }
+    );
+    
+    // Observar elementos de categoria após renderização (usar tick para aguardar Svelte)
+    setTimeout(() => {
+      const categoryElements = document.querySelectorAll('.category-item[data-category]');
+      categoryElements.forEach(el => {
+        if (categoryObserver) {
+          categoryObserver.observe(el);
+        }
+      });
+      
+      // Se não encontrou elementos, tentar novamente após um delay maior
+      if (categoryElements.length === 0) {
+        setTimeout(() => {
+          const retryElements = document.querySelectorAll('.category-item[data-category]');
+          retryElements.forEach(el => {
+            if (categoryObserver) {
+              categoryObserver.observe(el);
+            }
+          });
+        }, 500);
+      }
+    }, 100);
+  }
+  
+  /**
+   * Processar stats em chunks pequenos para evitar bloqueio da UI
+   * @param {string[]} categories - Lista de categorias para processar
+   */
+  async function processStatsInChunks(categories) {
+    const CHUNK_SIZE = 3; // Processar 3 categorias por vez
+    const chunks = [];
+    
+    // Dividir em chunks
+    for (let i = 0; i < categories.length; i += CHUNK_SIZE) {
+      chunks.push(categories.slice(i, i + CHUNK_SIZE));
+    }
+    
+    // Processar cada chunk com delay para não bloquear UI
+    for (let i = 0; i < chunks.length; i++) {
+      const chunk = chunks[i];
+      
+      // Carregar stats do chunk
+      await loadCategoryStatsForCategories(chunk);
+      
+      // Marcar como carregadas
+      chunk.forEach(cat => {
+        loadedCategories.add(cat);
+        categoriesToLoad.delete(cat);
+      });
+      
+      // Delay entre chunks (exceto o último)
+      if (i < chunks.length - 1) {
+        await new Promise(resolve => setTimeout(resolve, 50));
+      }
+    }
+  }
+  
+  /**
+   * Agendar carregamento de stats restantes em idle time
+   */
+  function scheduleIdleLoading() {
+    // Usar requestIdleCallback se disponível, caso contrário setTimeout
+    if (typeof requestIdleCallback !== 'undefined') {
+      requestIdleCallback(
+        async () => {
+          // Aguardar um pouco para priorizar operações críticas
+          await new Promise(resolve => setTimeout(resolve, 1000));
+          
+          // Carregar categorias que ainda não foram carregadas (exceto selecionadas)
+          const remainingCategories = CATEGORY_OPTIONS.filter(cat => 
+            !loadedCategories.has(cat) && 
+            !selectedCategories.includes(cat) &&
+            !categoriesToLoad.has(cat)
+          );
+          
+          if (remainingCategories.length > 0) {
+            // Processar em chunks em background
+            processStatsInChunks(remainingCategories).catch(err => {
+              console.error('[Offline Page] Error loading stats in idle time:', err);
+            });
+          }
+        },
+        { timeout: 5000 } // Timeout de 5 segundos
+      );
+    } else {
+      // Fallback para setTimeout se requestIdleCallback não estiver disponível
+      setTimeout(async () => {
+        // Aguardar um pouco para priorizar operações críticas
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        
+        // Carregar categorias que ainda não foram carregadas (exceto selecionadas)
+        const remainingCategories = CATEGORY_OPTIONS.filter(cat => 
+          !loadedCategories.has(cat) && 
+          !selectedCategories.includes(cat) &&
+          !categoriesToLoad.has(cat)
+        );
+        
+        if (remainingCategories.length > 0) {
+          // Processar em chunks em background
+          processStatsInChunks(remainingCategories).catch(err => {
+            console.error('[Offline Page] Error loading stats in idle time:', err);
+          });
+        }
+      }, 2000);
+    }
+  }
 
   // Load saved categories and check downloaded categories on mount
   onMount(() => {
     // Inicialização assíncrona
     (async () => {
-      await loadLouvores();
-
-    // Check and update downloaded categories based on cache
-    downloadedCategories = await offline.checkAndUpdateDownloadedCategories();
-    
-    // Load saved categories for selection
-    const saved = offline.getSavedCategories();
-    if (saved && saved.length > 0) {
-      selectedCategories = saved;
-    }
-    
-    // Ensure downloaded categories are ALWAYS selected and cannot be deselected
-    // Merge downloaded categories with saved categories, ensuring downloaded ones are included
-    const allCategories = [...new Set([...selectedCategories, ...downloadedCategories])];
-    selectedCategories = allCategories;
-    
-    // Load initial stats (force on mount)
-    await loadCategoryStats(true);
-    
-    // Validate and clear error if no longer relevant
-    await offline.validateAndClearError();
+      // FASE 1: Operações críticas - carregam dados básicos para renderização inicial
+      try {
+        // Inicializar store offline explicitamente (lazy initialization)
+        await offline.lazyInitialize();
+        
+        // Carregar louvores e categorias baixadas em paralelo (operações independentes)
+        const [_, downloadedCats] = await Promise.all([
+          loadLouvores(),
+          offline.checkAndUpdateDownloadedCategories()
+        ]);
+        
+        downloadedCategories = downloadedCats;
+        
+        // Load saved categories for selection
+        const saved = offline.getSavedCategories();
+        if (saved && saved.length > 0) {
+          selectedCategories = saved;
+        }
+        
+        // Ensure downloaded categories are ALWAYS selected and cannot be deselected
+        // Merge downloaded categories with saved categories, ensuring downloaded ones are included
+        const allCategories = [...new Set([...selectedCategories, ...downloadedCategories])];
+        selectedCategories = allCategories;
+        
+        // Marcar inicialização básica como completa - permite renderização
+        isInitializing = false;
+      } catch (error) {
+        console.error('[Offline Page] Error during critical initialization:', error);
+        isInitializing = false;
+      }
+      
+      // FASE 2: Operações não-críticas - executadas em background após renderização
+      // Carregar stats apenas para categorias selecionadas inicialmente (lazy loading completo vem depois)
+      if (selectedCategories.length > 0) {
+        // Carregar stats de categorias selecionadas primeiro (prioridade)
+        loadCategoryStatsForCategories(selectedCategories).catch(err => {
+          console.error('[Offline Page] Error loading initial stats:', err);
+        });
+      }
+      
+      // Validar erros em background (não bloqueante)
+      isValidating = true;
+      offline.validateAndClearError().catch(err => {
+        console.error('[Offline Page] Error validating errors:', err);
+      }).finally(() => {
+        isValidating = false;
+      });
     
       // Setup cache sync listener
       setupCacheSync();
@@ -254,6 +436,10 @@
       if (offlineUnsubscribe) {
         offlineUnsubscribe();
       }
+      if (categoryObserver) {
+        categoryObserver.disconnect();
+        categoryObserver = null;
+      }
       window.removeEventListener('cache-sync-required', handleCacheSyncRequired);
       if (handleCacheUpdated) {
         window.removeEventListener('offline-cache-updated', handleCacheUpdated);
@@ -316,6 +502,9 @@
       // Update downloaded categories from sync result
       downloadedCategories = syncResult.downloaded;
       
+      // Invalidar cache e stats carregados após sync
+      statsCache.clear();
+      loadedCategories.clear();
       // Reload category stats to reflect any fixes (force to bypass rate limiting)
       await loadCategoryStats(true);
       
@@ -340,16 +529,16 @@
   let lastStatsLoadTime = 0;
   const MIN_STATS_LOAD_INTERVAL = 2000; // Minimum 2 seconds between loads
 
-  // Load category availability statistics
-  async function loadCategoryStats(force = false) {
-    if (!$louvores.length) return;
-    
-    // Prevent excessive calls - only allow if forced or enough time has passed
-    const now = Date.now();
-    if (!force && (now - lastStatsLoadTime) < MIN_STATS_LOAD_INTERVAL) {
-      console.log('[Offline Page] Skipping stats load - too soon since last load');
-      return;
-    }
+  // Cache para evitar recálculos desnecessários
+  let statsCache = new Map();
+
+  /**
+   * Load category availability statistics for specific categories
+   * @param {string[]} categories - Categories to load stats for
+   * @param {boolean} force - Force reload even if cached
+   */
+  async function loadCategoryStatsForCategories(categories = [], force = false) {
+    if (!$louvores.length || !categories || categories.length === 0) return;
     
     // Prevent concurrent loads
     if (isLoadingStats) {
@@ -358,7 +547,6 @@
     }
     
     isLoadingStats = true;
-    lastStatsLoadTime = now;
     
     try {
       const state = $offline;
@@ -372,17 +560,24 @@
         cachedPdfs = updatedState.cachedPdfs || [];
       }
       
-      // Get stats for each category
-      /** @type {Record<string, {total: number, available: number, missing: number, percentage: number}>} */
-      const stats = {};
-      for (const category of CATEGORY_OPTIONS) {
-        stats[category] = await offline.getCategoryAvailabilityStats(
-          category,
-          $louvores,
-          cachedPdfs
-        );
+      // Load stats only for specified categories (usando cache quando possível)
+      const newStats = { ...categoryStats };
+      for (const category of categories) {
+        // Verificar cache apenas se não for forçado
+        if (!force && statsCache.has(category)) {
+          newStats[category] = statsCache.get(category);
+        } else {
+          const stats = await offline.getCategoryAvailabilityStats(
+            category,
+            $louvores,
+            cachedPdfs
+          );
+          newStats[category] = stats;
+          // Atualizar cache
+          statsCache.set(category, stats);
+        }
       }
-      categoryStats = stats;
+      categoryStats = newStats;
       
       // Get required packages info for selected categories
       if (selectedCategories.length > 0) {
@@ -402,10 +597,31 @@
         requiredPackagesInfo = null;
       }
     } catch (error) {
-      console.error('[Offline Page] Failed to load stats:', error);
+      console.error('[Offline Page] Failed to load stats for categories:', error);
     } finally {
       isLoadingStats = false;
     }
+  }
+
+  // Load category availability statistics (all categories)
+  async function loadCategoryStats(force = false) {
+    if (!$louvores.length) return;
+    
+    // Prevent excessive calls - only allow if forced or enough time has passed
+    const now = Date.now();
+    if (!force && (now - lastStatsLoadTime) < MIN_STATS_LOAD_INTERVAL) {
+      console.log('[Offline Page] Skipping stats load - too soon since last load');
+      return;
+    }
+    
+    // Invalidar cache se forçado
+    if (force) {
+      statsCache.clear();
+    }
+    
+    // Usar função específica para todas as categorias
+    await loadCategoryStatsForCategories(CATEGORY_OPTIONS, force);
+    lastStatsLoadTime = now;
   }
 
   // Track download completion to update categories
@@ -429,6 +645,9 @@
             selectedCategories = [...selectedCategories, cat];
           }
         });
+        // Invalidar cache e stats carregados após download
+        statsCache.clear();
+        loadedCategories.clear();
         // Reload stats after download (force to bypass rate limiting)
         await loadCategoryStats(true);
       }
@@ -564,7 +783,57 @@
 <div class="max-w-4xl mx-auto">
   <!-- Body -->
   <div class="page-body">
-    {#if !downloading && progress < 100}
+      <!-- Skeleton Screen - Mostrar durante inicialização -->
+      {#if isInitializing}
+        <div class="skeleton-container">
+          <!-- Skeleton para availability summary -->
+          <div class="skeleton availability-summary">
+            <div class="skeleton-header">
+              <div class="skeleton-icon"></div>
+              <div class="skeleton-title"></div>
+            </div>
+            <div class="skeleton-stats">
+              <div class="skeleton-stat"></div>
+              <div class="skeleton-stat"></div>
+              <div class="skeleton-stat"></div>
+              <div class="skeleton-stat"></div>
+            </div>
+            <div class="skeleton-progress-bar"></div>
+          </div>
+          
+          <!-- Skeleton para info box -->
+          <div class="skeleton info-box">
+            <div class="skeleton-icon"></div>
+            <div class="skeleton-content">
+              <div class="skeleton-line"></div>
+              <div class="skeleton-line"></div>
+              <div class="skeleton-line short"></div>
+            </div>
+          </div>
+          
+          <!-- Skeleton para category list -->
+          <div class="skeleton category-section">
+            <div class="skeleton-title"></div>
+            <div class="skeleton-category-list">
+              {#each Array(5) as _}
+                <div class="skeleton category-item">
+                  <div class="skeleton-checkbox"></div>
+                  <div class="skeleton-category-info">
+                    <div class="skeleton-category-header">
+                      <div class="skeleton-category-label"></div>
+                      <div class="skeleton-badge"></div>
+                    </div>
+                    <div class="skeleton-category-stats"></div>
+                    <div class="skeleton-progress-bar"></div>
+                  </div>
+                </div>
+              {/each}
+            </div>
+          </div>
+        </div>
+      {/if}
+    
+    {#if !downloading && progress < 100 && !isInitializing}
 
       <!-- Sync banner -->
       {#if needsSync}
@@ -653,6 +922,14 @@
         </div>
       {/if}
 
+      <!-- Loading indicator for stats -->
+      {#if isLoadingStats}
+        <div class="stats-loading-indicator">
+          <RefreshCw class="w-4 h-4 spinning" />
+          <span>Carregando estatísticas...</span>
+        </div>
+      {/if}
+
       <!-- Category selection -->
       <div class="category-section">
         <h2 class="section-title">Selecione as categorias para baixar:</h2>
@@ -665,7 +942,12 @@
             {@const isDownloaded = downloadedCategories.includes(category)}
             {@const shouldShowCompleteBadge = isActuallyComplete && (isDownloaded || stats.available === stats.total)}
             
-            <label class="category-item" class:downloaded={isDownloaded} class:complete={isActuallyComplete}>
+            <label 
+              class="category-item" 
+              class:downloaded={isDownloaded} 
+              class:complete={isActuallyComplete}
+              data-category={category}
+            >
               <input
                 type="checkbox"
                 checked={isSelected}
@@ -1408,6 +1690,169 @@
     border-color: #c82333;
     transform: translateY(-2px);
     box-shadow: 0 4px 8px rgba(220, 53, 69, 0.3);
+  }
+
+  /* Skeleton Screen Styles */
+  .skeleton-container {
+    padding: 1.5rem;
+  }
+
+  .skeleton {
+    background: linear-gradient(90deg, var(--placeholder-color) 25%, rgba(255, 255, 255, 0.1) 50%, var(--placeholder-color) 75%);
+    background-size: 200% 100%;
+    animation: loading 1.5s infinite;
+    border-radius: 0.5rem;
+  }
+
+  @keyframes loading {
+    0% { background-position: 200% 0; }
+    100% { background-position: -200% 0; }
+  }
+
+  .skeleton.availability-summary {
+    height: 200px;
+    margin-bottom: 1.5rem;
+    padding: 1.5rem;
+  }
+
+  .skeleton-header {
+    display: flex;
+    gap: 0.5rem;
+    margin-bottom: 1rem;
+  }
+
+  .skeleton-icon {
+    width: 1.25rem;
+    height: 1.25rem;
+    border-radius: 0.25rem;
+  }
+
+  .skeleton-title {
+    height: 1.25rem;
+    width: 200px;
+    border-radius: 0.25rem;
+  }
+
+  .skeleton-stats {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+    gap: 1rem;
+    margin-bottom: 1rem;
+  }
+
+  .skeleton-stat {
+    height: 80px;
+    border-radius: 0.5rem;
+  }
+
+  .skeleton-progress-bar {
+    height: 1rem;
+    width: 100%;
+    border-radius: 0.5rem;
+  }
+
+  .skeleton.info-box {
+    height: 120px;
+    margin-bottom: 1.5rem;
+    padding: 1rem;
+    display: flex;
+    gap: 1rem;
+  }
+
+  .skeleton-content {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+
+  .skeleton-line {
+    height: 1rem;
+    width: 100%;
+    border-radius: 0.25rem;
+  }
+
+  .skeleton-line.short {
+    width: 60%;
+  }
+
+  .skeleton.category-section {
+    margin-bottom: 1.5rem;
+  }
+
+  .skeleton-category-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    margin-top: 1rem;
+  }
+
+  .skeleton.category-item {
+    display: flex;
+    gap: 0.75rem;
+    padding: 0.75rem;
+    height: 100px;
+  }
+
+  .skeleton-checkbox {
+    width: 1.25rem;
+    height: 1.25rem;
+    border-radius: 0.25rem;
+    flex-shrink: 0;
+  }
+
+  .skeleton-category-info {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+
+  .skeleton-category-header {
+    display: flex;
+    justify-content: space-between;
+    gap: 0.5rem;
+  }
+
+  .skeleton-category-label {
+    height: 1rem;
+    width: 150px;
+    border-radius: 0.25rem;
+  }
+
+  .skeleton-badge {
+    height: 1rem;
+    width: 80px;
+    border-radius: 0.25rem;
+  }
+
+  .skeleton-category-stats {
+    height: 0.875rem;
+    width: 120px;
+    border-radius: 0.25rem;
+  }
+
+  /* Stats Loading Indicator */
+  .stats-loading-indicator {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.75rem 1rem;
+    background-color: var(--background-color);
+    border: 1px solid var(--gold-color);
+    border-radius: 0.5rem;
+    margin-bottom: 1rem;
+    color: var(--text-light);
+    font-size: 0.875rem;
+  }
+
+  .stats-loading-indicator :global(.spinning) {
+    animation: spin 1s linear infinite;
+  }
+
+  @keyframes spin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
   }
 
   /* Responsive */
