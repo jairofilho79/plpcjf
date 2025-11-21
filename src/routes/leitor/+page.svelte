@@ -1257,7 +1257,7 @@
       on:longpress={goToFirstPage}
       longPressDuration={500}
       hapticFeedback={true}
-      preventDefault={false}
+      preventDefault={true}
     >
       <div class="touch-zone left"></div>
     </GestureButton>
@@ -1270,7 +1270,7 @@
       on:longpress={goToLastPage}
       longPressDuration={500}
       hapticFeedback={true}
-      preventDefault={false}
+      preventDefault={true}
     >
       <div class="touch-zone right"></div>
     </GestureButton>
