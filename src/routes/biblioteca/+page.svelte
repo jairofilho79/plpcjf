@@ -12,6 +12,7 @@
   import SortSelector from '$lib/components/SortSelector.svelte';
   import PdfViewerSelector from '$lib/components/PdfViewerSelector.svelte';
   import LouvorCard from '$lib/components/LouvorCard.svelte';
+  import GestureButton from '$lib/components/GestureButton.svelte';
   import { ChevronLeft, ChevronRight } from 'lucide-svelte';
   
   // Normalize classification by removing content in parentheses
@@ -220,13 +221,6 @@
     }
   }
   
-  // Long press detection for pagination buttons
-  let longPressTimerPrev = null;
-  let longPressTimerNext = null;
-  let isProcessingLongPressPrev = false;
-  let isProcessingLongPressNext = false;
-  const LONG_PRESS_DURATION = 500; // 500ms
-  
   function goToFirstPage() {
     if (totalPages > 0) {
       setPage(1);
@@ -238,133 +232,6 @@
       setPage(totalPages);
     }
   }
-  
-  function handlePrevMouseDown(event) {
-    event.preventDefault(); // Prevenir seleção de texto e comportamento padrão
-    isProcessingLongPressPrev = true;
-    
-    if (longPressTimerPrev) {
-      clearTimeout(longPressTimerPrev);
-    }
-    
-    longPressTimerPrev = setTimeout(() => {
-      goToFirstPage();
-      longPressTimerPrev = null;
-      isProcessingLongPressPrev = false;
-    }, LONG_PRESS_DURATION);
-  }
-  
-  function handlePrevMouseUp() {
-    if (longPressTimerPrev) {
-      clearTimeout(longPressTimerPrev);
-      longPressTimerPrev = null;
-      isProcessingLongPressPrev = false;
-    }
-  }
-  
-  function handlePrevClick(event) {
-    if (isProcessingLongPressPrev) {
-      event.preventDefault();
-      event.stopPropagation();
-      event.stopImmediatePropagation();
-      setTimeout(() => {
-        isProcessingLongPressPrev = false;
-      }, 100);
-      return;
-    }
-    previousPage();
-  }
-  
-  function handlePrevTouchStart(event) {
-    event.preventDefault(); // Prevenir comportamento padrão
-    isProcessingLongPressPrev = true;
-    
-    if (longPressTimerPrev) {
-      clearTimeout(longPressTimerPrev);
-    }
-    
-    longPressTimerPrev = setTimeout(() => {
-      goToFirstPage();
-      longPressTimerPrev = null;
-      isProcessingLongPressPrev = false;
-    }, LONG_PRESS_DURATION);
-  }
-  
-  function handlePrevTouchEnd() {
-    if (longPressTimerPrev) {
-      clearTimeout(longPressTimerPrev);
-      longPressTimerPrev = null;
-      isProcessingLongPressPrev = false;
-    }
-  }
-  
-  function handleNextMouseDown(event) {
-    event.preventDefault(); // Prevenir seleção de texto e comportamento padrão
-    isProcessingLongPressNext = true;
-    
-    if (longPressTimerNext) {
-      clearTimeout(longPressTimerNext);
-    }
-    
-    longPressTimerNext = setTimeout(() => {
-      goToLastPage();
-      longPressTimerNext = null;
-      isProcessingLongPressNext = false;
-    }, LONG_PRESS_DURATION);
-  }
-  
-  function handleNextMouseUp() {
-    if (longPressTimerNext) {
-      clearTimeout(longPressTimerNext);
-      longPressTimerNext = null;
-      isProcessingLongPressNext = false;
-    }
-  }
-  
-  function handleNextClick(event) {
-    if (isProcessingLongPressNext) {
-      event.preventDefault();
-      event.stopPropagation();
-      event.stopImmediatePropagation();
-      setTimeout(() => {
-        isProcessingLongPressNext = false;
-      }, 100);
-      return;
-    }
-    nextPage();
-  }
-  
-  function handleNextTouchStart(event) {
-    event.preventDefault(); // Prevenir comportamento padrão
-    isProcessingLongPressNext = true;
-    
-    if (longPressTimerNext) {
-      clearTimeout(longPressTimerNext);
-    }
-    
-    longPressTimerNext = setTimeout(() => {
-      goToLastPage();
-      longPressTimerNext = null;
-      isProcessingLongPressNext = false;
-    }, LONG_PRESS_DURATION);
-  }
-  
-  function handleNextTouchEnd() {
-    if (longPressTimerNext) {
-      clearTimeout(longPressTimerNext);
-      longPressTimerNext = null;
-      isProcessingLongPressNext = false;
-    }
-  }
-  
-  onDestroy(() => {
-    if (longPressTimerPrev) {
-      clearTimeout(longPressTimerPrev);
-    }
-    if (longPressTimerNext) {
-      clearTimeout(longPressTimerNext);
-    }
-  });
   
   let filtersInitialized = false;
   /**
@@ -487,35 +354,22 @@
             </div>
             
             <div class="pagination-input-group">
-              <button
-                type="button"
-                class="pagination-button"
-                on:click={handlePrevClick}
-                on:mousedown={handlePrevMouseDown}
-                on:mouseup={handlePrevMouseUp}
-                on:touchstart={handlePrevTouchStart}
-                on:touchend={handlePrevTouchEnd}
-                on:mouseleave={() => {
-                  if (longPressTimerPrev) {
-                    clearTimeout(longPressTimerPrev);
-                    longPressTimerPrev = null;
-                  }
-                  isProcessingLongPressPrev = false;
-                }}
-                on:touchcancel={() => {
-                  if (longPressTimerPrev) {
-                    clearTimeout(longPressTimerPrev);
-                    longPressTimerPrev = null;
-                  }
-                  isProcessingLongPressPrev = false;
-                }}
-                disabled={currentPage === 1}
-                title="Página anterior (long press para primeira página)"
-                on:selectstart|preventDefault
-                on:contextmenu|preventDefault
+              <GestureButton
+                on:click={previousPage}
+                on:longpress={goToFirstPage}
+                longPressDuration={500}
+                hapticFeedback={true}
+                preventDefault={true}
               >
-                <ChevronLeft class="w-5 h-5" />
-              </button>
+                <button
+                  type="button"
+                  class="pagination-button"
+                  disabled={currentPage === 1}
+                  title="Página anterior (long press para primeira página)"
+                >
+                  <ChevronLeft class="w-5 h-5" />
+                </button>
+              </GestureButton>
               
               <input
                 type="number"
@@ -534,35 +388,22 @@
                 aria-label="Número da página"
               />
               
-              <button
-                type="button"
-                class="pagination-button"
-                on:click={handleNextClick}
-                on:mousedown={handleNextMouseDown}
-                on:mouseup={handleNextMouseUp}
-                on:touchstart={handleNextTouchStart}
-                on:touchend={handleNextTouchEnd}
-                on:mouseleave={() => {
-                  if (longPressTimerNext) {
-                    clearTimeout(longPressTimerNext);
-                    longPressTimerNext = null;
-                  }
-                  isProcessingLongPressNext = false;
-                }}
-                on:touchcancel={() => {
-                  if (longPressTimerNext) {
-                    clearTimeout(longPressTimerNext);
-                    longPressTimerNext = null;
-                  }
-                  isProcessingLongPressNext = false;
-                }}
-                disabled={currentPage === totalPages}
-                title="Próxima página (long press para última página)"
-                on:selectstart|preventDefault
-                on:contextmenu|preventDefault
+              <GestureButton
+                on:click={nextPage}
+                on:longpress={goToLastPage}
+                longPressDuration={500}
+                hapticFeedback={true}
+                preventDefault={true}
               >
-                <ChevronRight class="w-5 h-5" />
-              </button>
+                <button
+                  type="button"
+                  class="pagination-button"
+                  disabled={currentPage === totalPages}
+                  title="Próxima página (long press para última página)"
+                >
+                  <ChevronRight class="w-5 h-5" />
+                </button>
+              </GestureButton>
             </div>
           </div>
         </div>

@@ -1,5 +1,6 @@
 <script>
   import { classificationFilters } from '$lib/stores/classificationFilters';
+  import GestureButton from '$lib/components/GestureButton.svelte';
   
   export let availableClassifications = [];
   
@@ -35,116 +36,18 @@
     }
   }
   
-  // Long press detection
-  /**
-   * @type {number | null | undefined}
-   */
-  let longPressTimer = null;
-  let wasLongPress = false;
-  let isProcessingLongPress = false;
-  const LONG_PRESS_DURATION = 500; // 500ms
-  
   /**
    * @param {string} classification
-   * @param {MouseEvent & { currentTarget: EventTarget & HTMLButtonElement; }} event
    */
-  function handleClassificationMouseDown(classification, event) {
-    // Não prevenir default aqui - permite que o click funcione normalmente
-    wasLongPress = false;
-    isProcessingLongPress = true; // Marcar que estamos processando um possível long press
-    
-    if (longPressTimer) {
-      clearTimeout(longPressTimer);
-    }
-    
-    longPressTimer = setTimeout(() => {
-      wasLongPress = true;
-      classificationFilters.selectOnly(classification);
-      longPressTimer = null;
-      isProcessingLongPress = false; // Resetar após long press ser detectado
-    }, LONG_PRESS_DURATION);
-  }
-  
-  /**
-   * @param {string} classification
-   * @param {MouseEvent & { currentTarget: EventTarget & HTMLButtonElement; }} event
-   */
-  function handleClassificationMouseUp(classification, event) {
-    // Se o timer ainda está rodando, cancelar (o toggle será feito no click)
-    if (longPressTimer) {
-      clearTimeout(longPressTimer);
-      longPressTimer = null;
-      wasLongPress = false;
-      isProcessingLongPress = false;
-    }
-    // Se longPressTimer é null e wasLongPress é true, significa que o long press já aconteceu
-    // Neste caso, NÃO resetar wasLongPress aqui - deixar para o click handler
-  }
-  
-  /**
-   * @param {string} classification
-   * @param {MouseEvent & { currentTarget: EventTarget & HTMLButtonElement; }} event
-   */
-  function handleClassificationClick(classification, event) {
-    // Se foi long press, não fazer toggle (já foi tratado)
-    if (wasLongPress) {
-      event.preventDefault();
-      event.stopPropagation();
-      // Resetar flag após um pequeno delay
-      setTimeout(() => {
-        wasLongPress = false;
-        isProcessingLongPress = false;
-      }, 100);
-      return;
-    }
-    
-    // Se ainda está processando (timer rodando), cancelar o timer e fazer toggle normal
-    if (isProcessingLongPress && longPressTimer) {
-      clearTimeout(longPressTimer);
-      longPressTimer = null;
-      isProcessingLongPress = false;
-      // Continuar para fazer o toggle normalmente
-    }
-    
+  function handleClassificationClick(classification) {
     classificationFilters.toggleClassification(classification);
   }
   
   /**
    * @param {string} classification
-   * @param {TouchEvent & { currentTarget: EventTarget & HTMLButtonElement; }} event
    */
-  function handleClassificationTouchStart(classification, event) {
-    // Não prevenir default aqui - permite que o click simulado funcione normalmente
-    wasLongPress = false;
-    isProcessingLongPress = true; // Marcar que estamos processando um possível long press
-    
-    if (longPressTimer) {
-      clearTimeout(longPressTimer);
-    }
-    
-    longPressTimer = setTimeout(() => {
-      wasLongPress = true;
-      classificationFilters.selectOnly(classification);
-      longPressTimer = null;
-      isProcessingLongPress = false; // Resetar após long press ser detectado
-    }, LONG_PRESS_DURATION);
-  }
-  
-  
-  /**
-   * @param {string} classification
-   * @param {TouchEvent & { currentTarget: EventTarget & HTMLButtonElement; }} event
-   */
-  function handleClassificationTouchEnd(classification, event) {
-    // Se o timer ainda está rodando, cancelar (o toggle será feito no click simulado)
-    if (longPressTimer) {
-      clearTimeout(longPressTimer);
-      longPressTimer = null;
-      wasLongPress = false;
-      isProcessingLongPress = false;
-    }
-    // Se longPressTimer é null e wasLongPress é true, significa que o long press já aconteceu
-    // Neste caso, NÃO resetar wasLongPress aqui - deixar para o click handler
+  function handleClassificationLongPress(classification) {
+    classificationFilters.selectOnly(classification);
   }
 </script>
 
@@ -164,36 +67,20 @@
     
     {#each normalizedClassifications as classification}
       {@const isClassificationActive = $classificationFilters.includes(classification)}
-      <button
-        type="button"
-        class="filter-chip"
-        class:active={isClassificationActive}
-        on:click={(e) => handleClassificationClick(classification, e)}
-        on:mousedown={(e) => handleClassificationMouseDown(classification, e)}
-        on:mouseup={(e) => handleClassificationMouseUp(classification, e)}
-        on:mouseleave={(e) => {
-          if (longPressTimer) {
-            clearTimeout(longPressTimer);
-            longPressTimer = null;
-          }
-          wasLongPress = false;
-          isProcessingLongPress = false;
-        }}
-        on:touchstart={(e) => handleClassificationTouchStart(classification, e)}
-        on:touchend={(e) => handleClassificationTouchEnd(classification, e)}
-        on:touchcancel={(e) => {
-          if (longPressTimer) {
-            clearTimeout(longPressTimer);
-            longPressTimer = null;
-          }
-          wasLongPress = false;
-          isProcessingLongPress = false;
-        }}
-        on:selectstart|preventDefault
-        on:contextmenu|preventDefault
+      <GestureButton
+        on:click={() => handleClassificationClick(classification)}
+        on:longpress={() => handleClassificationLongPress(classification)}
+        longPressDuration={500}
+        preventDefault={true}
       >
-        <span>{classification}</span>
-      </button>
+        <button
+          type="button"
+          class="filter-chip"
+          class:active={isClassificationActive}
+        >
+          <span>{classification}</span>
+        </button>
+      </GestureButton>
     {/each}
   </div>
 {/if}

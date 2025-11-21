@@ -3,6 +3,7 @@
   import { offline } from '$lib/stores/offline';
   import { browser } from '$app/environment';
   import { WifiOff } from 'lucide-svelte';
+  import GestureButton from '$lib/components/GestureButton.svelte';
   
   let allChecked = $filters.length === CATEGORY_OPTIONS.length;
   let indeterminate = false;
@@ -36,120 +37,18 @@
     }
   }
   
-  // Long press detection
   /**
-     * @type {number | null | undefined}
-     */
-  let longPressTimer = null;
-  let wasLongPress = false;
-  let isProcessingLongPress = false;
-  const LONG_PRESS_DURATION = 500; // 500ms
-  
-  /**
-     * @param {string} category
-     * @param {MouseEvent & { currentTarget: EventTarget & HTMLButtonElement; }} event
-     */
-  function handleCategoryMouseDown(category, event) {
-    // Não prevenir default aqui - permite que o click funcione normalmente
-    wasLongPress = false;
-    isProcessingLongPress = true; // Marcar que estamos processando um possível long press
-    
-    // Limpar qualquer timer existente
-    if (longPressTimer) {
-      clearTimeout(longPressTimer);
-    }
-    
-    // Iniciar timer para long press
-    longPressTimer = setTimeout(() => {
-      // Long press detectado - selecionar apenas esta categoria
-      wasLongPress = true;
-      filters.selectOnly(category);
-      longPressTimer = null;
-      isProcessingLongPress = false; // Resetar após long press ser detectado
-    }, LONG_PRESS_DURATION);
-  }
-  
-  /**
-     * @param {string} category
-     * @param {MouseEvent & { currentTarget: EventTarget & HTMLButtonElement; }} event
-     */
-  function handleCategoryMouseUp(category, event) {
-    // Se o timer ainda está rodando, cancelar (o toggle será feito no click)
-    if (longPressTimer) {
-      clearTimeout(longPressTimer);
-      longPressTimer = null;
-      wasLongPress = false;
-      isProcessingLongPress = false;
-    }
-    // Se longPressTimer é null e wasLongPress é true, significa que o long press já aconteceu
-    // Neste caso, NÃO resetar wasLongPress aqui - deixar para o click handler
-  }
-  
-  /**
-     * @param {string} category
-     * @param {MouseEvent & { currentTarget: EventTarget & HTMLButtonElement; }} event
-     */
-  function handleCategoryClick(category, event) {
-    // Se foi long press, não fazer toggle (já foi tratado)
-    if (wasLongPress) {
-      event.preventDefault();
-      event.stopPropagation();
-      // Resetar flag após um pequeno delay
-      setTimeout(() => {
-        wasLongPress = false;
-        isProcessingLongPress = false;
-      }, 100);
-      return;
-    }
-    
-    // Se ainda está processando (timer rodando), cancelar o timer e fazer toggle normal
-    if (isProcessingLongPress && longPressTimer) {
-      clearTimeout(longPressTimer);
-      longPressTimer = null;
-      isProcessingLongPress = false;
-      // Continuar para fazer o toggle normalmente
-    }
-    
-    // Click normal - fazer toggle (funciona tanto para mouse quanto touch)
+   * @param {string} category
+   */
+  function handleCategoryClick(category) {
     filters.toggleCategory(category);
   }
   
   /**
-     * @param {string} category
-     * @param {TouchEvent & { currentTarget: EventTarget & HTMLButtonElement; }} event
-     */
-  function handleCategoryTouchStart(category, event) {
-    // Não prevenir default aqui - permite que o click simulado funcione normalmente
-    wasLongPress = false;
-    isProcessingLongPress = true; // Marcar que estamos processando um possível long press
-    
-    if (longPressTimer) {
-      clearTimeout(longPressTimer);
-    }
-    
-    longPressTimer = setTimeout(() => {
-      wasLongPress = true;
-      filters.selectOnly(category);
-      longPressTimer = null;
-      isProcessingLongPress = false; // Resetar após long press ser detectado
-    }, LONG_PRESS_DURATION);
-  }
-  
-  
-  /**
-     * @param {string} category
-     * @param {TouchEvent & { currentTarget: EventTarget & HTMLButtonElement; }} event
-     */
-  function handleCategoryTouchEnd(category, event) {
-    // Se o timer ainda está rodando, cancelar (o toggle será feito no click simulado)
-    if (longPressTimer) {
-      clearTimeout(longPressTimer);
-      longPressTimer = null;
-      wasLongPress = false;
-      isProcessingLongPress = false;
-    }
-    // Se longPressTimer é null e wasLongPress é true, significa que o long press já aconteceu
-    // Neste caso, NÃO resetar wasLongPress aqui - deixar para o click handler
+   * @param {string} category
+   */
+  function handleCategoryLongPress(category) {
+    filters.selectOnly(category);
   }
   
   /**
@@ -204,47 +103,30 @@
     {@const isCategoryActive = $filters.includes(category)}
     {@const iconPath = getIcon(category)}
     {@const isDisabled = isCategoryDisabled(category)}
-    <button
-      type="button"
-      class="filter-chip"
-      class:active={isCategoryActive}
-      class:disabled={isDisabled}
+    <GestureButton
+      on:click={() => !isDisabled && handleCategoryClick(category)}
+      on:longpress={() => !isDisabled && handleCategoryLongPress(category)}
+      longPressDuration={500}
+      preventDefault={true}
       disabled={isDisabled}
-      on:click={(e) => !isDisabled && handleCategoryClick(category, e)}
-      on:mousedown={(e) => !isDisabled && handleCategoryMouseDown(category, e)}
-      on:mouseup={(e) => !isDisabled && handleCategoryMouseUp(category, e)}
-      on:mouseleave={(e) => {
-        // Cancelar long press se o mouse sair do botão
-        if (longPressTimer) {
-          clearTimeout(longPressTimer);
-          longPressTimer = null;
-        }
-        wasLongPress = false;
-        isProcessingLongPress = false;
-      }}
-      on:touchstart={(e) => !isDisabled && handleCategoryTouchStart(category, e)}
-      on:touchend={(e) => !isDisabled && handleCategoryTouchEnd(category, e)}
-      on:touchcancel={(e) => {
-        // Cancelar long press se o touch for cancelado
-        if (longPressTimer) {
-          clearTimeout(longPressTimer);
-          longPressTimer = null;
-        }
-        wasLongPress = false;
-        isProcessingLongPress = false;
-      }}
-      on:selectstart|preventDefault
-      on:contextmenu|preventDefault
     >
-      {#if isDisabled}
-        <WifiOff class="w-4 h-4 offline-icon" />
-      {:else if iconPath}
-        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d={iconPath} />
-        </svg>
-      {/if}
-      <span>{category}</span>
-    </button>
+      <button
+        type="button"
+        class="filter-chip"
+        class:active={isCategoryActive}
+        class:disabled={isDisabled}
+        disabled={isDisabled}
+      >
+        {#if isDisabled}
+          <WifiOff class="w-4 h-4 offline-icon" />
+        {:else if iconPath}
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d={iconPath} />
+          </svg>
+        {/if}
+        <span>{category}</span>
+      </button>
+    </GestureButton>
   {/each}
 </div>
 

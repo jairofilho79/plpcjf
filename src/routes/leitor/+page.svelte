@@ -2,6 +2,7 @@
   /// <reference types="@sveltejs/kit" />
   import { onDestroy, onMount } from 'svelte';
   import { page } from '$app/stores';
+  import GestureButton from '$lib/components/GestureButton.svelte';
 
   // Type for PDF.js getDocument function
   type PDFJSGetDocument = (options: { url: string; withCredentials?: boolean }) => {
@@ -37,9 +38,6 @@
     }
     return 'page-fit';
   })();
-  let longPressTimer: ReturnType<typeof setTimeout> | null = null;
-  let isLongPressing = false;
-  const LONG_PRESS_DURATION = 500; // milliseconds
   // Flag to prevent PDF.js from overwriting our manual page-width calculation
   let isManuallyAdjustingPageWidth = false;
   let pageWidthAdjustTimeout: ReturnType<typeof setTimeout> | null = null;
@@ -463,10 +461,6 @@
   });
 
   onDestroy(() => {
-    if (longPressTimer) {
-      clearTimeout(longPressTimer);
-      longPressTimer = null;
-    }
     if (pageWidthAdjustTimeout) {
       clearTimeout(pageWidthAdjustTimeout);
       pageWidthAdjustTimeout = null;
@@ -484,8 +478,6 @@
   }
   function zoomFit() {
     if (!viewer) return;
-    // Don't execute if long press just happened (allow a small delay for flag reset)
-    if (isLongPressing) return;
     // Reset to the preferred fit mode
     if (preferredFitMode === 'page-width') {
       // For page-width, calculate manually instead of using PDF.js algorithm
@@ -514,69 +506,6 @@
         viewer.currentScaleValue = preferredFitMode;
       }
     }
-  }
-  
-  function handleZoomFitMouseDown(e: MouseEvent) {
-    e.preventDefault(); // Prevenir seleção de texto
-    isLongPressing = false;
-    if (longPressTimer) clearTimeout(longPressTimer);
-    longPressTimer = setTimeout(() => {
-      isLongPressing = true;
-      toggleFitMode();
-      longPressTimer = null;
-    }, LONG_PRESS_DURATION);
-  }
-  
-  function handleZoomFitMouseUp() {
-    if (longPressTimer) {
-      clearTimeout(longPressTimer);
-      longPressTimer = null;
-    }
-    // Reset flag after a short delay to allow click handler to check
-    setTimeout(() => {
-      isLongPressing = false;
-    }, 50);
-  }
-  
-  function handleZoomFitMouseLeave() {
-    if (longPressTimer) {
-      clearTimeout(longPressTimer);
-      longPressTimer = null;
-    }
-    isLongPressing = false;
-  }
-  
-  function handleZoomFitTouchStart(e: TouchEvent) {
-    // Don't prevent default to allow click event to fire
-    isLongPressing = false;
-    if (longPressTimer) clearTimeout(longPressTimer);
-    longPressTimer = setTimeout(() => {
-      isLongPressing = true;
-      toggleFitMode();
-      longPressTimer = null;
-    }, LONG_PRESS_DURATION);
-  }
-  
-  function handleZoomFitTouchEnd(e: TouchEvent) {
-    const wasLongPressTimerActive = !!longPressTimer;
-    if (longPressTimer) {
-      clearTimeout(longPressTimer);
-      longPressTimer = null;
-    }
-    // If it was a simple tap (timer was still active, meaning long press didn't complete), trigger zoomFit
-    if (wasLongPressTimerActive && !isLongPressing) {
-      // It was a simple tap, trigger zoomFit directly
-      // Use a small delay to ensure isLongPressing flag doesn't interfere
-      setTimeout(() => {
-        if (!isLongPressing) {
-          zoomFit();
-        }
-      }, 10);
-    }
-    // Reset flag after a short delay
-    setTimeout(() => {
-      isLongPressing = false;
-    }, 50);
   }
   function nextPage() {
     if (!viewer) return;
@@ -1030,25 +959,27 @@
     </svg>
   </button>
 
-  <button 
-    class="btn zoom-fit" 
-    class:page-fit={preferredFitMode === 'page-fit'}
-    class:page-width={preferredFitMode === 'page-width'}
-    on:click={zoomFit} 
-    on:mousedown={handleZoomFitMouseDown}
-    on:mouseup={handleZoomFitMouseUp}
-    on:mouseleave={handleZoomFitMouseLeave}
-    on:touchstart={handleZoomFitTouchStart}
-    on:touchend={handleZoomFitTouchEnd}
-    aria-label="Ajustar zoom"
+  <GestureButton
+    on:click={zoomFit}
+    on:longpress={toggleFitMode}
+    longPressDuration={500}
+    hapticFeedback={true}
+    preventDefault={true}
   >
-    {zoomPercent}%
-    <!-- Visual indicators for fit mode -->
-    <div class="zoom-fit-indicator bar page-fit top"></div>
-    <div class="zoom-fit-indicator bar page-fit bottom"></div>
-    <div class="zoom-fit-indicator bar page-width left"></div>
-    <div class="zoom-fit-indicator bar page-width right"></div>
-  </button>
+    <button 
+      class="btn zoom-fit" 
+      class:page-fit={preferredFitMode === 'page-fit'}
+      class:page-width={preferredFitMode === 'page-width'}
+      aria-label="Ajustar zoom"
+    >
+      {zoomPercent}%
+      <!-- Visual indicators for fit mode -->
+      <div class="zoom-fit-indicator bar page-fit top"></div>
+      <div class="zoom-fit-indicator bar page-fit bottom"></div>
+      <div class="zoom-fit-indicator bar page-width left"></div>
+      <div class="zoom-fit-indicator bar page-width right"></div>
+    </button>
+  </GestureButton>
 
   <button class="btn zoom-plus" on:click={zoomIn} aria-label="Aumentar zoom">
     <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="icon">
