@@ -4,6 +4,9 @@
   import { page } from '$app/stores';
   import { goto } from '$app/navigation';
   import GestureButton from '$lib/components/GestureButton.svelte';
+  import CarouselNavigator from '$lib/components/CarouselNavigator.svelte';
+  import { carousel } from '$lib/stores/carousel';
+  import { getPdfRelPath } from '$lib/utils/pathUtils';
 
   // Type for PDF.js getDocument function
   type PDFJSGetDocument = (options: { url: string; withCredentials?: boolean }) => {
@@ -311,6 +314,23 @@
     
     // Sempre garantir que a barra esteja visível ao carregar a página
     isToolbarVisible = true;
+    
+    // Add storage event listener for carousel synchronization between tabs
+    let storageHandler: ((e: StorageEvent) => void) | null = null;
+    if (typeof window !== 'undefined') {
+      storageHandler = (e: StorageEvent) => {
+        if (e.key === 'carouselLouvores') {
+          try {
+            const newCarousel = e.newValue ? JSON.parse(e.newValue) : [];
+            carousel.setCarousel(newCarousel);
+          } catch (err) {
+            console.warn('[Leitor] Failed to sync carousel from storage:', err);
+          }
+        }
+      };
+      
+      window.addEventListener('storage', storageHandler);
+    }
 
     if (!containerEl || !viewerEl) return;
     // Measure toolbar height (including border) and keep it updated
@@ -459,6 +479,9 @@
     cleanup = () => {
       window.removeEventListener('resize', resize);
       window.removeEventListener('keydown', onKeyDown);
+      if (storageHandler) {
+        window.removeEventListener('storage', storageHandler);
+      }
       if (containerEl) {
         containerEl.removeEventListener('touchstart', onTouchStart);
         containerEl.removeEventListener('touchmove', onTouchMove);
@@ -648,6 +671,18 @@
     goto('/');
   }
   
+  // Função para navegar para PDF do carousel
+  function navigateToPdf(louvor: any) {
+    const pdfPath = getPdfRelPath(louvor);
+    if (!pdfPath) return;
+    
+    const fileParam = encodeURIComponent(`/${pdfPath}`);
+    const tituloParam = encodeURIComponent(louvor.nome || '');
+    const subtituloText = `${louvor.categoria || ''} | ${louvor.classificacao || ''}`.trim();
+    const subtituloParam = encodeURIComponent(subtituloText);
+    goto(`/leitor?file=${fileParam}&titulo=${tituloParam}&subtitulo=${subtituloParam}&validated=true`);
+  }
+  
   // Função para toggle da barra superior (fullscreen)
   function toggleToolbar() {
     isToolbarVisible = !isToolbarVisible;
@@ -797,7 +832,7 @@
     right: 0;
     height: 56px;
     display: grid;
-    grid-template-columns: 1fr repeat(6, max-content);
+    grid-template-columns: 1fr max-content repeat(6, max-content);
     grid-template-rows: repeat(3, 1fr);
     column-gap: 8px;
     padding: 0 calc(12px + env(safe-area-inset-right)) 0 calc(12px + env(safe-area-inset-left));
@@ -840,6 +875,13 @@
     stroke: currentColor;
   }
   .title-wrap { display: flex; flex-direction: column; justify-content: center; min-width: 0; grid-column: 1; grid-row: 2 / 4; }
+  
+  /* Carousel navigator positioning */
+  :global(.toolbar > :global(.carousel-navigator)) {
+    grid-column: 2;
+    grid-row: 1 / 4;
+    align-self: center;
+  }
   .title-main {
     font-weight: 600;
     line-height: 1;
@@ -876,11 +918,11 @@
   .indicator .total { opacity: .9; }
 
   /* Grid placements for controls spanning all rows */
-  .btn.prev { grid-column: 2; grid-row: 1 / 4; align-self: center; }
-  .indicator { grid-column: 3; grid-row: 1 / 4; align-self: center; }
-  .btn.next { grid-column: 4; grid-row: 1 / 4; align-self: center; }
-  .btn.zoom-minus { grid-column: 5; grid-row: 1 / 4; align-self: center; }
-  .btn.zoom-fit { grid-column: 6; grid-row: 1 / 4; align-self: center; position: relative; }
+  .btn.prev { grid-column: 3; grid-row: 1 / 4; align-self: center; }
+  .indicator { grid-column: 4; grid-row: 1 / 4; align-self: center; }
+  .btn.next { grid-column: 5; grid-row: 1 / 4; align-self: center; }
+  .btn.zoom-minus { grid-column: 6; grid-row: 1 / 4; align-self: center; }
+  .btn.zoom-fit { grid-column: 7; grid-row: 1 / 4; align-self: center; position: relative; }
   
   .zoom-fit-indicator {
     position: absolute;
@@ -951,7 +993,7 @@
     width: 0;
     height: 0;
   }
-  .btn.zoom-plus { grid-column: 7; grid-row: 1 / 4; align-self: center; }
+  .btn.zoom-plus { grid-column: 8; grid-row: 1 / 4; align-self: center; }
 
   /* Wide screens: let content breathe */
   @media (min-width: 1024px) {
@@ -963,17 +1005,21 @@
   /* Tablet+ layout: brand in its own column, title/subtitle to the right */
   @media (min-width: 768px) {
     .toolbar {
-      grid-template-columns: auto 1fr repeat(6, max-content);
+      grid-template-columns: auto 1fr max-content repeat(6, max-content);
     }
     .brand { grid-column: 1; grid-row: 1 / 4; align-self: center; }
     .title-wrap { grid-column: 2; grid-row: 1 / 4; }
+    /* Carousel navigator in column 3 */
+    :global(.toolbar > :global(.carousel-navigator)) {
+      grid-column: 3;
+    }
     /* shift controls one column to the right */
-    .btn.prev { grid-column: 3; }
-    .indicator { grid-column: 4; }
-    .btn.next { grid-column: 5; }
-    .btn.zoom-minus { grid-column: 6; }
-    .btn.zoom-fit { grid-column: 7; }
-    .btn.zoom-plus { grid-column: 8; }
+    .btn.prev { grid-column: 4; }
+    .indicator { grid-column: 5; }
+    .btn.next { grid-column: 6; }
+    .btn.zoom-minus { grid-column: 7; }
+    .btn.zoom-fit { grid-column: 8; }
+    .btn.zoom-plus { grid-column: 9; }
   }
 
   /* Compact screens: stack title under PLPC, stack indicator, hide +/- */
@@ -1208,6 +1254,12 @@
       <div class="title-sub" title={subtitulo}>{subtitulo}</div>
     {/if}
   </div>
+
+  <CarouselNavigator
+    currentFile={file}
+    carousel={$carousel}
+    on:navigate={(e) => navigateToPdf(e.detail.louvor)}
+  />
 
   <!-- Abra com /leitor?file=/pdfs/exemplo.pdf&titulo=Exemplo&subtitulo=Sub -->
   <!-- Atalhos: Ctrl/Cmd +/−/0, PgUp/PgDn/↑/↓ -->
