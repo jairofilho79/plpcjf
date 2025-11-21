@@ -1,5 +1,4 @@
 <script>
-  import { tick } from 'svelte';
   import { X, Trash2, GripVertical, Share2, Save, Check } from 'lucide-svelte';
   import { goto } from '$app/navigation';
   import { carousel } from '$lib/stores/carousel';
@@ -262,12 +261,10 @@
     return null;
   }
 
-  // Track saved playlist state
-  let savedPlaylistId = null;
+  // Track saved playlist state - apenas o hash da playlist salva
   let savedPdfIds = null;
   let savedPlaylistName = null;
   let showCopiedMessage = false;
-  let justSaved = false; // Flag to prevent reactive block from clearing state immediately after save
 
   // Generate hash of current playlist for comparison
   function getCurrentPlaylistHash() {
@@ -280,69 +277,30 @@
 
   // Check if current playlist matches saved version
   $: currentHash = getCurrentPlaylistHash();
-  $: isPlaylistSaved = savedPlaylistId !== null && savedPdfIds !== null && savedPdfIds === currentHash && currentHash !== '';
-  $: canSave = $carousel.length > 0;
+  $: isPlaylistSaved = savedPdfIds !== null && savedPdfIds === currentHash && currentHash !== '';
+  $: canSave = $carousel.length > 0 && !isPlaylistSaved;
 
-  // Sync with existing playlist if current playlist matches a saved one
-  // React to both carousel changes AND savedPlaylists store changes
-  $: savedPlaylistsStore = $savedPlaylists;
+  // Limpar estado salvo quando o carousel muda (hash muda)
   $: {
-    // This block runs when $carousel or savedPlaylistsStore changes
-    savedPlaylistsStore; // Ensure reactivity to store changes
     currentHash; // Reage a mudanças no carousel
     
-    // Se acabamos de salvar, não fazer nada - deixar handleSave gerenciar o estado
-    if (justSaved) {
-      return;
+    // Se o hash mudou e temos um estado salvo, limpar (playlist foi modificada)
+    if (savedPdfIds !== null && savedPdfIds !== currentHash) {
+      savedPdfIds = null;
+      savedPlaylistName = null;
     }
     
-    if ($carousel.length > 0) {
-      const pdfIds = $carousel
-        .map(l => l.pdfId)
-        .filter(id => id != null && id !== '');
-      
-      if (pdfIds.length > 0) {
-        const hash = pdfIds.join(',');
-        
-        // Se já temos estado salvo e hash corresponde, manter (não limpar)
-        // Isso previne limpeza prematura quando o store ainda não foi atualizado
-        if (savedPlaylistId !== null && savedPdfIds === hash) {
-          // Manter estado - não limpar, mesmo se não encontrar no store (pode ser timing)
-          return;
-        }
-        
-        const existingPlaylist = savedPlaylists.findPlaylistByPdfIds(pdfIds);
-        
-        if (existingPlaylist) {
-          savedPlaylistId = existingPlaylist.id;
-          savedPdfIds = hash;
-          savedPlaylistName = existingPlaylist.nome;
-        } else {
-          // Só limpar se hash realmente mudou
-          if (savedPdfIds !== hash) {
-            savedPlaylistId = null;
-            savedPdfIds = null;
-            savedPlaylistName = null;
-          }
-        }
-      } else {
-        // Empty playlist, clear saved state
-        savedPlaylistId = null;
-        savedPdfIds = null;
-        savedPlaylistName = null;
-      }
-    } else {
-      // Empty carousel, clear saved state
-      savedPlaylistId = null;
+    // Se o carousel está vazio, limpar estado
+    if ($carousel.length === 0) {
       savedPdfIds = null;
       savedPlaylistName = null;
     }
   }
 
-  async function handleSave() {
-    if (!$carousel.length) return;
+  function handleSave() {
+    if (!$carousel.length || isPlaylistSaved) return;
     
-    // Filter out invalid IDs to match getCurrentPlaylistHash logic
+    // Filter out invalid IDs
     const pdfIds = $carousel
       .map(l => l.pdfId)
       .filter(id => id != null && id !== '');
@@ -351,58 +309,13 @@
     
     const hash = pdfIds.join(',');
     
-    // OTIMISTIC UPDATE: Atualizar estado imediatamente para "salvo" antes de validar
-    // Isso garante que a UI atualize instantaneamente
-    const previousState = {
-      savedPlaylistId,
-      savedPdfIds,
-      savedPlaylistName
-    };
+    // Sempre criar nova playlist (não verificar se já existe)
+    const playlistId = savedPlaylists.savePlaylist(pdfIds);
+    const newPlaylist = savedPlaylists.getPlaylist(playlistId);
     
-    // Set flag to prevent reactive block from clearing state
-    justSaved = true;
-    
-    // Check if a playlist with the same pdfIds already exists
-    const existingPlaylist = savedPlaylists.findPlaylistByPdfIds(pdfIds);
-    
-    if (existingPlaylist) {
-      // Use existing playlist - sync with it
-      savedPlaylistId = existingPlaylist.id;
-      savedPdfIds = hash;
-      savedPlaylistName = existingPlaylist.nome;
-    } else {
-      // Create new playlist
-      const playlistId = savedPlaylists.savePlaylist(pdfIds);
-      savedPlaylistId = playlistId;
-      savedPdfIds = hash;
-      
-      // Get the newly created playlist to get its name
-      const newPlaylist = savedPlaylists.getPlaylist(playlistId);
-      savedPlaylistName = newPlaylist ? newPlaylist.nome : null;
-    }
-    
-    // Aguardar próximo tick para garantir sincronização com o store
-    await tick();
-    
-    // Validar se o salvamento foi bem-sucedido
-    // Buscar playlist após store ser atualizado para garantir estado correto
-    const savedPlaylist = savedPlaylists.findPlaylistByPdfIds(pdfIds);
-    if (savedPlaylist) {
-      // Salvamento bem-sucedido - confirmar estado
-      savedPlaylistId = savedPlaylist.id;
-      savedPdfIds = hash;
-      savedPlaylistName = savedPlaylist.nome;
-    } else {
-      // Salvamento falhou - reverter para estado anterior
-      savedPlaylistId = previousState.savedPlaylistId;
-      savedPdfIds = previousState.savedPdfIds;
-      savedPlaylistName = previousState.savedPlaylistName;
-    }
-    
-    // Resetar flag após validação completa (com pequeno delay para garantir que UI atualizou)
-    setTimeout(() => {
-      justSaved = false;
-    }, 100);
+    // Atualizar estado imediatamente
+    savedPdfIds = hash;
+    savedPlaylistName = newPlaylist ? newPlaylist.nome : null;
   }
   
   function handleSaveClick() {
