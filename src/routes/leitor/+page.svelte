@@ -678,6 +678,41 @@
     }
   }
   
+  // Função para mostrar a barra (desativar fullscreen)
+  function showToolbar() {
+    // Garantir que a barra seja mostrada
+    isToolbarVisible = true;
+    
+    // Atualizar altura do container
+    if (containerEl) {
+      toolbarHeight = toolbarEl ? toolbarEl.offsetHeight : 60;
+      containerEl.style.top = `${toolbarHeight}px`;
+    }
+    
+    // Disparar evento resize para notificar o PDF.js sobre a mudança de tamanho
+    if (eventBus) {
+      eventBus.dispatch('resize', {});
+    }
+    
+    // Recalcular zoom baseado no modo atual após um delay para garantir que o DOM tenha atualizado
+    if (viewer) {
+      // Limpar cache de zoom para forçar recálculo
+      cachedPageWidthScale = null;
+      
+      setTimeout(() => {
+        if (!viewer) return;
+        
+        if (preferredFitMode === 'page-width') {
+          // Para page-width, calcular manualmente
+          applyPageWidthZoom(true);
+        } else {
+          // Para page-fit, deixar o PDF.js recalcular automaticamente
+          viewer.currentScaleValue = 'page-fit';
+        }
+      }, 150);
+    }
+  }
+  
   // Reativo: atualizar altura do container quando a visibilidade da barra mudar
   $: if (containerEl) {
     if (isToolbarVisible) {
@@ -1007,6 +1042,43 @@
   .container.hidden {
     display: none;
   }
+  
+  .fab-exit-fullscreen {
+    position: fixed;
+    top: calc(12px + env(safe-area-inset-top));
+    right: calc(12px + env(safe-area-inset-right));
+    width: 44px;
+    height: 44px;
+    background: white;
+    border: none;
+    border-radius: 50%;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15), 0 4px 12px rgba(0, 0, 0, 0.1);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1500;
+    transition: transform 0.2s ease, box-shadow 0.2s ease, opacity 0.3s ease;
+    opacity: 0.95;
+    padding: 0;
+  }
+  
+  .fab-exit-fullscreen:hover {
+    transform: scale(1.05);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2), 0 6px 16px rgba(0, 0, 0, 0.15);
+    opacity: 1;
+  }
+  
+  .fab-exit-fullscreen:active {
+    transform: scale(0.98);
+  }
+  
+  .fab-exit-fullscreen svg {
+    width: 20px;
+    height: 20px;
+    stroke: var(--gold-color, #d4af37);
+    pointer-events: none;
+  }
 </style>
 
 <div class="toolbar" bind:this={toolbarEl} class:hidden={!isToolbarVisible}>
@@ -1082,6 +1154,23 @@
   <!-- Atalhos: Ctrl/Cmd +/−/0, PgUp/PgDn/↑/↓ -->
   
 </div>
+
+<!-- FAB para desativar fullscreen -->
+{#if !isToolbarVisible}
+  <button 
+    class="fab-exit-fullscreen" 
+    on:click={showToolbar}
+    aria-label="Sair do modo fullscreen"
+  >
+    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M3 7V5a2 2 0 0 1 2-2h2"/>
+      <path d="M17 3h2a2 2 0 0 1 2 2v2"/>
+      <path d="M21 17v2a2 2 0 0 1-2 2h-2"/>
+      <path d="M7 21H5a2 2 0 0 1-2-2v-2"/>
+      <rect width="10" height="8" x="7" y="8" rx="1"/>
+    </svg>
+  </button>
+{/if}
 
 {#if pdfLoading}
   <div class="pdf-loading-overlay">
