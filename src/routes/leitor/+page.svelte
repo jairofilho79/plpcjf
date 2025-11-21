@@ -529,6 +529,15 @@
     const prev = Math.max(((viewer as any).currentPageNumber ?? 1) - 1, 1);
     (viewer as any).currentPageNumber = prev;
   }
+  function goToFirstPage() {
+    if (!viewer) return;
+    (viewer as any).currentPageNumber = 1;
+  }
+  function goToLastPage() {
+    if (!viewer) return;
+    const maxPages = totalPages || (viewer as any)._pagesCount || 1;
+    (viewer as any).currentPageNumber = maxPages;
+  }
 
   // Calculate distance between two touch points
   function getTouchDistance(touch1: Touch, touch2: Touch): number {
@@ -1092,20 +1101,36 @@
     <div class="brand">PLPC</div>
   </GestureButton>
 
-  <button class="btn prev" on:click={prevPage} aria-label="Página anterior">
-    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="icon">
-      <path stroke-linecap="round" stroke-linejoin="round" d="M10.5 19.5 3 12m0 0 7.5-7.5M3 12h18" />
-    </svg>
-  </button>
+  <GestureButton
+    on:click={prevPage}
+    on:longpress={goToFirstPage}
+    longPressDuration={500}
+    hapticFeedback={true}
+    preventDefault={true}
+  >
+    <button class="btn prev" aria-label="Página anterior">
+      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="icon">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M10.5 19.5 3 12m0 0 7.5-7.5M3 12h18" />
+      </svg>
+    </button>
+  </GestureButton>
   <div class="indicator" aria-label="Página atual e total">
     <span class="current">{currentPage}</span>
     <span class="total">/ {totalPages}</span>
   </div>
-  <button class="btn next" on:click={nextPage} aria-label="Próxima página">
-    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="icon">
-      <path stroke-linecap="round" stroke-linejoin="round" d="M13.5 4.5 21 12m0 0-7.5 7.5M21 12H3" />
-    </svg>
-  </button>
+  <GestureButton
+    on:click={nextPage}
+    on:longpress={goToLastPage}
+    longPressDuration={500}
+    hapticFeedback={true}
+    preventDefault={true}
+  >
+    <button class="btn next" aria-label="Próxima página">
+      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="icon">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M13.5 4.5 21 12m0 0-7.5 7.5M21 12H3" />
+      </svg>
+    </button>
+  </GestureButton>
 
   <button class="btn zoom-minus" on:click={zoomOut} aria-label="Diminuir zoom">
     <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="icon">
