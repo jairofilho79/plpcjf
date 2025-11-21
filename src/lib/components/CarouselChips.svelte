@@ -1,4 +1,5 @@
 <script>
+  import { tick } from 'svelte';
   import { X, Trash2, GripVertical, Share2, Save, Check } from 'lucide-svelte';
   import { goto } from '$app/navigation';
   import { carousel } from '$lib/stores/carousel';
@@ -282,51 +283,42 @@
   $: isPlaylistSaved = savedPlaylistId !== null && savedPdfIds !== null && savedPdfIds === currentHash && currentHash !== '';
   $: canSave = $carousel.length > 0;
 
-  // Reset saved state when playlist changes (but only if we have a saved state)
-  $: {
-    if (savedPdfIds !== null && savedPlaylistId !== null && currentHash !== '' && savedPdfIds !== currentHash) {
-      // Playlist was modified after being saved
-      savedPlaylistId = null;
-      savedPdfIds = null;
-      savedPlaylistName = null;
-    }
-  }
-  
   // Sync with existing playlist if current playlist matches a saved one
   // React to both carousel changes AND savedPlaylists store changes
   $: savedPlaylistsStore = $savedPlaylists;
   $: {
     // This block runs when $carousel or savedPlaylistsStore changes
     savedPlaylistsStore; // Ensure reactivity to store changes
+    currentHash; // Reage a mudanças no carousel
     
-    // If we just saved, don't clear the state - let handleSave manage it
-    if (justSaved) {
-      justSaved = false;
-      return;
-    }
-    
-    if ($carousel.length > 0) {
+    // Só sincronizar se não acabamos de salvar
+    if (!justSaved && $carousel.length > 0) {
       const pdfIds = $carousel
         .map(l => l.pdfId)
         .filter(id => id != null && id !== '');
       
       if (pdfIds.length > 0) {
         const hash = pdfIds.join(',');
+        
+        // Se já temos estado salvo e hash corresponde, manter
+        if (savedPlaylistId !== null && savedPdfIds === hash) {
+          // Manter estado - não limpar
+          return;
+        }
+        
         const existingPlaylist = savedPlaylists.findPlaylistByPdfIds(pdfIds);
         
         if (existingPlaylist) {
-          // Sync with existing playlist (update even if already synced, in case name changed)
           savedPlaylistId = existingPlaylist.id;
           savedPdfIds = hash;
           savedPlaylistName = existingPlaylist.nome;
-        } else if (savedPlaylistId !== null && savedPdfIds === hash) {
-          // Keep current saved state if hash matches
-          // This handles the case where playlist was just saved
         } else {
-          // No matching playlist found, clear saved state
-          savedPlaylistId = null;
-          savedPdfIds = null;
-          savedPlaylistName = null;
+          // Só limpar se hash realmente mudou
+          if (savedPdfIds !== hash) {
+            savedPlaylistId = null;
+            savedPdfIds = null;
+            savedPlaylistName = null;
+          }
         }
       } else {
         // Empty playlist, clear saved state
@@ -334,15 +326,20 @@
         savedPdfIds = null;
         savedPlaylistName = null;
       }
-    } else {
+    } else if (!justSaved && $carousel.length === 0) {
       // Empty carousel, clear saved state
       savedPlaylistId = null;
       savedPdfIds = null;
       savedPlaylistName = null;
     }
+    
+    // Resetar flag após processamento
+    if (justSaved) {
+      justSaved = false;
+    }
   }
 
-  function handleSave(navigateToListas = false) {
+  async function handleSave(navigateToListas = false) {
     if (!$carousel.length) return;
     
     // Filter out invalid IDs to match getCurrentPlaylistHash logic
@@ -374,6 +371,17 @@
       // Get the newly created playlist to get its name
       const newPlaylist = savedPlaylists.getPlaylist(playlistId);
       savedPlaylistName = newPlaylist ? newPlaylist.nome : null;
+    }
+    
+    // Aguardar próximo tick para garantir sincronização com o store
+    await tick();
+    
+    // Buscar playlist após store ser atualizado para garantir estado correto
+    const savedPlaylist = savedPlaylists.findPlaylistByPdfIds(pdfIds);
+    if (savedPlaylist) {
+      savedPlaylistId = savedPlaylist.id;
+      savedPdfIds = hash;
+      savedPlaylistName = savedPlaylist.nome;
     }
     
     // Navigate to listas page if requested (long press)
@@ -583,24 +591,39 @@
     color: var(--text-dark);
   }
 
-  .light-button:hover:not(:disabled) {
-    background-color: var(--placeholder-color);
-    transform: translateY(-1px);
-  }
-
   .light-button:disabled {
     opacity: 0.6;
     cursor: not-allowed;
+  }
+
+  /* Só aplicar hover em dispositivos com mouse */
+  @media (hover: hover) and (pointer: fine) {
+    .light-button:hover:not(:disabled) {
+      background-color: var(--placeholder-color);
+      transform: translateY(-1px);
+    }
+    
+    .light-button.saved:hover:not(:disabled) {
+      background-color: rgba(212, 175, 55, 0.3);
+    }
+  }
+
+  /* Para dispositivos touch, usar :active em vez de :hover */
+  @media (hover: none) and (pointer: coarse) {
+    .light-button:active:not(:disabled) {
+      background-color: var(--placeholder-color);
+      transform: translateY(-1px);
+    }
+    
+    .light-button.saved:active:not(:disabled) {
+      background-color: rgba(212, 175, 55, 0.3);
+    }
   }
 
   .light-button.saved {
     background-color: rgba(212, 175, 55, 0.2);
     border-color: var(--gold-color);
     color: var(--gold-color);
-  }
-
-  .light-button.saved:hover:not(:disabled) {
-    background-color: rgba(212, 175, 55, 0.3);
   }
 
   .clear-button-tag {
