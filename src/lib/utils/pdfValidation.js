@@ -1,7 +1,7 @@
 // PDF Validation Utility
 // Validates PDF availability and identifies missing PDFs
 
-import { getCachedPDFsFast, waitForServiceWorker, downloadPDFsViaSW } from '$lib/utils/swRegistration';
+import { getCachedPDFsFast, waitForServiceWorker, downloadPDFsViaSW, invalidateCachedPDFsLocal, getCachedPDFs } from '$lib/utils/swRegistration';
 import { getPdfRelPath } from '$lib/utils/pathUtils';
 import { isPdfAvailableInIndex } from '$lib/utils/pdfIndex';
 
@@ -61,74 +61,94 @@ export async function validatePdfAvailability(pdfPath) {
 
   try {
     // Check cache via Service Worker (using fast version with local cache)
-    const cachedPdfs = await getCachedPDFsFast();
+    let cachedPdfs = await getCachedPDFsFast();
     
     // Normalize target path using centralized function
     const normalizedTarget = normalizePathForComparison(normalizedPath);
     
-    // Create normalized set of cached PDFs (same logic as findMissingPdfs)
-    const normalizedCacheSet = new Set();
-    cachedPdfs.forEach(url => {
-      const normalized = normalizePathForComparison(url);
-      normalizedCacheSet.add(normalized);
-      
-      // Also add filename-only variation
-      try {
-        const urlObj = new URL(url);
-        const filename = urlObj.pathname.split('/').pop();
-        if (filename) {
-          const normalizedFilename = normalizePathForComparison(filename);
-          normalizedCacheSet.add(normalizedFilename);
-        }
-      } catch {
-        const parts = url.split('/');
-        const filename = parts[parts.length - 1];
-        if (filename) {
-          const normalizedFilename = normalizePathForComparison(filename);
-          normalizedCacheSet.add(normalizedFilename);
-        }
-      }
-    });
-    
-    // Check using same strategies as findMissingPdfs
-    let isCached = false;
-    
-    // Strategy 1: Exact match
-    if (normalizedCacheSet.has(normalizedTarget)) {
-      isCached = true;
-    }
-    
-    // Strategy 2: Filename match
-    if (!isCached) {
-      const filename = normalizedTarget.split('/').pop();
-      if (filename && normalizedCacheSet.has(filename)) {
-        isCached = true;
-      }
-    }
-    
-    // Strategy 3: Partial match (same logic as findMissingPdfs)
-    if (!isCached) {
-      isCached = Array.from(normalizedCacheSet).some(cached => {
-        if (cached === normalizedTarget) return true;
-        if (cached.endsWith(normalizedTarget)) return true;
-        if (normalizedTarget.endsWith(cached)) return true;
+    // Helper function to check if PDF is in cached set
+    const checkPdfInCache = (pdfList) => {
+      const normalizedCacheSet = new Set();
+      pdfList.forEach(url => {
+        const normalized = normalizePathForComparison(url);
+        normalizedCacheSet.add(normalized);
         
-        const cachedFilename = cached.split('/').pop();
-        const expectedFilename = normalizedTarget.split('/').pop();
-        if (cachedFilename && expectedFilename && cachedFilename === expectedFilename) {
-          return true;
-        }
-        
-        if (cachedFilename && expectedFilename) {
-          const cachedBase = cachedFilename.replace(/\.pdf$/i, '');
-          const expectedBase = expectedFilename.replace(/\.pdf$/i, '');
-          if (cachedBase && expectedBase && cachedBase === expectedBase) {
-            return true;
+        // Also add filename-only variation
+        try {
+          const urlObj = new URL(url);
+          const filename = urlObj.pathname.split('/').pop();
+          if (filename) {
+            const normalizedFilename = normalizePathForComparison(filename);
+            normalizedCacheSet.add(normalizedFilename);
+          }
+        } catch {
+          const parts = url.split('/');
+          const filename = parts[parts.length - 1];
+          if (filename) {
+            const normalizedFilename = normalizePathForComparison(filename);
+            normalizedCacheSet.add(normalizedFilename);
           }
         }
-        
-        return false;
       });
+      
+      // Check using same strategies as findMissingPdfs
+      let isCached = false;
+      
+      // Strategy 1: Exact match
+      if (normalizedCacheSet.has(normalizedTarget)) {
+        isCached = true;
+      }
+      
+      // Strategy 2: Filename match
+      if (!isCached) {
+        const filename = normalizedTarget.split('/').pop();
+        if (filename && normalizedCacheSet.has(filename)) {
+          isCached = true;
+        }
+      }
+      
+      // Strategy 3: Partial match (same logic as findMissingPdfs)
+      if (!isCached) {
+        isCached = Array.from(normalizedCacheSet).some(cached => {
+          if (cached === normalizedTarget) return true;
+          if (cached.endsWith(normalizedTarget)) return true;
+          if (normalizedTarget.endsWith(cached)) return true;
+          
+          const cachedFilename = cached.split('/').pop();
+          const expectedFilename = normalizedTarget.split('/').pop();
+          if (cachedFilename && expectedFilename && cachedFilename === expectedFilename) {
+            return true;
+          }
+          
+          if (cachedFilename && expectedFilename) {
+            const cachedBase = cachedFilename.replace(/\.pdf$/i, '');
+            const expectedBase = expectedFilename.replace(/\.pdf$/i, '');
+            if (cachedBase && expectedBase && cachedBase === expectedBase) {
+              return true;
+            }
+          }
+          
+          return false;
+        });
+      }
+      
+      return { isCached, normalizedCacheSet };
+    };
+    
+    // First check with cached list
+    let { isCached, normalizedCacheSet } = checkPdfInCache(cachedPdfs);
+    
+    // If not found and we're using cached data, invalidate cache and try again
+    // This fixes the issue where lazy loading might use stale cache
+    if (!isCached && cachedPdfs.length > 0) {
+      // Invalidate local cache to force fresh fetch from Service Worker
+      invalidateCachedPDFsLocal();
+      
+      // Try again with fresh data from Service Worker
+      cachedPdfs = await getCachedPDFs();
+      const retryCheck = checkPdfInCache(cachedPdfs);
+      isCached = retryCheck.isCached;
+      normalizedCacheSet = retryCheck.normalizedCacheSet;
     }
 
     if (isCached) {
@@ -143,6 +163,7 @@ export async function validatePdfAvailability(pdfPath) {
       validatePdfAvailability._missCount++;
       console.warn(`[PDF Validation] PDF not found in cache: ${pdfPath} (normalized: ${normalizedTarget})`);
       console.warn(`[PDF Validation] Sample cached PDFs:`, Array.from(normalizedCacheSet).slice(0, 5));
+      console.warn(`[PDF Validation] Total cached PDFs: ${cachedPdfs.length}`);
     }
 
     // If not in cache, check if it can be downloaded (online)

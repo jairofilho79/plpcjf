@@ -549,12 +549,18 @@
     isLoadingStats = true;
     
     try {
+      // Always reload cached PDFs list before calculating stats
+      // This ensures we have the latest cache state, especially important with lazy loading
+      await offline.loadCachedPdfsList();
+      
       const state = $offline;
       /** @type {string[]} */
       let cachedPdfs = state.cachedPdfs || [];
       
-      // Ensure cached PDFs are loaded
+      // If still empty after reload, try one more time
       if (!cachedPdfs || cachedPdfs.length === 0) {
+        // Small delay to allow Service Worker to process
+        await new Promise(resolve => setTimeout(resolve, 100));
         await offline.loadCachedPdfsList();
         const updatedState = $offline;
         cachedPdfs = updatedState.cachedPdfs || [];
