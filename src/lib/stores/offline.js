@@ -1149,14 +1149,6 @@ async function getCategoryAvailabilityStats(category, louvoresData, cachedPdfs) 
 }
 
 /**
- * FASE 3: Limpar cache de memoização de cálculos
- * Deve ser chamado quando há mudanças significativas nos dados
- */
-function clearStatsCalculationCache() {
-  statsCalculationCache.clear();
-}
-
-/**
  * Get required packages info for selected categories
  * @param {Array} categories - Selected categories
  * @param {Array} louvoresData - All louvores

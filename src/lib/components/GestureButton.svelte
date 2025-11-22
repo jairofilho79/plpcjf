@@ -231,6 +231,15 @@
   on:contextmenu={handleContextMenu}
   role="button"
   tabindex={disabled ? -1 : 0}
+  aria-disabled={disabled}
+  on:keydown={(e) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      if (!disabled) {
+        handleClick(e);
+      }
+    }
+  }}
 >
   <slot />
 </div>
