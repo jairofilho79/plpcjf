@@ -1,22 +1,38 @@
 <script>
   import { createEventDispatcher, onDestroy } from 'svelte';
+  import { GestureDetector } from './gestures/GestureDetector.js';
   
   export let longPressDuration = 500;
+  export let tapMaxDuration = 300;
   export let hapticFeedback = true;
   export let visualFeedback = true;
   export let disabled = false;
   export let preventClickOnLongPress = true;
   export let clickDelay = 0;
   export let preventDefault = true;
+  export let maxMovement = 10; // pixels
   
   const dispatch = createEventDispatcher();
   
+  // Inicializar detector de gestos com estratégias
+  let gestureDetector;
+  $: {
+    gestureDetector = new GestureDetector({
+      longPressDuration,
+      tapMaxDuration,
+      maxMovement
+    });
+  }
+  
+  // Estado do gesto atual
   let longPressTimer = null;
   let isLongPressing = false;
   let touchEventOccurred = false;
-  let touchStartTime = 0;
-  let touchStartPosition = { x: 0, y: 0 };
-  const TOUCH_MOVE_THRESHOLD = 10; // pixels
+  let gestureStartTime = 0;
+  let gestureStartPosition = { x: 0, y: 0 };
+  let maxMovementDistance = 0;
+  let gestureCancelled = false;
+  let currentGestureType = null; // 'touch' ou 'mouse'
   
   // Detectar se é dispositivo touch
   let isTouchDevice = false;
@@ -41,6 +57,68 @@
     }
   }
   
+  function resetGestureState() {
+    cancelLongPress();
+    gestureStartTime = 0;
+    gestureStartPosition = { x: 0, y: 0 };
+    maxMovementDistance = 0;
+    gestureCancelled = false;
+    currentGestureType = null;
+  }
+  
+  function calculateMovement(currentPosition) {
+    if (!gestureStartPosition || !currentPosition) return 0;
+    const dx = Math.abs(currentPosition.x - gestureStartPosition.x);
+    const dy = Math.abs(currentPosition.y - gestureStartPosition.y);
+    return Math.max(dx, dy);
+  }
+  
+  function detectAndDispatchGesture(event, endPosition) {
+    if (!gestureDetector || gestureStartTime === 0) return;
+    
+    const duration = Date.now() - gestureStartTime;
+    const movement = maxMovementDistance;
+    
+    // Preparar dados do gesto para validação
+    const gestureData = {
+      duration,
+      movement,
+      hasLongPressStarted: isLongPressing,
+      wasCancelled: gestureCancelled
+    };
+    
+    // Detectar o tipo de gesto usando as estratégias
+    const detectedGesture = gestureDetector.detect(gestureData);
+    
+    // Só disparar eventos se um gesto válido foi detectado
+    if (detectedGesture === 'longpress') {
+      // Se o long press não foi iniciado pelo timer (caso raro), iniciar agora
+      if (!isLongPressing) {
+        isLongPressing = true;
+        triggerHapticFeedback();
+        dispatch('longpressstart', { originalEvent: event });
+      }
+      // Disparar evento de long press completo
+      dispatch('longpress', {
+        originalEvent: event,
+        duration
+      });
+    } else if (detectedGesture === 'tap') {
+      // Disparar evento de tap (click) apenas se não estiver em long press
+      // ou se preventClickOnLongPress estiver desabilitado
+      if (!isLongPressing || !preventClickOnLongPress) {
+        if (clickDelay > 0) {
+          setTimeout(() => {
+            dispatch('click', event);
+          }, clickDelay);
+        } else {
+          dispatch('click', event);
+        }
+      }
+    }
+    // Se detectedGesture for null, nenhum evento é disparado
+  }
+  
   function handleTouchStart(event) {
     if (disabled) return;
     
@@ -51,24 +129,26 @@
     touchEventOccurred = true;
     isTouchDevice = true;
     
-    const touch = event.touches[0];
-    touchStartTime = Date.now();
-    touchStartPosition = { x: touch.clientX, y: touch.clientY };
-    
     // Cancelar qualquer long press anterior
-    cancelLongPress();
+    resetGestureState();
     
-    // Iniciar timer para long press
+    // Inicializar novo gesto
+    currentGestureType = 'touch';
+    const touch = event.touches[0];
+    gestureStartTime = Date.now();
+    gestureStartPosition = { x: touch.clientX, y: touch.clientY };
+    maxMovementDistance = 0;
+    gestureCancelled = false;
+    
+    // Iniciar timer para long press (apenas para feedback visual e haptic)
+    // A validação final será feita no touchEnd
     longPressTimer = setTimeout(() => {
-      isLongPressing = true;
+      if (!gestureCancelled) {
+        isLongPressing = true;
+        triggerHapticFeedback();
+        dispatch('longpressstart', { originalEvent: event });
+      }
       longPressTimer = null;
-      
-      triggerHapticFeedback();
-      dispatch('longpressstart', { originalEvent: event });
-      dispatch('longpress', { 
-        originalEvent: event, 
-        duration: Date.now() - touchStartTime 
-      });
     }, longPressDuration);
     
     // Resetar flag após delay para permitir mouse events em dispositivos híbridos
@@ -78,49 +158,50 @@
   }
   
   function handleTouchMove(event) {
-    if (disabled || !touchStartPosition) return;
+    if (disabled || !gestureStartPosition) return;
     
     const touch = event.touches[0];
-    const dx = Math.abs(touch.clientX - touchStartPosition.x);
-    const dy = Math.abs(touch.clientY - touchStartPosition.y);
+    const currentPosition = { x: touch.clientX, y: touch.clientY };
+    const movement = calculateMovement(currentPosition);
+    
+    // Atualizar movimento máximo
+    maxMovementDistance = Math.max(maxMovementDistance, movement);
     
     // Se movimento foi principalmente vertical (scroll), cancelar gesto
+    const dx = Math.abs(currentPosition.x - gestureStartPosition.x);
+    const dy = Math.abs(currentPosition.y - gestureStartPosition.y);
     const isVerticalScroll = dy > dx * 1.5; // 50% mais vertical que horizontal
     
-    // Se moveu muito ou foi scroll vertical, cancelar long press
-    if (isVerticalScroll || dx > TOUCH_MOVE_THRESHOLD || dy > TOUCH_MOVE_THRESHOLD) {
+    // Se moveu muito ou foi scroll vertical, cancelar gesto
+    if (isVerticalScroll || movement > maxMovement) {
+      gestureCancelled = true;
       cancelLongPress();
-      touchStartPosition = null;
     }
   }
   
   function handleTouchEnd(event) {
     if (disabled) return;
     
-    const wasLongPressing = isLongPressing;
-    cancelLongPress();
-    touchStartPosition = null;
+    const touch = event.changedTouches[0];
+    const endPosition = touch ? { x: touch.clientX, y: touch.clientY } : null;
     
-    // Se estava em long press, não emitir click (a menos que configurado)
-    if (wasLongPressing && preventClickOnLongPress) {
-      event.preventDefault();
-      return;
+    // Atualizar movimento máximo com posição final
+    if (endPosition) {
+      const finalMovement = calculateMovement(endPosition);
+      maxMovementDistance = Math.max(maxMovementDistance, finalMovement);
     }
     
-    // Emitir click após delay se configurado
-    if (clickDelay > 0) {
-      setTimeout(() => {
-        dispatch('click', event);
-      }, clickDelay);
-    } else {
-      dispatch('click', event);
-    }
+    // Detectar e disparar gesto válido
+    detectAndDispatchGesture(event, endPosition);
+    
+    // Limpar estado
+    resetGestureState();
   }
   
   function handleTouchCancel(event) {
     if (disabled) return;
-    cancelLongPress();
-    touchStartPosition = null;
+    gestureCancelled = true;
+    resetGestureState();
     dispatch('gesturecancel', event);
   }
   
@@ -137,46 +218,64 @@
       event.preventDefault();
     }
     
-    touchStartTime = Date.now();
-    cancelLongPress();
+    // Cancelar qualquer long press anterior
+    resetGestureState();
     
+    // Inicializar novo gesto
+    currentGestureType = 'mouse';
+    gestureStartTime = Date.now();
+    gestureStartPosition = { x: event.clientX, y: event.clientY };
+    maxMovementDistance = 0;
+    gestureCancelled = false;
+    
+    // Iniciar timer para long press (apenas para feedback visual e haptic)
+    // A validação final será feita no mouseUp
     longPressTimer = setTimeout(() => {
-      isLongPressing = true;
+      if (!gestureCancelled) {
+        isLongPressing = true;
+        triggerHapticFeedback();
+        dispatch('longpressstart', { originalEvent: event });
+      }
       longPressTimer = null;
-      
-      triggerHapticFeedback();
-      dispatch('longpressstart', { originalEvent: event });
-      dispatch('longpress', { 
-        originalEvent: event, 
-        duration: Date.now() - touchStartTime 
-      });
     }, longPressDuration);
+  }
+  
+  function handleMouseMove(event) {
+    if (disabled || !gestureStartPosition || currentGestureType !== 'mouse') return;
+    
+    const currentPosition = { x: event.clientX, y: event.clientY };
+    const movement = calculateMovement(currentPosition);
+    
+    // Atualizar movimento máximo
+    maxMovementDistance = Math.max(maxMovementDistance, movement);
+    
+    // Se moveu muito, cancelar gesto
+    if (movement > maxMovement) {
+      gestureCancelled = true;
+      cancelLongPress();
+    }
   }
   
   function handleMouseUp(event) {
     if (disabled) return;
     
-    const wasLongPressing = isLongPressing;
-    cancelLongPress();
+    const endPosition = { x: event.clientX, y: event.clientY };
     
-    if (wasLongPressing && preventClickOnLongPress) {
-      event.preventDefault();
-      return;
-    }
+    // Atualizar movimento máximo com posição final
+    const finalMovement = calculateMovement(endPosition);
+    maxMovementDistance = Math.max(maxMovementDistance, finalMovement);
     
-    // Emitir click após delay se configurado
-    if (clickDelay > 0) {
-      setTimeout(() => {
-        dispatch('click', event);
-      }, clickDelay);
-    } else {
-      dispatch('click', event);
-    }
+    // Detectar e disparar gesto válido
+    detectAndDispatchGesture(event, endPosition);
+    
+    // Limpar estado
+    resetGestureState();
   }
   
   function handleMouseLeave(event) {
     if (disabled) return;
-    cancelLongPress();
+    gestureCancelled = true;
+    resetGestureState();
   }
   
   function handleClick(event) {
@@ -188,14 +287,10 @@
       return;
     }
     
-    // Se estava em long press, não emitir click
-    if (isLongPressing && preventClickOnLongPress) {
-      event.preventDefault();
-      return;
-    }
-    
-    // Click já foi emitido no touchend/mouseup se necessário
-    // Este handler é principalmente para compatibilidade
+    // Click já foi emitido no touchend/mouseup através do detector de gestos
+    // Este handler é principalmente para compatibilidade e deve ser ignorado
+    // para evitar duplicação de eventos
+    event.preventDefault();
   }
   
   function handleSelectStart(event) {
@@ -224,6 +319,7 @@
   on:touchend={handleTouchEnd}
   on:touchcancel={handleTouchCancel}
   on:mousedown={handleMouseDown}
+  on:mousemove={handleMouseMove}
   on:mouseup={handleMouseUp}
   on:mouseleave={handleMouseLeave}
   on:click={handleClick}
