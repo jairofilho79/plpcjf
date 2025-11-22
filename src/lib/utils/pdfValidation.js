@@ -5,11 +5,132 @@ import { getCachedPDFsFast, waitForServiceWorker, downloadPDFsViaSW, invalidateC
 import { getPdfRelPath, normalizePdfUrl } from '$lib/utils/pathUtils';
 import { isPdfAvailableInIndex } from '$lib/utils/pdfIndex';
 
+// Cache de validação de PDFs - Fase 2
+const VALIDATION_CACHE_TTL = 24 * 60 * 60 * 1000; // 24 horas
+const VALIDATION_CACHE_PREFIX = 'pdfValidation_';
+
 /**
- * Validates PDF availability with fast optimization using index
- * Checks index first (fast), then falls back to full validation if needed
+ * Obtém resultado de validação do cache
+ * @param {string} pdfId - PDF ID (base64)
+ * @returns {{available: boolean, url: string} | null} - Resultado do cache ou null se não encontrado/expirado
+ */
+export function getCachedValidation(pdfId) {
+  if (!pdfId) return null;
+  
+  try {
+    const key = `${VALIDATION_CACHE_PREFIX}${pdfId}`;
+    const cached = localStorage.getItem(key);
+    if (!cached) return null;
+    
+    const { available, timestamp, url } = JSON.parse(cached);
+    const age = Date.now() - timestamp;
+    
+    if (age > VALIDATION_CACHE_TTL) {
+      localStorage.removeItem(key);
+      return null;
+    }
+    
+    return { available, url };
+  } catch (error) {
+    console.warn('[PDF Validation Cache] Error reading cache:', error);
+    return null;
+  }
+}
+
+/**
+ * Armazena resultado de validação no cache
+ * @param {string} pdfId - PDF ID (base64)
+ * @param {{available: boolean, url: string}} result - Resultado da validação
+ */
+export function cacheValidation(pdfId, result) {
+  if (!pdfId || !result) return;
+  
+  try {
+    const key = `${VALIDATION_CACHE_PREFIX}${pdfId}`;
+    localStorage.setItem(key, JSON.stringify({
+      available: result.available,
+      url: result.url,
+      timestamp: Date.now()
+    }));
+  } catch (error) {
+    console.warn('[PDF Validation Cache] Error writing cache:', error);
+    // Se localStorage estiver cheio, tentar limpar entradas antigas
+    if (error.name === 'QuotaExceededError') {
+      clearExpiredValidationCache();
+    }
+  }
+}
+
+/**
+ * Limpa cache de validação expirado
+ */
+function clearExpiredValidationCache() {
+  try {
+    const now = Date.now();
+    const keysToRemove = [];
+    
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (key && key.startsWith(VALIDATION_CACHE_PREFIX)) {
+        try {
+          const cached = localStorage.getItem(key);
+          if (cached) {
+            const { timestamp } = JSON.parse(cached);
+            if (now - timestamp > VALIDATION_CACHE_TTL) {
+              keysToRemove.push(key);
+            }
+          }
+        } catch {
+          // Se não conseguir parsear, remover
+          keysToRemove.push(key);
+        }
+      }
+    }
+    
+    keysToRemove.forEach(key => localStorage.removeItem(key));
+  } catch (error) {
+    console.warn('[PDF Validation Cache] Error clearing expired cache:', error);
+  }
+}
+
+/**
+ * Invalida cache de validação para um PDF específico
+ * @param {string} pdfId - PDF ID (base64)
+ */
+export function invalidateValidationCache(pdfId) {
+  if (!pdfId) return;
+  
+  try {
+    const key = `${VALIDATION_CACHE_PREFIX}${pdfId}`;
+    localStorage.removeItem(key);
+  } catch (error) {
+    console.warn('[PDF Validation Cache] Error invalidating cache:', error);
+  }
+}
+
+/**
+ * Limpa todo o cache de validação
+ */
+export function clearAllValidationCache() {
+  try {
+    const keysToRemove = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (key && key.startsWith(VALIDATION_CACHE_PREFIX)) {
+        keysToRemove.push(key);
+      }
+    }
+    keysToRemove.forEach(key => localStorage.removeItem(key));
+  } catch (error) {
+    console.warn('[PDF Validation Cache] Error clearing all cache:', error);
+  }
+}
+
+/**
+ * Validates PDF availability with fast optimization using index and validation cache
+ * Checks cache first, then index, then falls back to full validation if needed
  * @param {string} pdfPath - Relative path of the PDF
- * @param {string} pdfId - Optional PDF ID for index lookup
+ * @param {string} pdfId - Optional PDF ID for cache and index lookup
  * @returns {Promise<{available: boolean, needsDownload: boolean, url: string}>}
  */
 export async function validatePdfAvailabilityFast(pdfPath, pdfId = null) {
@@ -17,33 +138,56 @@ export async function validatePdfAvailabilityFast(pdfPath, pdfId = null) {
     return { available: false, needsDownload: false, url: null };
   }
 
-  // Strategy 1: Quick index check (if PDF ID is provided)
+  const normalizedPath = pdfPath.startsWith('/') ? pdfPath.substring(1) : pdfPath;
+  const fullUrl = new URL(`/${normalizedPath}`, window.location.origin).href;
+
+  // Strategy 1: Check validation cache (if PDF ID is provided) - Fase 2
+  if (pdfId) {
+    const cached = getCachedValidation(pdfId);
+    if (cached) {
+      return {
+        available: cached.available,
+        needsDownload: !cached.available && navigator.onLine,
+        url: cached.url || fullUrl
+      };
+    }
+  }
+
+  // Strategy 2: Quick index check (if PDF ID is provided)
   if (pdfId) {
     const indexCheck = isPdfAvailableInIndex(pdfId);
     if (indexCheck === true) {
       // Index says available - trust it and return quickly
-      const normalizedPath = pdfPath.startsWith('/') ? pdfPath.substring(1) : pdfPath;
-      const fullUrl = new URL(`/${normalizedPath}`, window.location.origin).href;
+      // Cache the result for future use
+      cacheValidation(pdfId, { available: true, url: fullUrl });
       return { available: true, needsDownload: false, url: fullUrl };
     } else if (indexCheck === false) {
       // Index says not available - check if can be downloaded
-      const normalizedPath = pdfPath.startsWith('/') ? pdfPath.substring(1) : pdfPath;
-      const fullUrl = new URL(`/${normalizedPath}`, window.location.origin).href;
+      // Cache the result for future use
+      cacheValidation(pdfId, { available: false, url: fullUrl });
       return { available: false, needsDownload: navigator.onLine, url: fullUrl };
     }
     // If indexCheck is null, index doesn't have info - continue to full validation
   }
 
-  // Strategy 2: Full validation (index unavailable or no PDF ID provided)
-  return validatePdfAvailability(pdfPath);
+  // Strategy 3: Full validation (index unavailable or no PDF ID provided)
+  const result = await validatePdfAvailability(pdfPath);
+  
+  // Cache the result if PDF ID is provided
+  if (pdfId && result.url) {
+    cacheValidation(pdfId, { available: result.available, url: result.url });
+  }
+  
+  return result;
 }
 
 /**
  * Validates if a PDF is available in cache
  * @param {string} pdfPath - Relative path of the PDF (ex: "assets/ColAdultos/001.pdf")
+ * @param {string} pdfId - Optional PDF ID for caching results
  * @returns {Promise<{available: boolean, needsDownload: boolean, url: string}>}
  */
-export async function validatePdfAvailability(pdfPath) {
+export async function validatePdfAvailability(pdfPath, pdfId = null) {
   if (!pdfPath) {
     return { available: false, needsDownload: false, url: null };
   }
@@ -152,7 +296,12 @@ export async function validatePdfAvailability(pdfPath) {
     }
 
     if (isCached) {
-      return { available: true, needsDownload: false, url: fullUrl };
+      const result = { available: true, needsDownload: false, url: fullUrl };
+      // Cache the result if PDF ID is provided
+      if (pdfId) {
+        cacheValidation(pdfId, { available: true, url: fullUrl });
+      }
+      return result;
     }
     
     // Debug: Log when PDF is not found (only for first few misses to avoid spam)
@@ -184,10 +333,20 @@ export async function validatePdfAvailability(pdfPath) {
       }
     }
 
-    return { available: false, needsDownload: false, url: fullUrl };
+    const result = { available: false, needsDownload: false, url: fullUrl };
+    // Cache the result if PDF ID is provided
+    if (pdfId) {
+      cacheValidation(pdfId, { available: false, url: fullUrl });
+    }
+    return result;
   } catch (error) {
     console.error('[PDF Validation] Error:', error);
-    return { available: false, needsDownload: false, url: fullUrl };
+    const result = { available: false, needsDownload: false, url: fullUrl };
+    // Don't cache errors, but cache negative results if PDF ID is provided
+    if (pdfId && !error.message?.includes('timeout')) {
+      cacheValidation(pdfId, { available: false, url: fullUrl });
+    }
+    return result;
   }
 }
 

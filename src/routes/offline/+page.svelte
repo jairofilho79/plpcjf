@@ -42,26 +42,11 @@
   /** @type {(() => void) | null} */
   let syncUnsubscribe = null;
   
-  // Variáveis para sistema híbrido de atualização
-  /** @type {Array<{priority: 'high' | 'normal', timestamp: number}>} */
-  let statsUpdateQueue = [];
-  let isProcessingStatsUpdate = false;
-  let lastCachedCount = 0;
-  let lastCachedPdfsHash = '';
-  /** @type {(() => void) | null} */
-  let offlineUnsubscribe = null;
-  /** @type {ReturnType<typeof setInterval> | null} */
-  let pollInterval = null;
+  // FASE 2: Variáveis de triggers automáticos removidas
   /** @type {ReturnType<typeof setInterval> | null} */
   let syncCheckInterval = null;
   
-  // Handlers para cleanup
-  /** @type {((event: Event) => void) | null} */
-  let handleCacheUpdated = null;
-  /** @type {(() => void) | null} */
-  let handleWindowFocus = null;
-  /** @type {(() => void) | null} */
-  let handleVisibilityChange = null;
+  // FASE 2: Handlers de eventos automáticos removidos
   
   // Intersection Observer para lazy loading de stats
   /** @type {IntersectionObserver | null} */
@@ -292,140 +277,9 @@
       }, 30000); // Check every 30 seconds
       
       // ============================================
-      // SOLUÇÃO 5: Sistema Híbrido de Atualização Automática
+      // FASE 2: Remoção de triggers automáticos de stats
+      // Stats são geradas apenas após download completo ou manualmente
       // ============================================
-    
-    /**
-     * Função centralizada para atualizar stats com rate limiting
-     * @param {'high' | 'normal'} priority
-     */
-    async function refreshStats(priority = 'normal') {
-      const now = Date.now();
-      const state = $offline;
-      /** @type {string[]} */
-      const cachedPdfs = state.cachedPdfs || [];
-      const currentCount = state.cachedCount || 0;
-      
-      // Criar hash rápido dos PDFs para detectar mudanças
-      const currentHash = cachedPdfs.length > 0 
-        ? cachedPdfs.slice(0, 10).map((/** @type {string} */ url) => url.split('/').pop()).join('|')
-        : '';
-      
-      // Verificar se realmente houve mudança
-      if (currentCount === lastCachedCount && currentHash === lastCachedPdfsHash && priority !== 'high') {
-        return; // Sem mudanças, não precisa atualizar
-      }
-      
-      lastCachedCount = currentCount;
-      lastCachedPdfsHash = currentHash;
-      
-      try {
-        await loadCategoryStats(priority === 'high');
-        const newCats = await offline.checkAndUpdateDownloadedCategories();
-        downloadedCategories = newCats;
-        console.log('[Offline Page] Stats refreshed automatically');
-      } catch (error) {
-        console.error('[Offline Page] Error refreshing stats:', error);
-      }
-    }
-    
-    /**
-     * Processar fila de atualizações
-     */
-    async function processStatsUpdateQueue() {
-      if (isProcessingStatsUpdate || statsUpdateQueue.length === 0) return;
-      
-      isProcessingStatsUpdate = true;
-      
-      // Processar item de maior prioridade
-      statsUpdateQueue.sort((a, b) => {
-        if (a.priority === 'high') return -1;
-        if (b.priority === 'high') return 1;
-        return a.timestamp - b.timestamp;
-      });
-      
-      const update = statsUpdateQueue.shift();
-      if (!update) {
-        isProcessingStatsUpdate = false;
-        return;
-      }
-      
-      statsUpdateQueue = []; // Limpar fila (só processar o mais recente)
-      
-      try {
-        await refreshStats(update.priority);
-      } finally {
-        isProcessingStatsUpdate = false;
-        
-        // Processar próximo se houver
-        if (statsUpdateQueue.length > 0) {
-          setTimeout(processStatsUpdateQueue, 500);
-        }
-      }
-    }
-    
-    /**
-     * Adicionar atualização à fila
-     * @param {'high' | 'normal'} priority
-     */
-    function queueStatsUpdate(priority = 'normal') {
-      statsUpdateQueue.push({ priority, timestamp: Date.now() });
-      if (!isProcessingStatsUpdate) {
-        // Debounce: processar após 300ms
-        setTimeout(processStatsUpdateQueue, 300);
-      }
-    }
-    
-    // ESTRATÉGIA 1: Subscription ao store offline (reativo)
-    offlineUnsubscribe = offline.subscribe((state) => {
-      // Detectar mudança em cachedCount ou cachedPdfs
-      const currentCount = state.cachedCount || 0;
-      if (currentCount !== lastCachedCount && currentCount > 0) {
-        queueStatsUpdate('normal');
-      }
-    });
-    
-      // ESTRATÉGIA 2: Event listeners (event-driven)
-      handleCacheUpdated = (/** @type {Event} */ event) => {
-        const customEvent = event instanceof CustomEvent ? event : null;
-        console.log('[Offline Page] Cache updated event received:', customEvent?.detail?.source);
-        queueStatsUpdate('high'); // Alta prioridade para eventos
-      };
-      
-      window.addEventListener('offline-cache-updated', handleCacheUpdated);
-      window.addEventListener('cache-sync-required', handleCacheUpdated);
-      
-      // ESTRATÉGIA 3: Polling de fallback (garantia)
-      pollInterval = setInterval(() => {
-        const state = $offline;
-        if (state.cachedCount > 0 && !isProcessingStatsUpdate) {
-          // Verificar se há mudanças sem atualizar (só verificar hash)
-          /** @type {string[]} */
-          const cachedPdfs = state.cachedPdfs || [];
-          const currentHash = cachedPdfs.length > 0 
-            ? cachedPdfs.slice(0, 10).map((/** @type {string} */ url) => url.split('/').pop()).join('|')
-            : '';
-          
-          if (currentHash !== lastCachedPdfsHash) {
-            queueStatsUpdate('normal');
-          }
-        }
-      }, 5000); // A cada 5 segundos como fallback
-      
-      // ESTRATÉGIA 4: Visibility change (quando usuário volta à aba)
-      handleVisibilityChange = () => {
-        if (!document.hidden) {
-          console.log('[Offline Page] Page visible, refreshing stats...');
-          queueStatsUpdate('high'); // Alta prioridade quando usuário volta
-        }
-      };
-      document.addEventListener('visibilitychange', handleVisibilityChange);
-      
-      // ESTRATÉGIA 5: Focus event (quando janela ganha foco)
-      handleWindowFocus = () => {
-        queueStatsUpdate('normal');
-      };
-      window.addEventListener('focus', handleWindowFocus);
     })();
     
     // Retornar função de cleanup síncrona
@@ -433,27 +287,13 @@
       if (syncUnsubscribe) {
         syncUnsubscribe();
       }
-      if (offlineUnsubscribe) {
-        offlineUnsubscribe();
-      }
       if (categoryObserver) {
         categoryObserver.disconnect();
         categoryObserver = null;
       }
       window.removeEventListener('cache-sync-required', handleCacheSyncRequired);
-      if (handleCacheUpdated) {
-        window.removeEventListener('offline-cache-updated', handleCacheUpdated);
-        window.removeEventListener('cache-sync-required', handleCacheUpdated);
-      }
       window.removeEventListener('focus', checkSyncOnFocus);
-      if (handleWindowFocus) {
-        window.removeEventListener('focus', handleWindowFocus);
-      }
-      if (handleVisibilityChange) {
-        document.removeEventListener('visibilitychange', handleVisibilityChange);
-      }
       if (syncCheckInterval) clearInterval(syncCheckInterval);
-      if (pollInterval) clearInterval(pollInterval);
     };
   });
   
@@ -529,8 +369,72 @@
   let lastStatsLoadTime = 0;
   const MIN_STATS_LOAD_INTERVAL = 2000; // Minimum 2 seconds between loads
 
-  // Cache para evitar recálculos desnecessários
+  // FASE 2: Cache persistente de stats em localStorage
+  const STATS_CACHE_KEY = 'offlineStatsCache';
+  const STATS_CACHE_TTL = 24 * 60 * 60 * 1000; // 24 horas
+  
+  // Cache em memória para evitar recálculos desnecessários
   let statsCache = new Map();
+  
+  /**
+   * Carrega stats do cache persistente
+   * @param {string} category - Categoria
+   * @returns {Object | null} - Stats ou null se não encontrado/expirado
+   */
+  function getCachedStats(category) {
+    try {
+      const cached = localStorage.getItem(`${STATS_CACHE_KEY}_${category}`);
+      if (!cached) return null;
+      
+      const { stats, timestamp } = JSON.parse(cached);
+      const age = Date.now() - timestamp;
+      
+      if (age > STATS_CACHE_TTL) {
+        localStorage.removeItem(`${STATS_CACHE_KEY}_${category}`);
+        return null;
+      }
+      
+      return stats;
+    } catch (error) {
+      console.warn('[Offline Page] Error reading stats cache:', error);
+      return null;
+    }
+  }
+  
+  /**
+   * Salva stats no cache persistente
+   * @param {string} category - Categoria
+   * @param {Object} stats - Stats para salvar
+   */
+  function cacheStats(category, stats) {
+    try {
+      localStorage.setItem(`${STATS_CACHE_KEY}_${category}`, JSON.stringify({
+        stats,
+        timestamp: Date.now()
+      }));
+    } catch (error) {
+      console.warn('[Offline Page] Error writing stats cache:', error);
+    }
+  }
+  
+  /**
+   * Limpa cache de stats persistente
+   */
+  function clearStatsCache() {
+    try {
+      const keysToRemove = [];
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key && key.startsWith(STATS_CACHE_KEY)) {
+          keysToRemove.push(key);
+        }
+      }
+      keysToRemove.forEach(key => localStorage.removeItem(key));
+      statsCache.clear();
+    } catch (error) {
+      console.warn('[Offline Page] Error clearing stats cache:', error);
+    }
+  }
 
   /**
    * Load category availability statistics for specific categories
@@ -569,19 +473,33 @@
       // Load stats only for specified categories (usando cache quando possível)
       const newStats = { ...categoryStats };
       for (const category of categories) {
-        // Verificar cache apenas se não for forçado
-        if (!force && statsCache.has(category)) {
-          newStats[category] = statsCache.get(category);
-        } else {
-          const stats = await offline.getCategoryAvailabilityStats(
-            category,
-            $louvores,
-            cachedPdfs
-          );
-          newStats[category] = stats;
-          // Atualizar cache
-          statsCache.set(category, stats);
+        // FASE 2: Verificar cache persistente primeiro, depois cache em memória
+        if (!force) {
+          const cached = getCachedStats(category);
+          if (cached) {
+            newStats[category] = cached;
+            statsCache.set(category, cached);
+            continue;
+          }
+          
+          // Se não estiver no cache persistente, verificar cache em memória
+          if (statsCache.has(category)) {
+            newStats[category] = statsCache.get(category);
+            continue;
+          }
         }
+        
+        // Calcular stats se não estiver em cache
+        const stats = await offline.getCategoryAvailabilityStats(
+          category,
+          $louvores,
+          cachedPdfs
+        );
+        newStats[category] = stats;
+        
+        // Atualizar ambos os caches
+        statsCache.set(category, stats);
+        cacheStats(category, stats);
       }
       categoryStats = newStats;
       
@@ -620,9 +538,9 @@
       return;
     }
     
-    // Invalidar cache se forçado
+    // FASE 2: Invalidar cache se forçado
     if (force) {
-      statsCache.clear();
+      clearStatsCache();
     }
     
     // Usar função específica para todas as categorias
@@ -651,8 +569,8 @@
             selectedCategories = [...selectedCategories, cat];
           }
         });
-        // Invalidar cache e stats carregados após download
-        statsCache.clear();
+        // FASE 2: Invalidar cache e stats carregados após download
+        clearStatsCache();
         loadedCategories.clear();
         // Reload stats after download (force to bypass rate limiting)
         await loadCategoryStats(true);
@@ -660,23 +578,8 @@
     }, 1000);
   }
 
-  // React to category selection changes (debounced to avoid excessive calls)
-  /** @type {ReturnType<typeof setTimeout> | null} */
-  let categorySelectionTimeout = null;
-  let lastSelectedCategoriesHash = '';
-  
-  $: {
-    const currentHash = selectedCategories.sort().join(',');
-    if (currentHash !== lastSelectedCategoriesHash && selectedCategories.length > 0 && $louvores.length > 0 && !isLoadingStats) {
-      lastSelectedCategoriesHash = currentHash;
-      if (categorySelectionTimeout) {
-        clearTimeout(categorySelectionTimeout);
-      }
-      categorySelectionTimeout = setTimeout(() => {
-        loadCategoryStats();
-      }, 500); // Increased debounce to 500ms
-    }
-  }
+  // FASE 2: Removido trigger automático de stats por mudança de categoria
+  // Stats são carregadas apenas quando necessário (após download ou manualmente)
 
   // Get current offline state
   $: state = $offline;
@@ -870,6 +773,15 @@
           <div class="summary-header">
             <TrendingUp class="w-5 h-5 summary-icon" />
             <h3 class="summary-title">Disponibilidade Geral</h3>
+            <!-- FASE 2: Botão manual de atualização de stats -->
+            <button
+              class="refresh-stats-btn"
+              on:click={() => loadCategoryStats(true)}
+              disabled={isLoadingStats}
+              title="Atualizar estatísticas"
+            >
+              <RefreshCw class="w-4 h-4 {isLoadingStats ? 'spinning' : ''}" />
+            </button>
           </div>
           <div class="summary-stats">
             <div class="stat-item">
@@ -1392,6 +1304,39 @@
     color: var(--text-light);
   }
   
+  .refresh-stats-btn {
+    background: transparent;
+    border: 1px solid var(--border-color);
+    border-radius: 0.5rem;
+    padding: 0.5rem;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.2s ease;
+    color: var(--text-color);
+  }
+
+  .refresh-stats-btn:hover:not(:disabled) {
+    background: var(--hover-bg);
+    border-color: var(--primary-color);
+    transform: translateY(-1px);
+  }
+
+  .refresh-stats-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  .refresh-stats-btn .spinning {
+    animation: spin 1s linear infinite;
+  }
+
+  @keyframes spin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+  }
+
   .summary-header {
     display: flex;
     align-items: center;

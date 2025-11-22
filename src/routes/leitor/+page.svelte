@@ -252,6 +252,15 @@
           } catch (downloadErr) {
             console.error('[Leitor] Download automático falhou:', downloadErr);
             pdfError = 'Erro ao baixar PDF. Verifique sua conexão.';
+            
+            // FASE 2: Invalidar cache de validação quando download falha
+            try {
+              const { clearAllValidationCache } = await import('$lib/utils/pdfValidation');
+              clearAllValidationCache();
+            } catch (err) {
+              console.warn('[Leitor] Erro ao invalidar cache de validação:', err);
+            }
+            
             pdfLoading = false;
             return;
           }
@@ -320,6 +329,15 @@
       
       if (!loadedSuccessfully) {
         pdfError = 'Erro ao carregar PDF. Verifique se o arquivo está disponível.';
+        
+        // FASE 2: Invalidar cache de validação quando há erro definitivo no leitor
+        // Como não temos pdfId aqui, invalidamos todo o cache para forçar revalidação
+        try {
+          const { clearAllValidationCache } = await import('$lib/utils/pdfValidation');
+          clearAllValidationCache();
+        } catch (err) {
+          console.warn('[Leitor] Erro ao invalidar cache de validação:', err);
+        }
         
         // Try retry if still have attempts
         if (retryCount < MAX_RETRIES && navigator.onLine) {

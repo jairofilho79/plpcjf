@@ -204,6 +204,12 @@ async function loadCachedPdfsList() {
           timestamp: Date.now()
         }
       }));
+      
+      // FASE 2: Invalidar cache de validação quando cache é atualizado
+      if (typeof window !== 'undefined') {
+        const { clearAllValidationCache } = await import('$lib/utils/pdfValidation');
+        clearAllValidationCache();
+      }
     }
   } catch (error) {
     console.error('[Offline Store] Failed to load cached PDFs:', error);
@@ -578,6 +584,10 @@ async function startZipDownloadWithSpecificParts(categories, pdfUrls, partsByCat
             timestamp: Date.now()
           }
         }));
+        
+        // FASE 2: Invalidar cache de validação após download
+        const { clearAllValidationCache } = await import('$lib/utils/pdfValidation');
+        clearAllValidationCache();
       }
     }
 
@@ -1412,6 +1422,10 @@ async function startZipDownload(categories, pdfUrls, alreadyDownloadedCategories
             timestamp: Date.now()
           }
         }));
+        
+        // FASE 2: Invalidar cache de validação após download
+        const { clearAllValidationCache } = await import('$lib/utils/pdfValidation');
+        clearAllValidationCache();
       }
 
       // Check if IS_LEITOR_OFFLINE flag exists, if not open PDF in leitor

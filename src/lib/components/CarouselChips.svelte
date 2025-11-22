@@ -15,7 +15,7 @@
   } from '$lib/utils/pdfUtils';
   import { sharePlaylistLink, generatePlaylistShareUrl } from '$lib/utils/playlistUtils';
   import { isPdfAvailableInIndex } from '$lib/utils/pdfIndex';
-  import { ensurePdfAvailable } from '$lib/utils/pdfValidation';
+  import { ensurePdfAvailable, getCachedValidation } from '$lib/utils/pdfValidation';
   
   /**
      * @type {number | null}
@@ -119,11 +119,26 @@
     const mode = $pdfViewer;
     
     if (mode === 'leitor') {
-      // VALIDAÇÃO PRÉ-NAVEGAÇÃO (não bloqueia se houver problemas temporários)
+      // FASE 2: Cache de Validação - verificar cache primeiro
       checkingPdfId = louvor.pdfId;
       pdfError = null;
       
       try {
+        // Verificar cache de validação primeiro (Fase 2)
+        const cached = getCachedValidation(louvor.pdfId);
+        if (cached && cached.available) {
+          // Cache diz que está disponível - usar URL do cache e pular validação
+          const fileParam = encodeURIComponent(cached.url || `/${pdfPath}`);
+          const tituloParam = encodeURIComponent(louvor.nome || '');
+          const subtituloText = `${louvor.categoria || ''} | ${louvor.classificacao || ''}`.trim();
+          const subtituloParam = encodeURIComponent(subtituloText);
+          const url = `/leitor?file=${fileParam}&titulo=${tituloParam}&subtitulo=${subtituloParam}&validated=true`;
+          window.open(url, '_blank', 'noopener');
+          checkingPdfId = null;
+          return;
+        }
+        
+        // Se não estiver no cache ou cache diz que não está disponível, fazer validação
         // Quick check via index first (mas não bloqueia se index for null ou desatualizado)
         const indexCheck = isPdfAvailableInIndex(louvor.pdfId);
         
@@ -133,7 +148,7 @@
           // Index diz que está disponível - confiar mas fazer validação rápida
           try {
             const { validatePdfAvailability } = await import('$lib/utils/pdfValidation');
-            const quickValidation = await validatePdfAvailability(pdfPath);
+            const quickValidation = await validatePdfAvailability(pdfPath, louvor.pdfId);
             if (quickValidation.available) {
               shouldProceed = true;
             } else if (quickValidation.needsDownload && navigator.onLine) {
@@ -154,7 +169,7 @@
           } else {
             // Verificar se pode ser baixado online
             const { validatePdfAvailability } = await import('$lib/utils/pdfValidation');
-            const validation = await validatePdfAvailability(pdfPath);
+            const validation = await validatePdfAvailability(pdfPath, louvor.pdfId);
             if (validation.needsDownload && navigator.onLine) {
               // PDF não está offline mas pode ser baixado - permitir abertura
               shouldProceed = true;
