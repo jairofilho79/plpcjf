@@ -355,7 +355,8 @@
   .gesture-button-wrapper.disabled {
     opacity: 0.5;
     cursor: not-allowed;
-    pointer-events: none;
+    /* Não usar pointer-events: none para evitar bloquear toda a página */
+    /* Os handlers já verificam se disabled antes de processar */
   }
   
   /* Feedback visual adicional durante long press */

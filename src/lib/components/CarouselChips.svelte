@@ -296,6 +296,7 @@
   $: currentHash = getCurrentPlaylistHash();
   $: isPlaylistSaved = savedPdfIds !== null && savedPdfIds === currentHash && currentHash !== '';
   $: canSave = $carousel.length > 0 && !isPlaylistSaved && !isSaving;
+  $: canShare = $carousel.length > 0; // Botão de compartilhar sempre habilitado se houver itens
 
   // Limpar estado salvo quando o carousel muda (hash muda)
   $: {
@@ -314,7 +315,7 @@
     }
   }
 
-  async function handleSave() {
+  function handleSave() {
     // Prevenir múltiplos salvamentos simultâneos
     if (isSaving || !$carousel.length || isPlaylistSaved) return;
     
@@ -341,11 +342,11 @@
     savedPdfIds = hash;
     savedPlaylistName = newPlaylist ? newPlaylist.nome : null;
     
-    // Aguardar tick para garantir que a reatividade atualize isPlaylistSaved
-    await tick();
-    
-    // Reset flag - agora isPlaylistSaved deve ser true, então canSave será false
-    isSaving = false;
+    // Reset flag de forma assíncrona para não bloquear a UI
+    // A reatividade do Svelte vai atualizar isPlaylistSaved automaticamente
+    setTimeout(() => {
+      isSaving = false;
+    }, 0);
   }
   
   function handleSaveClick() {
@@ -397,7 +398,7 @@
         on:click={handleShare}
         class="action-button-tag light-button"
         title="Compartilhar playlist"
-        disabled={!canSave}
+        disabled={!canShare}
       >
         <Share2 class="w-3 h-3" />
         <span>Compartilhar</span>
@@ -550,7 +551,7 @@
   .light-button.disabled {
     opacity: 0.6;
     cursor: not-allowed;
-    pointer-events: none;
+    /* Não usar pointer-events: none para evitar bloquear outros elementos */
   }
 
   /* Só aplicar hover em dispositivos com mouse */
@@ -578,9 +579,17 @@
   }
 
   .light-button.saved {
-    background-color: rgba(212, 175, 55, 0.2);
+    background-color: var(--card-color) !important; /* Manter fundo branco sempre */
     border-color: var(--gold-color);
     color: var(--gold-color);
+  }
+  
+  /* Manter fundo branco mesmo quando desabilitado - garantir especificidade */
+  .light-button.saved:disabled,
+  .light-button.saved.disabled,
+  .action-button-tag.light-button.saved {
+    background-color: var(--card-color) !important;
+    opacity: 0.8; /* Opacidade reduzida mas não totalmente opaco */
   }
 
   .clear-button-tag {
