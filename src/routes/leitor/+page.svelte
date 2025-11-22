@@ -1274,6 +1274,7 @@
     longPressDuration={500}
     hapticFeedback={true}
     preventDefault={true}
+    preventClickOnLongPress={true}
   >
     <div class="brand">PLPC</div>
   </GestureButton>
