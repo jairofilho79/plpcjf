@@ -8,6 +8,18 @@
   import OfflineIndicator from '$lib/components/OfflineIndicator.svelte';
   import { setupCacheSync, onCacheSync, checkCacheVersionChanged, updateCacheVersion } from '$lib/utils/cacheSync';
   import { clearPdfIndex } from '$lib/utils/pdfIndex';
+  import {
+    initStatsCache,
+    getCachedStats,
+    cacheStats,
+    cacheAllStats,
+    invalidateCategory,
+    invalidateCategories,
+    clearCache as clearStatsCache,
+    recordCalculationTime,
+    getCacheMetrics,
+    getAllCachedStats
+  } from '$lib/utils/statsCache';
 
   // Selected categories for download
   /**
@@ -60,7 +72,8 @@
   let lazyLoadingEnabled = false;
   
   /**
-   * Setup Intersection Observer para lazy loading de stats
+   * FASE 3: Setup Intersection Observer para lazy loading otimizado de stats
+   * Com priorização inteligente de categorias
    */
   function setupLazyLoading() {
     if (typeof IntersectionObserver === 'undefined' || lazyLoadingEnabled) {
@@ -68,6 +81,13 @@
     }
     
     lazyLoadingEnabled = true;
+    
+    // FASE 3: Priorizar categorias com mais PDFs (mais importantes)
+    const categoryPriority = new Map();
+    $louvores.forEach(louvor => {
+      const cat = louvor.categoria;
+      categoryPriority.set(cat, (categoryPriority.get(cat) || 0) + 1);
+    });
     
     // Configurar observer com root margin para carregar um pouco antes de entrar no viewport
     categoryObserver = new IntersectionObserver(
@@ -83,6 +103,13 @@
           }
         });
         
+        // FASE 3: Ordenar por prioridade (mais PDFs primeiro)
+        visibleCategories.sort((a, b) => {
+          const priorityA = categoryPriority.get(a) || 0;
+          const priorityB = categoryPriority.get(b) || 0;
+          return priorityB - priorityA;
+        });
+        
         // Carregar stats de categorias visíveis em chunks
         if (visibleCategories.length > 0) {
           processStatsInChunks(visibleCategories).catch(err => {
@@ -91,7 +118,7 @@
         }
       },
       {
-        rootMargin: '100px', // Carregar quando está a 100px do viewport
+        rootMargin: '150px', // FASE 3: Aumentado para prefetching mais agressivo
         threshold: 0.1
       }
     );
@@ -120,16 +147,24 @@
   }
   
   /**
-   * Processar stats em chunks pequenos para evitar bloqueio da UI
+   * FASE 3: Processar stats em chunks com tamanho dinâmico baseado em performance
    * @param {string[]} categories - Lista de categorias para processar
    */
   async function processStatsInChunks(categories) {
-    const CHUNK_SIZE = 3; // Processar 3 categorias por vez
+    // FASE 3: Tamanho de chunk adaptativo baseado em métricas
+    let chunkSize = 3; // Inicial
+    const metrics = getCacheMetrics();
+    if (metrics.avgCalculationTime < 30) {
+      chunkSize = 5; // Se cálculos são rápidos, processar mais por vez
+    } else if (metrics.avgCalculationTime > 100) {
+      chunkSize = 2; // Se cálculos são lentos, processar menos por vez
+    }
+    
     const chunks = [];
     
     // Dividir em chunks
-    for (let i = 0; i < categories.length; i += CHUNK_SIZE) {
-      chunks.push(categories.slice(i, i + CHUNK_SIZE));
+    for (let i = 0; i < categories.length; i += chunkSize) {
+      chunks.push(categories.slice(i, i + chunkSize));
     }
     
     // Processar cada chunk com delay para não bloquear UI
@@ -145,9 +180,10 @@
         categoriesToLoad.delete(cat);
       });
       
-      // Delay entre chunks (exceto o último)
+      // FASE 3: Delay adaptativo baseado em performance
+      const delay = metrics.avgCalculationTime > 50 ? 100 : 50;
       if (i < chunks.length - 1) {
-        await new Promise(resolve => setTimeout(resolve, 50));
+        await new Promise(resolve => setTimeout(resolve, delay));
       }
     }
   }
@@ -204,6 +240,14 @@
 
   // Load saved categories and check downloaded categories on mount
   onMount(() => {
+    // FASE 3: Inicializar sistema de cache
+    initStatsCache();
+    
+    // FASE 3: Habilitar métricas em modo desenvolvimento
+    if (typeof window !== 'undefined' && window.location.hostname === 'localhost') {
+      performanceMetrics.enabled = true;
+    }
+    
     // Inicialização assíncrona
     (async () => {
       // FASE 1: Operações críticas - carregam dados básicos para renderização inicial
@@ -229,6 +273,16 @@
         // Merge downloaded categories with saved categories, ensuring downloaded ones are included
         const allCategories = [...new Set([...selectedCategories, ...downloadedCategories])];
         selectedCategories = allCategories;
+        
+        // FASE 3: Carregar stats do cache para renderização inicial rápida
+        const cachedStats = getAllCachedStats();
+        if (Object.keys(cachedStats).length > 0) {
+          categoryStats = { ...cachedStats };
+          // Atualizar cache em memória
+          Object.entries(cachedStats).forEach(([cat, stats]) => {
+            statsCache.set(cat, stats);
+          });
+        }
         
         // Marcar inicialização básica como completa - permite renderização
         isInitializing = false;
@@ -342,11 +396,19 @@
       // Update downloaded categories from sync result
       downloadedCategories = syncResult.downloaded;
       
-      // Invalidar cache e stats carregados após sync
+      // FASE 3: Invalidar cache após sync (mas manter se possível)
+      clearStatsCache();
       statsCache.clear();
       loadedCategories.clear();
       // Reload category stats to reflect any fixes (force to bypass rate limiting)
       await loadCategoryStats(true);
+      
+      // FASE 3: Log métricas se habilitado
+      if (performanceMetrics.enabled) {
+        const metrics = getCacheMetrics();
+        performanceMetrics.lastMetrics = metrics;
+        console.log('[Offline Page] Cache Metrics:', metrics);
+      }
       
       // Update cache version
       await updateCacheVersion();
@@ -369,72 +431,14 @@
   let lastStatsLoadTime = 0;
   const MIN_STATS_LOAD_INTERVAL = 2000; // Minimum 2 seconds between loads
 
-  // FASE 2: Cache persistente de stats em localStorage
-  const STATS_CACHE_KEY = 'offlineStatsCache';
-  const STATS_CACHE_TTL = 24 * 60 * 60 * 1000; // 24 horas
-  
-  // Cache em memória para evitar recálculos desnecessários
+  // FASE 3: Cache em memória para acesso rápido (complementa statsCache.js)
   let statsCache = new Map();
   
-  /**
-   * Carrega stats do cache persistente
-   * @param {string} category - Categoria
-   * @returns {Object | null} - Stats ou null se não encontrado/expirado
-   */
-  function getCachedStats(category) {
-    try {
-      const cached = localStorage.getItem(`${STATS_CACHE_KEY}_${category}`);
-      if (!cached) return null;
-      
-      const { stats, timestamp } = JSON.parse(cached);
-      const age = Date.now() - timestamp;
-      
-      if (age > STATS_CACHE_TTL) {
-        localStorage.removeItem(`${STATS_CACHE_KEY}_${category}`);
-        return null;
-      }
-      
-      return stats;
-    } catch (error) {
-      console.warn('[Offline Page] Error reading stats cache:', error);
-      return null;
-    }
-  }
-  
-  /**
-   * Salva stats no cache persistente
-   * @param {string} category - Categoria
-   * @param {Object} stats - Stats para salvar
-   */
-  function cacheStats(category, stats) {
-    try {
-      localStorage.setItem(`${STATS_CACHE_KEY}_${category}`, JSON.stringify({
-        stats,
-        timestamp: Date.now()
-      }));
-    } catch (error) {
-      console.warn('[Offline Page] Error writing stats cache:', error);
-    }
-  }
-  
-  /**
-   * Limpa cache de stats persistente
-   */
-  function clearStatsCache() {
-    try {
-      const keysToRemove = [];
-      for (let i = 0; i < localStorage.length; i++) {
-        const key = localStorage.key(i);
-        if (key && key.startsWith(STATS_CACHE_KEY)) {
-          keysToRemove.push(key);
-        }
-      }
-      keysToRemove.forEach(key => localStorage.removeItem(key));
-      statsCache.clear();
-    } catch (error) {
-      console.warn('[Offline Page] Error clearing stats cache:', error);
-    }
-  }
+  // FASE 3: Métricas de performance
+  let performanceMetrics = {
+    enabled: false, // Habilitar em modo desenvolvimento
+    lastMetrics: null
+  };
 
   /**
    * Load category availability statistics for specific categories
@@ -470,10 +474,13 @@
         cachedPdfs = updatedState.cachedPdfs || [];
       }
       
-      // Load stats only for specified categories (usando cache quando possível)
+      // FASE 3: Load category stats only for specified categories (usando cache otimizado)
       const newStats = { ...categoryStats };
+      const statsToCalculate = [];
+      const calculationStartTimes = new Map();
+      
       for (const category of categories) {
-        // FASE 2: Verificar cache persistente primeiro, depois cache em memória
+        // FASE 3: Verificar cache usando novo sistema
         if (!force) {
           const cached = getCachedStats(category);
           if (cached) {
@@ -489,18 +496,38 @@
           }
         }
         
-        // Calcular stats se não estiver em cache
-        const stats = await offline.getCategoryAvailabilityStats(
-          category,
-          $louvores,
-          cachedPdfs
-        );
-        newStats[category] = stats;
-        
-        // Atualizar ambos os caches
-        statsCache.set(category, stats);
-        cacheStats(category, stats);
+        // Marcar para cálculo
+        statsToCalculate.push(category);
+        calculationStartTimes.set(category, performance.now());
       }
+      
+      // FASE 3: Calcular stats em paralelo quando possível
+      if (statsToCalculate.length > 0) {
+        const calculationPromises = statsToCalculate.map(async (category) => {
+          const startTime = calculationStartTimes.get(category);
+          const stats = await offline.getCategoryAvailabilityStats(
+            category,
+            $louvores,
+            cachedPdfs
+          );
+          const calcTime = performance.now() - startTime;
+          recordCalculationTime(calcTime);
+          
+          newStats[category] = stats;
+          statsCache.set(category, stats);
+          
+          // FASE 3: Salvar no cache com metadados
+          cacheStats(category, stats, {
+            louvoresCount: $louvores.length,
+            cachedPdfsCount: cachedPdfs.length
+          });
+          
+          return { category, stats };
+        });
+        
+        await Promise.all(calculationPromises);
+      }
+      
       categoryStats = newStats;
       
       // Get required packages info for selected categories
@@ -538,9 +565,10 @@
       return;
     }
     
-    // FASE 2: Invalidar cache se forçado
+    // FASE 3: Invalidar cache se forçado
     if (force) {
       clearStatsCache();
+      statsCache.clear();
     }
     
     // Usar função específica para todas as categorias
@@ -569,8 +597,14 @@
             selectedCategories = [...selectedCategories, cat];
           }
         });
-        // FASE 2: Invalidar cache e stats carregados após download
-        clearStatsCache();
+        // FASE 3: Invalidar apenas categorias afetadas pelo download
+        // Identificar categorias que foram baixadas
+        const affectedCategories = cats.length > 0 ? cats : selectedCategories;
+        if (affectedCategories.length > 0) {
+          invalidateCategories(affectedCategories);
+          // Remover do cache em memória também
+          affectedCategories.forEach(cat => statsCache.delete(cat));
+        }
         loadedCategories.clear();
         // Reload stats after download (force to bypass rate limiting)
         await loadCategoryStats(true);
@@ -782,6 +816,20 @@
             >
               <RefreshCw class="w-4 h-4 {isLoadingStats ? 'spinning' : ''}" />
             </button>
+            <!-- FASE 3: Botão de métricas (apenas em desenvolvimento) -->
+            {#if performanceMetrics.enabled && performanceMetrics.lastMetrics}
+              <button
+                class="metrics-btn"
+                on:click={() => {
+                  const metrics = getCacheMetrics();
+                  console.table(metrics);
+                  alert(`Cache Hit Rate: ${(metrics.cacheHitRate * 100).toFixed(1)}%\nAvg Calculation: ${metrics.avgCalculationTime}ms\nAvg Load: ${metrics.avgLoadTime}ms\nCache Size: ${(metrics.cacheSize / 1024).toFixed(2)} KB\nCategories Cached: ${metrics.categoriesCached}`);
+                }}
+                title="Mostrar métricas de performance (desenvolvimento)"
+              >
+                <TrendingUp class="w-4 h-4" />
+              </button>
+            {/if}
           </div>
           <div class="summary-stats">
             <div class="stat-item">

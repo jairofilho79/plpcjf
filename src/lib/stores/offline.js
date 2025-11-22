@@ -183,6 +183,10 @@ async function initialize() {
  */
 async function loadCachedPdfsList() {
   try {
+    // FASE 3: Limpar cache de memoização quando recarregamos lista de PDFs
+    // pois os dados podem ter mudado
+    clearStatsCalculationCache();
+    
     const cachedUrls = await getCachedPDFsFast();
     
     offlineState.update(state => ({
@@ -1041,8 +1045,31 @@ async function downloadMissingPackages(missingPdfs) {
   }
 }
 
+// FASE 3: Cache de memoização para cálculos de stats
+const statsCalculationCache = new Map();
+const CACHE_KEY_SEPARATOR = '|||';
+
+/**
+ * FASE 3: Gerar chave de cache para memoização
+ * @param {string} category - Categoria
+ * @param {number} louvoresHash - Hash simples do número de louvores
+ * @param {number} cachedPdfsHash - Hash simples do número de PDFs em cache
+ * @returns {string} - Chave de cache
+ */
+function getStatsCacheKey(category, louvoresHash, cachedPdfsHash) {
+  return `${category}${CACHE_KEY_SEPARATOR}${louvoresHash}${CACHE_KEY_SEPARATOR}${cachedPdfsHash}`;
+}
+
+/**
+ * FASE 3: Limpar cache de memoização (chamado quando há mudanças)
+ */
+function clearStatsCalculationCache() {
+  statsCalculationCache.clear();
+}
+
 /**
  * Get availability statistics for a category
+ * FASE 3: Com memoização para otimizar cálculos repetidos
  * @param {string} category - Category name
  * @param {Array} louvoresData - All louvores
  * @param {Array} cachedPdfs - Cached PDF URLs
@@ -1053,18 +1080,80 @@ async function getCategoryAvailabilityStats(category, louvoresData, cachedPdfs) 
     return { total: 0, available: 0, missing: 0, percentage: 0 };
   }
 
+  // FASE 3: Verificar cache de memoização
+  const louvoresHash = louvoresData.length;
+  const cachedPdfsHash = cachedPdfs.length;
+  const cacheKey = getStatsCacheKey(category, louvoresHash, cachedPdfsHash);
+  
+  if (statsCalculationCache.has(cacheKey)) {
+    const cached = statsCalculationCache.get(cacheKey);
+    // Verificar se os dados ainda são válidos (mesmo número de louvores e PDFs)
+    if (cached.louvoresCount === louvoresData.length && 
+        cached.cachedPdfsCount === cachedPdfs.length) {
+      return cached.stats;
+    }
+  }
+
   const categoryLouvores = louvoresData.filter(l => l.categoria === category);
   const total = categoryLouvores.length;
   
   if (total === 0) {
-    return { total: 0, available: 0, missing: 0, percentage: 0 };
+    const result = { total: 0, available: 0, missing: 0, percentage: 0 };
+    // Cachear resultado vazio também
+    statsCalculationCache.set(cacheKey, {
+      stats: result,
+      louvoresCount: louvoresData.length,
+      cachedPdfsCount: cachedPdfs.length
+    });
+    return result;
   }
 
-  const missing = identifyMissingPdfs(categoryLouvores, cachedPdfs);
+  // FASE 3: Processar cálculo em chunks se houver muitos louvores
+  let missing;
+  if (categoryLouvores.length > 100) {
+    // Para categorias grandes, processar em chunks para não bloquear UI
+    missing = [];
+    const chunkSize = 50;
+    for (let i = 0; i < categoryLouvores.length; i += chunkSize) {
+      const chunk = categoryLouvores.slice(i, i + chunkSize);
+      const chunkMissing = identifyMissingPdfs(chunk, cachedPdfs);
+      missing.push(...chunkMissing);
+      // Yield para UI se necessário
+      if (i + chunkSize < categoryLouvores.length) {
+        await new Promise(resolve => setTimeout(resolve, 0));
+      }
+    }
+  } else {
+    missing = identifyMissingPdfs(categoryLouvores, cachedPdfs);
+  }
+
   const available = total - missing.length;
   const percentage = total > 0 ? Math.round((available / total) * 100) : 0;
 
-  return { total, available, missing: missing.length, percentage };
+  const result = { total, available, missing: missing.length, percentage };
+  
+  // FASE 3: Cachear resultado
+  statsCalculationCache.set(cacheKey, {
+    stats: result,
+    louvoresCount: louvoresData.length,
+    cachedPdfsCount: cachedPdfs.length
+  });
+  
+  // Limitar tamanho do cache (manter apenas últimos 50)
+  if (statsCalculationCache.size > 50) {
+    const firstKey = statsCalculationCache.keys().next().value;
+    statsCalculationCache.delete(firstKey);
+  }
+
+  return result;
+}
+
+/**
+ * FASE 3: Limpar cache de memoização de cálculos
+ * Deve ser chamado quando há mudanças significativas nos dados
+ */
+function clearStatsCalculationCache() {
+  statsCalculationCache.clear();
 }
 
 /**
