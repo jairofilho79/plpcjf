@@ -28,6 +28,9 @@ const OFFLINE_MANIFEST_KEY = 'offlineManifest';
 
 const PACKAGES_BASE_PATH = '/packages';
 const DEFAULT_PDF_CACHE_FALLBACK = 'plpc-v2-pdfs';
+/**
+ * @type {AbortController | null}
+ */
 let zipDownloadController = null;
 let isZipDownloadActive = false;
 let zipDownloadCancelled = false;
@@ -236,7 +239,13 @@ async function syncAfterDownload() {
     
     // Get updated state
     const updatedState = get(offlineState);
+    /**
+     * @type {any[]}
+     */
     const updatedCachedPdfs = updatedState.cachedPdfs || [];
+    /**
+     * @type {any[]}
+     */
     const louvoresData = get(louvores);
     
     if (!louvoresData || louvoresData.length === 0) {
@@ -285,10 +294,11 @@ async function syncAfterDownload() {
 
 /**
  * Get hash of manifest for change detection
+ * @param {any[]} louvoresData
  */
 function getManifestHash(louvoresData) {
   const sortedPdfs = louvoresData
-    .map(l => l.pdfId || l.pdf)
+    .map((/** @type {{ pdfId: any; pdf: any; }} */ l) => l.pdfId || l.pdf)
     .sort()
     .join('|');
   return sortedPdfs;
@@ -311,6 +321,7 @@ async function openPdfCache() {
 
 /**
  * Remove arquivo ZIP do cache após descompactação
+ * @param {RequestInfo | URL} zipUrl
  */
 async function removeZipFromCache(zipUrl) {
   if (!browser || typeof caches === 'undefined') {
@@ -333,6 +344,9 @@ async function removeZipFromCache(zipUrl) {
   }
 }
 
+/**
+ * @param {string} entryName
+ */
 function normalizeZipEntryName(entryName) {
   if (!entryName) {
     return '';
@@ -350,12 +364,17 @@ function normalizeZipEntryName(entryName) {
   return `/${normalized}`;
 }
 
+/**
+ * @param {any} packageName
+ */
 function getPackageUrl(packageName) {
   return `${PACKAGES_BASE_PATH}/${packageName}`;
 }
 
 /**
  * Get package parts for a category from manifest
+ * @param {string | number} category
+ * @param {{ packages: { [x: string]: { parts: any; }; }; } | null} manifest
  */
 function getPackageParts(category, manifest) {
   if (!manifest || !manifest.packages || !manifest.packages[category]) {
@@ -389,7 +408,7 @@ async function startZipDownloadWithSpecificParts(categories, pdfUrls, partsByCat
   const total = pdfUrls.length;
   // Normalize PDF URLs for comparison using unified function
   // Add leading slash for set comparison consistency
-  const normalizeForSetComparison = (url) => {
+  const normalizeForSetComparison = (/** @type {string} */ url) => {
     const normalized = normalizePdfUrl(url);
     return normalized ? `/${normalized}` : '';
   };
@@ -559,6 +578,9 @@ async function startZipDownloadWithSpecificParts(categories, pdfUrls, partsByCat
 
     if (!zipDownloadCancelled) {
       localStorage.setItem(ALLOW_OFFLINE_KEY, 'true');
+      /**
+       * @type {string | any[]}
+       */
       const louvoresData = get(louvores);
       if (louvoresData && louvoresData.length > 0) {
         const currentHash = getManifestHash(louvoresData);
@@ -611,6 +633,9 @@ async function startZipDownloadWithSpecificParts(categories, pdfUrls, partsByCat
   }
 }
 
+/**
+ * @param {Uint8Array<ArrayBufferLike>} buffer
+ */
 function unzipEntries(buffer) {
   return new Promise((resolve, reject) => {
     unzip(buffer, (err, data) => {
@@ -639,6 +664,7 @@ function getSavedCategories() {
 
 /**
  * Save selected categories to localStorage
+ * @param {any} categories
  */
 function saveCategories(categories) {
   if (!browser) return;
@@ -679,6 +705,7 @@ function getDownloadedCategories() {
 /**
  * Save downloaded categories to localStorage
  * Uses OFFLINE_CATEGORIAS_SALVAS flag to store categories that are saved in cache storage
+ * @param {any[]} categories
  */
 function saveDownloadedCategories(categories) {
   if (!browser) return;
@@ -694,6 +721,7 @@ function saveDownloadedCategories(categories) {
 /**
  * Verify if a PDF actually exists in Cache Storage
  * This performs a real check in the cache, not just in the list
+ * @param {string | URL} pdfUrl
  */
 async function verifyPdfInCacheStorage(pdfUrl) {
   if (!browser || typeof caches === 'undefined') {
@@ -737,6 +765,9 @@ async function verifyPdfInCacheStorage(pdfUrl) {
  * 
  * FIX: Added strict validation mode for problematic categories like "Gestos em Gravura"
  * that verifies directly in Cache Storage to avoid false positives from filename matching.
+ * @param {string} category
+ * @param {any[]} cachedPdfs
+ * @param {any[]} louvoresData
  */
 async function isCategoryCompletelyDownloaded(category, cachedPdfs, louvoresData, strictMode = false) {
   if (!category || !louvoresData || !cachedPdfs) {
@@ -744,7 +775,7 @@ async function isCategoryCompletelyDownloaded(category, cachedPdfs, louvoresData
   }
 
   // Get all PDFs for this category
-  const categoryLouvores = louvoresData.filter(louvor => louvor.categoria === category);
+  const categoryLouvores = louvoresData.filter((/** @type {{ categoria: any; }} */ louvor) => louvor.categoria === category);
   
   if (categoryLouvores.length === 0) {
     return false;
@@ -758,7 +789,7 @@ async function isCategoryCompletelyDownloaded(category, cachedPdfs, louvoresData
 
   // Normalize cached PDFs URLs for comparison using unified function
   const normalizedCachedPdfs = new Set(
-    cachedPdfs.map(url => normalizePathForComparison(url))
+    cachedPdfs.map((/** @type {string} */ url) => normalizePdfUrl(url))
   );
 
   // Track unique PDFs found for counting validation
@@ -773,7 +804,7 @@ async function isCategoryCompletelyDownloaded(category, cachedPdfs, louvoresData
     }
 
     // Normalize PDF URL for comparison using unified function
-    const normalizedPdfUrl = normalizePathForComparison(pdfUrl);
+    const normalizedPdfUrl = normalizePdfUrl(pdfUrl);
 
     // Check if PDF is in cache using multiple strategies
     let isCached = false;
@@ -846,7 +877,7 @@ async function isCategoryCompletelyDownloaded(category, cachedPdfs, louvoresData
   }
 
   // FIX: Additional validation - count unique PDFs found vs expected
-  const expectedCount = categoryLouvores.filter(l => getPdfUrl(l)).length;
+  const expectedCount = categoryLouvores.filter((/** @type {any} */ l) => getPdfUrl(l)).length;
   const foundCount = foundPdfs.size;
   
   if (foundCount < expectedCount) {
@@ -864,13 +895,15 @@ async function isCategoryCompletelyDownloaded(category, cachedPdfs, louvoresData
 
 /**
  * Get list of completely downloaded categories
+ * @param {any[]} louvoresData
+ * @param {any[]} cachedPdfs
  */
 async function getCompletelyDownloadedCategories(louvoresData, cachedPdfs) {
   if (!louvoresData || !cachedPdfs || louvoresData.length === 0) {
     return [];
   }
 
-  const categories = [...new Set(louvoresData.map(l => l.categoria).filter(Boolean))];
+  const categories = [...new Set(louvoresData.map((/** @type {{ categoria: any; }} */ l) => l.categoria).filter(Boolean))];
   const downloadedCategories = [];
 
   for (const category of categories) {
@@ -899,6 +932,9 @@ async function checkForNewPDFs() {
     return;
   }
 
+  /**
+   * @type {any[]}
+   */
   const louvoresData = get(louvores);
   if (!louvoresData || louvoresData.length === 0) return;
 
@@ -910,6 +946,9 @@ async function checkForNewPDFs() {
     console.log('[Offline Store] Manifest changed, checking for new PDFs');
     
     const state = get(offlineState);
+    /**
+     * @type {any[]}
+     */
     const cachedPdfs = state.cachedPdfs;
     
     // Find new PDFs that aren't cached yet AND are in the selected categories
@@ -946,6 +985,7 @@ async function checkForNewPDFs() {
 
 /**
  * Get PDF URL from louvor object
+ * @param {{ pdfId: any; }} louvor
  */
 function getPdfUrl(louvor) {
   if (!louvor || !louvor.pdfId) {
@@ -1034,6 +1074,9 @@ async function downloadMissingPackages(missingPdfs) {
   const categoriesToDownload = [...new Set(requiredParts.map(part => part.category))];
   
   // Get all PDF URLs for these categories
+  /**
+   * @type {any[]}
+   */
   const louvoresData = get(louvores);
   const pdfUrls = louvoresData
     .filter(louvor => categoriesToDownload.includes(louvor.categoria))
@@ -1186,6 +1229,7 @@ async function getRequiredPackagesInfo(categories, louvoresData, cachedPdfs, man
 
 /**
  * Start downloading PDFs
+ * @param {string | any[]} pdfUrls
  */
 async function startDownload(pdfUrls, selectedCategories = []) {
   if (!browser) return;
@@ -1211,7 +1255,7 @@ async function startDownload(pdfUrls, selectedCategories = []) {
   }));
 
   try {
-    const result = await downloadPDFsViaSW(pdfUrls, 10, (progressData) => {
+    const result = await downloadPDFsViaSW(pdfUrls, 10, (/** @type {{ percentage: any; completed: any; failed: any; }} */ progressData) => {
       // Update progress
       offlineState.update(state => ({
         ...state,
@@ -1235,6 +1279,9 @@ async function startDownload(pdfUrls, selectedCategories = []) {
       localStorage.setItem(ALLOW_OFFLINE_KEY, 'true');
       
       // Update manifest hash
+      /**
+       * @type {never[]}
+       */
       const louvoresData = get(louvores);
       const currentHash = getManifestHash(louvoresData);
       localStorage.setItem(LAST_MANIFEST_HASH_KEY, currentHash);
@@ -1247,6 +1294,9 @@ async function startDownload(pdfUrls, selectedCategories = []) {
     if (browser && !result.cancelled) {
       const { updatePdfIndexInBackground, invalidatePdfIndexSession } = await import('$lib/utils/pdfIndex');
       invalidatePdfIndexSession(); // Invalidar cache de sessão para forçar nova verificação
+      /**
+       * @type {any[]}
+       */
       const louvoresData = get(louvores);
       updatePdfIndexInBackground(louvoresData, true, true); // immediate = true, force = true
       
@@ -1266,10 +1316,12 @@ async function startDownload(pdfUrls, selectedCategories = []) {
   }
 }
 
+
 /**
  * Download PDFs by categories
+ * @param {any[]} categories
+ * @param {Iterable<any> | null | undefined} pdfUrls
  */
-
 async function startZipDownload(categories, pdfUrls, alreadyDownloadedCategories = []) {
   if (!browser) return;
 
@@ -1288,7 +1340,7 @@ async function startZipDownload(categories, pdfUrls, alreadyDownloadedCategories
   const total = pdfUrls.length;
   // Normalize PDF URLs for comparison using unified function
   // Add leading slash for set comparison consistency
-  const normalizeForSetComparison = (url) => {
+  const normalizeForSetComparison = (/** @type {string} */ url) => {
     const normalized = normalizePdfUrl(url);
     return normalized ? `/${normalized}` : '';
   };
@@ -1472,6 +1524,9 @@ async function startZipDownload(categories, pdfUrls, alreadyDownloadedCategories
 
     if (!zipDownloadCancelled) {
       localStorage.setItem(ALLOW_OFFLINE_KEY, 'true');
+      /**
+       * @type {string | any[]}
+       */
       const louvoresData = get(louvores);
       if (louvoresData && louvoresData.length > 0) {
         const currentHash = getManifestHash(louvoresData);
@@ -1542,9 +1597,15 @@ async function startZipDownload(categories, pdfUrls, alreadyDownloadedCategories
   }
 }
 
+/**
+ * @param {any} categories
+ */
 async function downloadByCategories(categories) {
   if (!browser) return;
 
+  /**
+   * @type {any[]}
+   */
   const louvoresData = get(louvores);
   if (!louvoresData || louvoresData.length === 0) {
     console.error('[Offline Store] No louvores data available');
@@ -1562,6 +1623,9 @@ async function downloadByCategories(categories) {
 
   // Load cached PDFs to check which PDFs are already downloaded
   const state = get(offlineState);
+  /**
+   * @type {string | any[]}
+   */
   let cachedPdfs = state.cachedPdfs;
   
   // If cached PDFs are not loaded, load them
@@ -1821,7 +1885,13 @@ async function validateAndClearError() {
     // Reload cached PDFs to get latest state
     await loadCachedPdfsList();
     const updatedState = get(offlineState);
+    /**
+     * @type {any[]}
+     */
     const cachedPdfs = updatedState.cachedPdfs || [];
+    /**
+     * @type {any[]}
+     */
     const louvoresData = get(louvores);
     
     if (!louvoresData || louvoresData.length === 0) {
@@ -1904,7 +1974,13 @@ async function validateAndSyncStats() {
     
     // 2. Get updated state
     const updatedState = get(offlineState);
+    /**
+     * @type {any[]}
+     */
     const cachedPdfs = updatedState.cachedPdfs || [];
+    /**
+     * @type {any[]}
+     */
     const louvoresData = get(louvores);
     
     if (!louvoresData || louvoresData.length === 0) {
@@ -2001,6 +2077,9 @@ async function checkAndUpdateDownloadedCategories() {
   if (!browser) return [];
 
   try {
+    /**
+     * @type {string | any[]}
+     */
     const louvoresData = get(louvores);
     if (!louvoresData || louvoresData.length === 0) {
       return getDownloadedCategories();
@@ -2008,6 +2087,9 @@ async function checkAndUpdateDownloadedCategories() {
 
     // Load cached PDFs from cache storage (NOT ZIPs - ZIPs are removed after extraction)
     const state = get(offlineState);
+    /**
+     * @type {string | any[]}
+     */
     let cachedPdfs = state.cachedPdfs;
     
     if (!cachedPdfs || cachedPdfs.length === 0) {
@@ -2057,7 +2139,7 @@ async function forceRevalidateCategory(category) {
     
     // Remove category from downloaded list temporarily
     const currentDownloaded = getDownloadedCategories();
-    const filteredDownloaded = currentDownloaded.filter(cat => cat !== category);
+    const filteredDownloaded = currentDownloaded.filter((/** @type {string} */ cat) => cat !== category);
     saveDownloadedCategories(filteredDownloaded);
     
     // Reload cached PDFs to ensure we have the latest state
@@ -2065,7 +2147,13 @@ async function forceRevalidateCategory(category) {
     
     // Get updated state
     const state = get(offlineState);
+    /**
+     * @type {never[]}
+     */
     const cachedPdfs = state.cachedPdfs || [];
+    /**
+     * @type {string | any[]}
+     */
     const louvoresData = get(louvores);
     
     if (!louvoresData || louvoresData.length === 0) {
