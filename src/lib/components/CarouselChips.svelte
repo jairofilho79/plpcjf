@@ -1,4 +1,5 @@
 <script>
+  import { tick } from 'svelte';
   import { X, Trash2, GripVertical, Share2, Save, Check } from 'lucide-svelte';
   import { goto } from '$app/navigation';
   import { carousel } from '$lib/stores/carousel';
@@ -280,6 +281,7 @@
   let savedPdfIds = null;
   let savedPlaylistName = null;
   let showCopiedMessage = false;
+  let isSaving = false; // Flag para prevenir múltiplos salvamentos simultâneos
 
   // Generate hash of current playlist for comparison
   function getCurrentPlaylistHash() {
@@ -293,7 +295,7 @@
   // Check if current playlist matches saved version
   $: currentHash = getCurrentPlaylistHash();
   $: isPlaylistSaved = savedPdfIds !== null && savedPdfIds === currentHash && currentHash !== '';
-  $: canSave = $carousel.length > 0 && !isPlaylistSaved;
+  $: canSave = $carousel.length > 0 && !isPlaylistSaved && !isSaving;
 
   // Limpar estado salvo quando o carousel muda (hash muda)
   $: {
@@ -312,15 +314,22 @@
     }
   }
 
-  function handleSave() {
-    if (!$carousel.length || isPlaylistSaved) return;
+  async function handleSave() {
+    // Prevenir múltiplos salvamentos simultâneos
+    if (isSaving || !$carousel.length || isPlaylistSaved) return;
+    
+    // Marcar como salvando para desabilitar o botão imediatamente
+    isSaving = true;
     
     // Filter out invalid IDs
     const pdfIds = $carousel
       .map(l => l.pdfId)
       .filter(id => id != null && id !== '');
     
-    if (pdfIds.length === 0) return;
+    if (pdfIds.length === 0) {
+      isSaving = false;
+      return;
+    }
     
     const hash = pdfIds.join(',');
     
@@ -328,9 +337,15 @@
     const playlistId = savedPlaylists.savePlaylist(pdfIds);
     const newPlaylist = savedPlaylists.getPlaylist(playlistId);
     
-    // Atualizar estado imediatamente
+    // Atualizar estado imediatamente após salvar (síncrono)
     savedPdfIds = hash;
     savedPlaylistName = newPlaylist ? newPlaylist.nome : null;
+    
+    // Aguardar tick para garantir que a reatividade atualize isPlaylistSaved
+    await tick();
+    
+    // Reset flag - agora isPlaylistSaved deve ser true, então canSave será false
+    isSaving = false;
   }
   
   function handleSaveClick() {
@@ -397,11 +412,15 @@
         <div
           class="action-button-tag light-button"
           class:saved={isPlaylistSaved}
-          title={isPlaylistSaved ? 'Playlist salva (toque para salvar novamente)' : 'Toque para salvar'}
+          class:disabled={!canSave}
+          title={isPlaylistSaved ? 'Playlist salva (toque para salvar novamente)' : isSaving ? 'Salvando...' : 'Toque para salvar'}
         >
           {#if isPlaylistSaved}
             <Check class="w-3 h-3" />
             <span>Salvo</span>
+          {:else if isSaving}
+            <Save class="w-3 h-3" />
+            <span>Salvando...</span>
           {:else}
             <Save class="w-3 h-3" />
             <span>Salvar</span>
@@ -527,9 +546,11 @@
     color: var(--text-dark);
   }
 
-  .light-button:disabled {
+  .light-button:disabled,
+  .light-button.disabled {
     opacity: 0.6;
     cursor: not-allowed;
+    pointer-events: none;
   }
 
   /* Só aplicar hover em dispositivos com mouse */
