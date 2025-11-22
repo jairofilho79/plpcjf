@@ -12,7 +12,8 @@ import {
 } from '$lib/utils/swRegistration';
 import { unzip } from 'fflate';
 import { louvores } from './louvores';
-import { normalizePathForComparison } from '$lib/utils/pdfValidation';
+import { normalizePdfUrl } from '$lib/utils/pathUtils';
+import { validateManifestsIntegrity } from '$lib/utils/manifestValidation';
 import { CATEGORY_OPTIONS } from './filters';
 import { atobUTF8 } from '$lib/utils/pathUtils';
 import { findMissingPdfs, findRequiredPackages } from '$lib/utils/pdfValidation';
@@ -80,6 +81,35 @@ async function fetchOfflineManifest() {
       offlineManifest: manifest,
       categorySizes
     }));
+
+    // Validate integrity between louvores-manifest.json and offline-manifest.json
+    // Run validation in background (don't block manifest loading)
+    validateManifestsIntegrity()
+      .then(result => {
+        if (!result.valid) {
+          console.warn('[Manifest Validation] Manifest integrity issues detected:', {
+            missingInOffline: result.missingInOffline.length,
+            extraInOffline: result.extraInOffline.length,
+            stats: result.stats
+          });
+          
+          if (result.missingInOffline.length > 0) {
+            console.warn('[Manifest Validation] PDFs in louvores-manifest.json missing in offline-manifest.json:', 
+              result.missingInOffline.slice(0, 10)); // Log first 10
+          }
+          
+          if (result.extraInOffline.length > 0) {
+            console.warn('[Manifest Validation] PDFs in offline-manifest.json not found in louvores-manifest.json:', 
+              result.extraInOffline.slice(0, 10)); // Log first 10
+          }
+        } else {
+          console.log('[Manifest Validation] Manifest integrity check passed:', result.stats);
+        }
+      })
+      .catch(error => {
+        console.error('[Manifest Validation] Error during integrity check:', error);
+        // Don't fail manifest loading if validation fails
+      });
 
     // Cache manifest in localStorage
     if (browser) {
@@ -298,12 +328,15 @@ function normalizeZipEntryName(entryName) {
     return '';
   }
 
-  const normalized = entryName.trim().replace(/\\/g, '/').replace(/^\/+/, '');
+  // Use unified normalization function for consistency
+  // normalizePdfUrl handles trimming, URI decoding, lowercase, path separators, and ensures assets/ prefix
+  const normalized = normalizePdfUrl(entryName);
 
   if (!normalized || normalized.endsWith('/')) {
     return '';
   }
 
+  // Return with leading slash for consistency with existing cache storage format
   return `/${normalized}`;
 }
 
@@ -344,44 +377,17 @@ async function startZipDownloadWithSpecificParts(categories, pdfUrls, partsByCat
   isZipDownloadActive = true;
 
   const total = pdfUrls.length;
-  // Normalize PDF URLs for comparison (handle encoding, case, path separators)
-  const normalizeForSet = (url) => {
-    if (!url) return '';
-    try {
-      // Remove protocol and domain if present
-      let normalized = url.replace(/^https?:\/\/[^/]+/, '');
-      // Remove leading/trailing slashes
-      normalized = normalized.replace(/^\/+/, '').replace(/\/+$/, '');
-      // Decode URI encoding (handle multiple encodings)
-      try {
-        for (let i = 0; i < 3; i++) {
-          if (normalized.includes('%')) {
-            const decoded = decodeURIComponent(normalized);
-            if (decoded !== normalized) {
-              normalized = decoded;
-            } else {
-              break;
-            }
-          } else {
-            break;
-          }
-        }
-      } catch {
-        // If decoding fails, continue with original
-      }
-      // Normalize to lowercase and path separators
-      normalized = normalized.toLowerCase().replace(/\\/g, '/');
-      // Ensure starts with / for consistency
-      return `/${normalized}`;
-    } catch {
-      return url.toLowerCase().replace(/\\/g, '/').replace(/^\/+/, '');
-    }
+  // Normalize PDF URLs for comparison using unified function
+  // Add leading slash for set comparison consistency
+  const normalizeForSetComparison = (url) => {
+    const normalized = normalizePdfUrl(url);
+    return normalized ? `/${normalized}` : '';
   };
   
   // Create normalized sets for comparison
-  const pdfSet = new Set(pdfUrls.map(normalizeForSet));
+  const pdfSet = new Set(pdfUrls.map(normalizeForSetComparison));
   const pdfSetOriginal = new Set(pdfUrls); // Keep original for exact match
-  const remainingSet = new Set(pdfUrls.map(normalizeForSet));
+  const remainingSet = new Set(pdfUrls.map(normalizeForSetComparison));
   let completed = 0;
 
   offlineState.update(state => ({
@@ -457,7 +463,7 @@ async function startZipDownloadWithSpecificParts(categories, pdfUrls, partsByCat
           }
 
           // Normalize path for comparison (same normalization as pdfSet)
-          const normalizedForComparison = normalizeForSet(normalizedPath);
+          const normalizedForComparison = normalizeForSetComparison(normalizedPath);
           
           // Só cachear se o PDF está na lista de PDFs necessários
           // Check both normalized and original sets for maximum compatibility
@@ -465,7 +471,7 @@ async function startZipDownloadWithSpecificParts(categories, pdfUrls, partsByCat
                          pdfSetOriginal.has(normalizedPath) ||
                          pdfSetOriginal.has(normalizedPath.replace(/^\/+/, '')) ||
                          Array.from(pdfSetOriginal).some(url => {
-                           const urlNormalized = normalizeForSet(url);
+                           const urlNormalized = normalizeForSetComparison(url);
                            return urlNormalized === normalizedForComparison ||
                                   urlNormalized.endsWith(normalizedForComparison) ||
                                   normalizedForComparison.endsWith(urlNormalized);
@@ -498,7 +504,7 @@ async function startZipDownloadWithSpecificParts(categories, pdfUrls, partsByCat
 
           await cache.put(new Request(requestUrl), pdfResponse);
 
-          remainingSet.delete(normalizedPath);
+          remainingSet.delete(normalizedForComparison);
           completed++;
 
           const progress = total === 0 ? 100 : Math.min(99, Math.floor((completed / total) * 100));
@@ -1187,44 +1193,17 @@ async function startZipDownload(categories, pdfUrls, alreadyDownloadedCategories
   isZipDownloadActive = true;
 
   const total = pdfUrls.length;
-  // Normalize PDF URLs for comparison (handle encoding, case, path separators)
-  const normalizeForSet = (url) => {
-    if (!url) return '';
-    try {
-      // Remove protocol and domain if present
-      let normalized = url.replace(/^https?:\/\/[^/]+/, '');
-      // Remove leading/trailing slashes
-      normalized = normalized.replace(/^\/+/, '').replace(/\/+$/, '');
-      // Decode URI encoding (handle multiple encodings)
-      try {
-        for (let i = 0; i < 3; i++) {
-          if (normalized.includes('%')) {
-            const decoded = decodeURIComponent(normalized);
-            if (decoded !== normalized) {
-              normalized = decoded;
-            } else {
-              break;
-            }
-          } else {
-            break;
-          }
-        }
-      } catch {
-        // If decoding fails, continue with original
-      }
-      // Normalize to lowercase and path separators
-      normalized = normalized.toLowerCase().replace(/\\/g, '/');
-      // Ensure starts with / for consistency
-      return `/${normalized}`;
-    } catch {
-      return url.toLowerCase().replace(/\\/g, '/').replace(/^\/+/, '');
-    }
+  // Normalize PDF URLs for comparison using unified function
+  // Add leading slash for set comparison consistency
+  const normalizeForSetComparison = (url) => {
+    const normalized = normalizePdfUrl(url);
+    return normalized ? `/${normalized}` : '';
   };
   
   // Create normalized sets for comparison
-  const pdfSet = new Set(pdfUrls.map(normalizeForSet));
+  const pdfSet = new Set(pdfUrls.map(normalizeForSetComparison));
   const pdfSetOriginal = new Set(pdfUrls); // Keep original for exact match
-  const remainingSet = new Set(pdfUrls.map(normalizeForSet));
+  const remainingSet = new Set(pdfUrls.map(normalizeForSetComparison));
   let completed = 0;
 
   // Get manifest
@@ -1315,7 +1294,7 @@ async function startZipDownload(categories, pdfUrls, alreadyDownloadedCategories
           }
 
           // Normalize path for comparison (same normalization as pdfSet)
-          const normalizedForComparison = normalizeForSet(normalizedPath);
+          const normalizedForComparison = normalizeForSetComparison(normalizedPath);
           
           // Só cachear se o PDF está na lista de PDFs necessários
           // Check both normalized and original sets for maximum compatibility
@@ -1323,7 +1302,7 @@ async function startZipDownload(categories, pdfUrls, alreadyDownloadedCategories
                          pdfSetOriginal.has(normalizedPath) ||
                          pdfSetOriginal.has(normalizedPath.replace(/^\/+/, '')) ||
                          Array.from(pdfSetOriginal).some(url => {
-                           const urlNormalized = normalizeForSet(url);
+                           const urlNormalized = normalizeForSetComparison(url);
                            return urlNormalized === normalizedForComparison ||
                                   urlNormalized.endsWith(normalizedForComparison) ||
                                   normalizedForComparison.endsWith(urlNormalized);
@@ -1356,7 +1335,7 @@ async function startZipDownload(categories, pdfUrls, alreadyDownloadedCategories
 
           await cache.put(new Request(requestUrl), pdfResponse);
 
-          remainingSet.delete(normalizedPath);
+          remainingSet.delete(normalizedForComparison);
           completed++;
 
           const progress = total === 0 ? 100 : Math.min(99, Math.floor((completed / total) * 100));

@@ -6,7 +6,7 @@
   import GestureButton from '$lib/components/GestureButton.svelte';
   import CarouselNavigator from '$lib/components/CarouselNavigator.svelte';
   import { carousel } from '$lib/stores/carousel';
-  import { getPdfRelPath } from '$lib/utils/pathUtils';
+  import { getPdfRelPath, normalizePdfUrl } from '$lib/utils/pathUtils';
   import { loadPdfJsComplete, loadPdfJsViewer } from '$lib/utils/pdfjsLoader';
 
   // Type for PDF.js getDocument function
@@ -216,16 +216,19 @@
     pdfLoading = true;
     pdfError = null;
     
+    // Extract PDF path from URL and normalize using unified function (outside try for catch access)
+    const urlObj = new URL(fileUrl, window.location.origin);
+    const pdfPath = urlObj.pathname.startsWith('/') ? urlObj.pathname.substring(1) : urlObj.pathname;
+    const normalizedPath = normalizePdfUrl(pdfPath);
+    const normalizedFullUrl = new URL(`/${normalizedPath}`, window.location.origin).href;
+    
     try {
-      // Extract PDF path from URL
-      const urlObj = new URL(fileUrl, window.location.origin);
-      const pdfPath = urlObj.pathname.startsWith('/') ? urlObj.pathname.substring(1) : urlObj.pathname;
       
-      // VALIDAÇÃO: Check if PDF is available in cache
+      // VALIDAÇÃO: Check if PDF is available in cache using normalized path
       const { validatePdfAvailability } = await import('$lib/utils/pdfValidation');
       const { downloadPDFsViaSW } = await import('$lib/utils/swRegistration');
       
-      const validation = await validatePdfAvailability(pdfPath);
+      const validation = await validatePdfAvailability(normalizedPath);
       
       if (!validation.available) {
         // Try to download automatically if online
@@ -261,8 +264,8 @@
         }
       }
       
-      // PDF is available, load normally
-      const loadingTask = getDocument({ url: fileUrl, withCredentials: false });
+      // PDF is available, load using normalized URL for consistency with cache
+      const loadingTask = getDocument({ url: normalizedFullUrl, withCredentials: false });
       const pdfDocument = await loadingTask.promise;
       linkService.setDocument(pdfDocument);
       viewer.setDocument(pdfDocument);
@@ -273,13 +276,57 @@
       pdfError = null;
     } catch (error) {
       console.error('[Leitor] Erro ao carregar PDF:', error);
-      pdfError = 'Erro ao carregar PDF. Verifique se o arquivo está disponível.';
       
-      // Try retry if still have attempts
-      if (retryCount < MAX_RETRIES && navigator.onLine) {
-        retryCount++;
-        setTimeout(() => load(fileUrl), 2000);
-        return;
+      // Try fallback variations if normalized URL failed
+      // Extract PDF path from URL for fallback attempts
+      const urlObj = new URL(fileUrl, window.location.origin);
+      const pdfPath = urlObj.pathname.startsWith('/') ? urlObj.pathname.substring(1) : urlObj.pathname;
+      const normalizedPath = normalizePdfUrl(pdfPath);
+      
+      // Try variations of the URL
+      const urlVariations = [
+        normalizedFullUrl, // Already tried, but keep for reference
+        new URL(`/${normalizedPath}`, window.location.origin).href, // Normalized with leading slash
+        new URL(normalizedPath, window.location.origin).href, // Normalized without leading slash
+        fileUrl, // Original URL
+        new URL(`/${pdfPath}`, window.location.origin).href, // Original path with leading slash
+        new URL(pdfPath, window.location.origin).href // Original path without leading slash
+      ];
+      
+      // Remove duplicates and already tried URL
+      const uniqueVariations = [...new Set(urlVariations)].filter(url => url !== normalizedFullUrl);
+      
+      let loadedSuccessfully = false;
+      for (const variationUrl of uniqueVariations) {
+        try {
+          console.log(`[Leitor] Tentando variação de URL: ${variationUrl}`);
+          const loadingTask = getDocument({ url: variationUrl, withCredentials: false });
+          const pdfDocument = await loadingTask.promise;
+          linkService.setDocument(pdfDocument);
+          viewer.setDocument(pdfDocument);
+          totalPages = pdfDocument.numPages ?? 0;
+          currentPage = 1;
+          lastLoadedFile = variationUrl;
+          retryCount = 0;
+          pdfError = null;
+          loadedSuccessfully = true;
+          console.log(`[Leitor] PDF carregado com sucesso usando variação: ${variationUrl}`);
+          break;
+        } catch (variationError) {
+          // Continue to next variation
+          continue;
+        }
+      }
+      
+      if (!loadedSuccessfully) {
+        pdfError = 'Erro ao carregar PDF. Verifique se o arquivo está disponível.';
+        
+        // Try retry if still have attempts
+        if (retryCount < MAX_RETRIES && navigator.onLine) {
+          retryCount++;
+          setTimeout(() => load(fileUrl), 2000);
+          return;
+        }
       }
     } finally {
       pdfLoading = false;

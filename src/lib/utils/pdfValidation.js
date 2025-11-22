@@ -2,7 +2,7 @@
 // Validates PDF availability and identifies missing PDFs
 
 import { getCachedPDFsFast, waitForServiceWorker, downloadPDFsViaSW, invalidateCachedPDFsLocal, getCachedPDFs } from '$lib/utils/swRegistration';
-import { getPdfRelPath } from '$lib/utils/pathUtils';
+import { getPdfRelPath, normalizePdfUrl } from '$lib/utils/pathUtils';
 import { isPdfAvailableInIndex } from '$lib/utils/pdfIndex';
 
 /**
@@ -64,13 +64,13 @@ export async function validatePdfAvailability(pdfPath) {
     let cachedPdfs = await getCachedPDFsFast();
     
     // Normalize target path using centralized function
-    const normalizedTarget = normalizePathForComparison(normalizedPath);
+    const normalizedTarget = normalizePdfUrl(normalizedPath);
     
     // Helper function to check if PDF is in cached set
     const checkPdfInCache = (pdfList) => {
       const normalizedCacheSet = new Set();
       pdfList.forEach(url => {
-        const normalized = normalizePathForComparison(url);
+        const normalized = normalizePdfUrl(url);
         normalizedCacheSet.add(normalized);
         
         // Also add filename-only variation
@@ -78,14 +78,14 @@ export async function validatePdfAvailability(pdfPath) {
           const urlObj = new URL(url);
           const filename = urlObj.pathname.split('/').pop();
           if (filename) {
-            const normalizedFilename = normalizePathForComparison(filename);
+            const normalizedFilename = normalizePdfUrl(filename);
             normalizedCacheSet.add(normalizedFilename);
           }
         } catch {
           const parts = url.split('/');
           const filename = parts[parts.length - 1];
           if (filename) {
-            const normalizedFilename = normalizePathForComparison(filename);
+            const normalizedFilename = normalizePdfUrl(filename);
             normalizedCacheSet.add(normalizedFilename);
           }
         }
@@ -228,54 +228,6 @@ export async function ensurePdfAvailable(pdfPath) {
 }
 
 /**
- * Normalize path for comparison (handles encoding, case, and path variations)
- * Centralized function to ensure consistent normalization across all PDF comparison operations
- * @param {string} path - Path to normalize
- * @returns {string} - Normalized path
- */
-export function normalizePathForComparison(path) {
-  if (!path) return '';
-  
-  try {
-    // Remove protocol and domain if present
-    let normalized = path.replace(/^https?:\/\/[^/]+/, '');
-    
-    // Remove leading/trailing slashes
-    normalized = normalized.replace(/^\/+/, '').replace(/\/+$/, '');
-    
-    // Decode URI encoding (handle multiple encodings)
-    try {
-      // Try decoding up to 3 times to handle double/triple encoding
-      for (let i = 0; i < 3; i++) {
-        if (normalized.includes('%')) {
-          const decoded = decodeURIComponent(normalized);
-          if (decoded !== normalized) {
-            normalized = decoded;
-          } else {
-            break;
-          }
-        } else {
-          break;
-        }
-      }
-    } catch {
-      // If decoding fails, continue with original
-    }
-    
-    // Normalize to lowercase
-    normalized = normalized.toLowerCase();
-    
-    // Normalize path separators
-    normalized = normalized.replace(/\\/g, '/');
-    
-    return normalized;
-  } catch {
-    // Fallback: simple normalization
-    return path.toLowerCase().replace(/^\/+/, '').replace(/\\/g, '/');
-  }
-}
-
-/**
  * Finds missing PDFs by comparing louvores with cached PDFs
  * @param {Array} louvores - Array of louvor objects
  * @param {Array} cachedPdfs - Array of cached PDF URLs
@@ -296,7 +248,7 @@ export function findMissingPdfs(louvores, cachedPdfs) {
   const normalizedCacheVariations = new Map(); // Map normalized -> original for debugging
   
   cachedPdfs.forEach(url => {
-    const normalized = normalizePathForComparison(url);
+    const normalized = normalizePdfUrl(url);
     normalizedCacheSet.add(normalized);
     normalizedCacheVariations.set(normalized, url);
     
@@ -305,14 +257,14 @@ export function findMissingPdfs(louvores, cachedPdfs) {
       const urlObj = new URL(url);
       const filename = urlObj.pathname.split('/').pop();
       if (filename) {
-        const normalizedFilename = normalizePathForComparison(filename);
+        const normalizedFilename = normalizePdfUrl(filename);
         normalizedCacheSet.add(normalizedFilename);
       }
     } catch {
       const parts = url.split('/');
       const filename = parts[parts.length - 1];
       if (filename) {
-        const normalizedFilename = normalizePathForComparison(filename);
+        const normalizedFilename = normalizePdfUrl(filename);
         normalizedCacheSet.add(normalizedFilename);
       }
     }
@@ -332,7 +284,7 @@ export function findMissingPdfs(louvores, cachedPdfs) {
     }
 
     // Normalize expected path
-    const normalizedPath = normalizePathForComparison(pdfPath);
+    const normalizedPath = normalizePdfUrl(pdfPath);
     
     // Check multiple matching strategies
     let isCached = false;
