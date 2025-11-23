@@ -319,6 +319,9 @@
       // Listen for cache sync events
       window.addEventListener('cache-sync-required', handleCacheSyncRequired);
       
+      // Listen for offline cache updated events (from download completion)
+      window.addEventListener('offline-cache-updated', handleOfflineCacheUpdated);
+      
       // Check for sync needed on window focus
       window.addEventListener('focus', checkSyncOnFocus);
       
@@ -346,6 +349,7 @@
         categoryObserver = null;
       }
       window.removeEventListener('cache-sync-required', handleCacheSyncRequired);
+      window.removeEventListener('offline-cache-updated', handleOfflineCacheUpdated);
       window.removeEventListener('focus', checkSyncOnFocus);
       if (syncCheckInterval) clearInterval(syncCheckInterval);
     };
@@ -377,6 +381,40 @@
     const changed = await checkCacheVersionChanged();
     if (changed) {
       needsSync = true;
+    }
+  }
+
+  /**
+   * Handle offline cache updated event
+   * This is fired when PDFs are downloaded and cached
+   */
+  async function handleOfflineCacheUpdated(event) {
+    if (event instanceof CustomEvent) {
+      console.log('[Offline Page] Cache updated event received:', event.detail);
+      
+      // Reload cached PDFs list to get updated count
+      await offline.loadCachedPdfsList();
+      
+      // Update downloaded categories
+      const updatedDownloaded = await offline.checkAndUpdateDownloadedCategories();
+      downloadedCategories = updatedDownloaded;
+      
+      // Ensure downloaded categories are selected
+      updatedDownloaded.forEach((cat) => {
+        if (!selectedCategories.includes(cat)) {
+          selectedCategories = [...selectedCategories, cat];
+        }
+      });
+      
+      // Invalidate stats cache and reload for affected categories
+      if (updatedDownloaded.length > 0) {
+        invalidateCategories(updatedDownloaded);
+        updatedDownloaded.forEach(cat => statsCache.delete(cat));
+        loadedCategories.clear();
+        
+        // Reload stats for updated categories
+        await loadCategoryStatsForCategories(updatedDownloaded, true);
+      }
     }
   }
   
@@ -776,7 +814,7 @@
         </div>
       {/if}
     
-    {#if !downloading && progress < 100 && !isInitializing}
+    {#if !isInitializing}
 
       <!-- Sync banner -->
       {#if needsSync}

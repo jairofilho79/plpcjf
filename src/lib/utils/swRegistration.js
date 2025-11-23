@@ -337,12 +337,21 @@ export function setupServiceWorkerMessageListener() {
       // Update cache version
       await updateCacheVersion();
       
-      // Dispatch custom event for components
+      // Dispatch custom event for components (cache sync)
       if (typeof window !== 'undefined' && window.dispatchEvent) {
         window.dispatchEvent(new CustomEvent('cache-sync-required', {
           detail: { 
             source: 'service-worker', 
             timestamp: event.data.timestamp,
+            cleared: event.data.cleared || false
+          }
+        }));
+        
+        // Also dispatch offline-cache-updated event for offline page
+        window.dispatchEvent(new CustomEvent('offline-cache-updated', {
+          detail: {
+            source: 'service-worker',
+            timestamp: event.data.timestamp || Date.now(),
             cleared: event.data.cleared || false
           }
         }));

@@ -184,11 +184,17 @@ async function initialize() {
 /**
  * Load list of cached PDFs from service worker
  */
-async function loadCachedPdfsList() {
+async function loadCachedPdfsList(forceRefresh = false) {
   try {
     // FASE 3: Limpar cache de memoização quando recarregamos lista de PDFs
     // pois os dados podem ter mudado
     clearStatsCalculationCache();
+    
+    // If force refresh, invalidate local cache first
+    if (forceRefresh && browser) {
+      const { invalidateCachedPDFsLocal } = await import('$lib/utils/swRegistration');
+      invalidateCachedPDFsLocal();
+    }
     
     const cachedUrls = await getCachedPDFsFast();
     
@@ -206,7 +212,7 @@ async function loadCachedPdfsList() {
       // Dispatch event to notify UI of cache update
       window.dispatchEvent(new CustomEvent('offline-cache-updated', {
         detail: {
-          source: 'cache-reload',
+          source: forceRefresh ? 'force-reload' : 'cache-reload',
           cachedCount: cachedUrls.length,
           timestamp: Date.now()
         }
@@ -218,6 +224,8 @@ async function loadCachedPdfsList() {
         clearAllValidationCache();
       }
     }
+    
+    console.log('[Offline Store] Loaded cached PDFs list:', cachedUrls.length, 'PDFs');
   } catch (error) {
     console.error('[Offline Store] Failed to load cached PDFs:', error);
   }
@@ -231,18 +239,33 @@ async function syncAfterDownload() {
   if (!browser) return;
   
   try {
-    // Wait a bit for Service Worker to process all cached PDFs
-    await new Promise(resolve => setTimeout(resolve, 500));
+    // Wait longer for Service Worker to process all cached PDFs
+    // Increased delay to ensure cache is fully updated
+    await new Promise(resolve => setTimeout(resolve, 1500));
     
-    // Reload cached PDFs list to get updated cache
-    await loadCachedPdfsList();
+    // Reload cached PDFs list with retry logic
+    let updatedCachedPdfs = [];
+    let retryCount = 0;
+    const maxRetries = 3;
     
-    // Get updated state
-    const updatedState = get(offlineState);
-    /**
-     * @type {any[]}
-     */
-    const updatedCachedPdfs = updatedState.cachedPdfs || [];
+    while (retryCount < maxRetries) {
+      // Force refresh on first attempt and retries
+      await loadCachedPdfsList(true);
+      
+      // Get updated state
+      const updatedState = get(offlineState);
+      updatedCachedPdfs = updatedState.cachedPdfs || [];
+      
+      // If we got PDFs, break. Otherwise retry after a delay
+      if (updatedCachedPdfs.length > 0 || retryCount === maxRetries - 1) {
+        break;
+      }
+      
+      retryCount++;
+      console.log(`[Offline Store] Retry ${retryCount}/${maxRetries} loading cached PDFs list...`);
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    }
+    
     /**
      * @type {any[]}
      */
@@ -258,6 +281,13 @@ async function syncAfterDownload() {
     
     // Save to OFFLINE_CATEGORIAS_SALVAS flag
     saveDownloadedCategories(completelyDownloaded);
+    
+    // Update state with new cached count
+    offlineState.update(state => ({
+      ...state,
+      cachedPdfs: updatedCachedPdfs,
+      cachedCount: updatedCachedPdfs.length
+    }));
     
     // Validate and clear error if no PDFs are actually missing
     const currentState = get(offlineState);
@@ -286,7 +316,10 @@ async function syncAfterDownload() {
       }
     }
     
-    console.log('[Offline Store] Post-download sync completed');
+    console.log('[Offline Store] Post-download sync completed', {
+      cachedPdfsCount: updatedCachedPdfs.length,
+      downloadedCategories: completelyDownloaded.length
+    });
   } catch (error) {
     console.error('[Offline Store] Error during post-download sync:', error);
   }
@@ -544,6 +577,21 @@ async function startZipDownloadWithSpecificParts(categories, pdfUrls, partsByCat
             failed: 0,
             progress
           }));
+
+          // Notify Service Worker about cache update every 10 PDFs or at the end
+          if (completed % 10 === 0 || completed === total) {
+            try {
+              if (navigator.serviceWorker && navigator.serviceWorker.controller) {
+                navigator.serviceWorker.controller.postMessage({
+                  type: 'CACHE_UPDATED',
+                  timestamp: Date.now(),
+                  source: 'zip-download'
+                });
+              }
+            } catch (err) {
+              console.warn('[Offline Store] Failed to notify Service Worker:', err);
+            }
+          }
         }
 
         // Remove o arquivo ZIP do cache após processar todos os PDFs
@@ -1491,6 +1539,21 @@ async function startZipDownload(categories, pdfUrls, alreadyDownloadedCategories
             failed: 0,
             progress
           }));
+
+          // Notify Service Worker about cache update every 10 PDFs or at the end
+          if (completed % 10 === 0 || completed === total) {
+            try {
+              if (navigator.serviceWorker && navigator.serviceWorker.controller) {
+                navigator.serviceWorker.controller.postMessage({
+                  type: 'CACHE_UPDATED',
+                  timestamp: Date.now(),
+                  source: 'zip-download'
+                });
+              }
+            } catch (err) {
+              console.warn('[Offline Store] Failed to notify Service Worker:', err);
+            }
+          }
         }
 
         // Remove o arquivo ZIP do cache após processar todos os PDFs

@@ -200,7 +200,10 @@ self.addEventListener('fetch', (event) => {
                 cache.put(event.request, responseClone);
                 console.log('[SW] Cached PDF:', url.pathname);
                 // Notify clients that cache was updated
-                notifyClientsCacheUpdated();
+                // Use a small delay to batch notifications if multiple PDFs are being cached
+                setTimeout(() => {
+                  notifyClientsCacheUpdated({ source: 'fetch-handler' });
+                }, 100);
               });
             }
               return response;
@@ -405,6 +408,12 @@ self.addEventListener('message', (event) => {
     
     case 'SKIP_WAITING':
       self.skipWaiting();
+      break;
+    
+    case 'CACHE_UPDATED':
+      // Client is notifying that cache was updated (e.g., from ZIP download)
+      // Forward notification to all clients
+      notifyClientsCacheUpdated({ source: data?.source || 'client' });
       break;
     
     default:
