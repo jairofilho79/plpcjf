@@ -829,12 +829,23 @@ async function verifyPdfInCacheStorage(pdfUrl) {
   
   try {
     const cache = await openPdfCache();
-    // Try multiple URL formats for compatibility
+    
+    // CRITICAL: Cache stores with URL encoding (new URL() does automatic encoding)
+    // So we must try with URL encoding FIRST to match what's actually stored
+    // Ensure pdfUrl is a string
+    const pdfUrlStr = typeof pdfUrl === 'string' ? pdfUrl : String(pdfUrl);
+    
     const urlVariations = [
-      pdfUrl,
-      pdfUrl.startsWith('/') ? pdfUrl : `/${pdfUrl}`,
-      pdfUrl.replace(/^\/+/, ''),
-      new URL(pdfUrl, location.origin).toString()
+      // Try with URL encoding first (as stored in cache by new URL())
+      new URL(pdfUrlStr, location.origin).toString(),
+      // Also try with explicit encoding
+      new URL(encodeURI(pdfUrlStr), location.origin).toString(),
+      // Try path with leading slash and encoding
+      new URL(pdfUrlStr.startsWith('/') ? pdfUrlStr : `/${pdfUrlStr}`, location.origin).toString(),
+      // Fallback: try without encoding (for compatibility)
+      pdfUrlStr.startsWith('/') ? pdfUrlStr : `/${pdfUrlStr}`,
+      pdfUrlStr.replace(/^\/+/, ''),
+      pdfUrlStr
     ];
     
     for (const url of urlVariations) {
@@ -905,62 +916,53 @@ async function isCategoryCompletelyDownloaded(category, cachedPdfs, louvoresData
     // Normalize PDF URL for comparison using unified function
     const normalizedPdfUrl = normalizePdfUrl(pdfUrl);
 
-    // Check if PDF is in cache using multiple strategies
+    // CRITICAL: Always verify directly in Cache Storage first
+    // The cache stores with URL encoding, so direct verification is most reliable
     let isCached = false;
     
-    // Strategy 1: Exact match (most reliable)
-    if (normalizedCachedPdfs.has(normalizedPdfUrl)) {
+    // Primary strategy: Direct verification in Cache Storage (most reliable)
+    // This handles URL encoding correctly
+    const existsInCache = await verifyPdfInCacheStorage(pdfUrl);
+    if (existsInCache) {
       isCached = true;
       foundPdfs.add(normalizedPdfUrl);
     }
     
-    // Strategy 2: Filename match - DISABLED for strict mode or Gestos em Gravura
-    // This was causing false positives when multiple PDFs share the same filename
+    // Fallback strategies: Use normalized comparison only if direct verification fails
+    // This provides compatibility with old cache entries or edge cases
     if (!isCached && !strictMode) {
-      const filename = normalizedPdfUrl.split('/').pop();
-      if (filename && normalizedCachedPdfs.has(filename)) {
-        // Only accept if we can verify it's actually the right file
-        // For now, we'll be more conservative and skip this strategy
-        // isCached = true;
-      }
-    }
-    
-    // Strategy 3: Partial match (check if any cached path ends with expected path or vice versa)
-    // More restrictive: only check if cached path contains the full expected path
-    if (!isCached && !strictMode) {
-      isCached = Array.from(normalizedCachedPdfs).some(cached => {
-        // Check if paths match (handling different URL formats)
-        if (cached === normalizedPdfUrl) return true;
-        // Only accept if cached path ends with expected path (not vice versa)
-        // This prevents false matches when expected path is shorter
-        if (cached.endsWith(normalizedPdfUrl)) return true;
-        
-        // Check filename match only if paths are similar
-        const cachedFilename = cached.split('/').pop();
-        const expectedFilename = normalizedPdfUrl.split('/').pop();
-        if (cachedFilename && expectedFilename && cachedFilename === expectedFilename) {
-          // Additional check: paths should be similar (same directory structure)
-          const cachedDir = cached.replace(cachedFilename, '');
-          const expectedDir = normalizedPdfUrl.replace(expectedFilename, '');
-          if (cachedDir && expectedDir && cachedDir.includes(expectedDir)) {
-            return true;
-          }
-        }
-        
-        return false;
-      });
-      
-      if (isCached) {
-        foundPdfs.add(normalizedPdfUrl);
-      }
-    }
-
-    // FIX: Strict mode - verify directly in Cache Storage
-    if (strictMode && !isCached) {
-      const existsInCache = await verifyPdfInCacheStorage(pdfUrl);
-      if (existsInCache) {
+      // Strategy 1: Exact match in normalized list
+      if (normalizedCachedPdfs.has(normalizedPdfUrl)) {
         isCached = true;
         foundPdfs.add(normalizedPdfUrl);
+      }
+      
+      // Strategy 2: Partial match (check if any cached path ends with expected path)
+      if (!isCached) {
+        isCached = Array.from(normalizedCachedPdfs).some(cached => {
+          // Check if paths match (handling different URL formats)
+          if (cached === normalizedPdfUrl) return true;
+          // Only accept if cached path ends with expected path (not vice versa)
+          if (cached.endsWith(normalizedPdfUrl)) return true;
+          
+          // Check filename match only if paths are similar
+          const cachedFilename = cached.split('/').pop();
+          const expectedFilename = normalizedPdfUrl.split('/').pop();
+          if (cachedFilename && expectedFilename && cachedFilename === expectedFilename) {
+            // Additional check: paths should be similar (same directory structure)
+            const cachedDir = cached.replace(cachedFilename, '');
+            const expectedDir = normalizedPdfUrl.replace(expectedFilename, '');
+            if (cachedDir && expectedDir && cachedDir.includes(expectedDir)) {
+              return true;
+            }
+          }
+          
+          return false;
+        });
+        
+        if (isCached) {
+          foundPdfs.add(normalizedPdfUrl);
+        }
       }
     }
 
