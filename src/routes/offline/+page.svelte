@@ -20,6 +20,9 @@
     getCacheMetrics,
     getAllCachedStats
   } from '$lib/utils/statsCache';
+  import statsCalculator from '$lib/offline/stats/StatsCalculator.js';
+  import offlineEvents, { EVENTS as OFFLINE_EVENTS } from '$lib/offline/core/OfflineEvents.js';
+  import offlineManager from '$lib/offline/core/OfflineManager.js';
 
   // Selected categories for download
   /**
@@ -316,6 +319,26 @@
       });
       syncUnsubscribe = /** @type {(() => void) | null} */ (unsubscribe) || null;
       
+      // FASE 4: Listen for stats invalidation events
+      offlineEvents.on(OFFLINE_EVENTS.DOWNLOAD_COMPLETE, async (event) => {
+        const detail = event.detail || {};
+        const categories = detail.categories || [];
+        
+        if (categories.length > 0) {
+          console.log('[Offline Page] FASE 4: Stats invalidated for categories after download:', categories);
+          
+          // Remove from loaded categories to force reload
+          categories.forEach(cat => {
+            loadedCategories.delete(cat);
+          });
+          
+          // Reload stats for affected categories
+          await loadCategoryStatsForCategories(categories, true).catch(err => {
+            console.error('[Offline Page] Error reloading stats after download:', err);
+          });
+        }
+      });
+      
       // Listen for cache sync events
       window.addEventListener('cache-sync-required', handleCacheSyncRequired);
       
@@ -543,10 +566,14 @@
       if (statsToCalculate.length > 0) {
         const calculationPromises = statsToCalculate.map(async (category) => {
           const startTime = calculationStartTimes.get(category);
-          const stats = await offline.getCategoryAvailabilityStats(
+          // FASE 4: Use StatsCalculator directly for better performance
+          const stats = await statsCalculator.getCategoryStats(
             category,
-            $louvores,
-            cachedPdfs
+            {
+              louvoresData: $louvores,
+              cachedPdfs,
+              useCache: !force
+            }
           );
           const calcTime = performance.now() - startTime;
           recordCalculationTime(calcTime);
@@ -570,11 +597,13 @@
       
       // Get required packages info for selected categories
       if (selectedCategories.length > 0) {
+        // FASE 5: Use OfflineManager to get manifest
         let manifest = state.offlineManifest;
         if (!manifest) {
-          manifest = await offline.fetchOfflineManifest();
+          manifest = await offlineManager.getOfflineManifest();
         }
         if (manifest) {
+          // FASE 5: Use OfflineManager for required packages info
           requiredPackagesInfo = await offline.getRequiredPackagesInfo(
             selectedCategories,
             $louvores,
@@ -743,17 +772,21 @@
       return;
     }
     
-    await offline.downloadByCategories(categoriesToDownload);
+    // FASE 5: Use OfflineManager directly
+    await offlineManager.downloadCategories(categoriesToDownload, {
+      louvoresData: $louvores
+    });
     
     // After download completes, categories will be updated via reactive statement
   }
 
   /**
    * Cancel download
+   * FASE 5: Now uses OfflineManager directly
    */
   async function cancelDownload() {
     console.log('[Offline Page] Cancelling download');
-    await offline.cancelDownload();
+    await offlineManager.cancelDownload();
   }
 </script>
 

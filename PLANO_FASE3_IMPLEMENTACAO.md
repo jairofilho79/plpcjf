@@ -265,3 +265,4 @@ A Fase 3 completa o sistema de otimização de stats offline, adicionando:
 
 Essas melhorias resultam em uma experiência mais rápida e eficiente para o usuário, especialmente em dispositivos com recursos limitados.
 
+

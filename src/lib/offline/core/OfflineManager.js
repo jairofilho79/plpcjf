@@ -1,0 +1,568 @@
+/**
+ * Offline Manager
+ * Facade that orchestrates all offline functionality
+ * FASE 5: Unified interface for all offline operations
+ */
+
+import downloadManager from '../download/DownloadManager.js';
+import statsCalculator from '../stats/StatsCalculator.js';
+import cacheStorageAdapter from '../storage/CacheStorageAdapter.js';
+import manifestRepository from '../manifest/ManifestRepository.js';
+import compositeValidator from '../validation/CompositeValidator.js';
+import offlineEvents, { EVENTS } from './OfflineEvents.js';
+import cacheSync from '../storage/CacheSync.js';
+import cacheMigration from '../storage/CacheMigration.js';
+import { createLogger } from '../utils/OfflineLogger.js';
+import { browser } from '$app/environment';
+import { louvores } from '$lib/stores/louvores.js';
+import { get } from 'svelte/store';
+
+const logger = createLogger('OfflineManager');
+
+/**
+ * @typedef {Object} DownloadResult
+ * @property {boolean} success - Whether download succeeded
+ * @property {number} completed - Number of PDFs downloaded
+ * @property {number} failed - Number of failed downloads
+ * @property {number} total - Total PDFs to download
+ * @property {string[]} [errors] - Error messages
+ * @property {string[]} [categories] - Categories downloaded
+ */
+
+/**
+ * @typedef {Object} ValidationResult
+ * @property {boolean} available - Whether PDF is available
+ * @property {'cache' | 'index' | 'network' | 'unknown'} source - Source of validation
+ * @property {string} normalizedPath - Normalized PDF path
+ * @property {boolean} needsDownload - Whether PDF needs to be downloaded
+ * @property {string} [error] - Error message if validation failed
+ * @property {string} [url] - Full URL for the PDF
+ */
+
+/**
+ * @typedef {Object} CategoryStats
+ * @property {number} total - Total number of PDFs in category
+ * @property {number} available - Number of PDFs available in cache
+ * @property {number} missing - Number of PDFs missing from cache
+ * @property {number} percentage - Percentage of PDFs available (0-100)
+ */
+
+/**
+ * @typedef {Object} CategoryValidationResult
+ * @property {boolean} isComplete - Whether all PDFs in category are available
+ * @property {number} total - Total PDFs in category
+ * @property {number} available - Available PDFs
+ * @property {number} missing - Missing PDFs
+ * @property {string[]} missingPdfs - List of missing PDF paths
+ */
+
+/**
+ * Offline Manager
+ * Facade that provides unified interface for all offline operations
+ */
+class OfflineManager {
+  constructor() {
+    this.initialized = false;
+    this.initializationPromise = null;
+  }
+
+  /**
+   * Initialize offline manager
+   * Performs one-time setup tasks like cache migration
+   * @returns {Promise<void>}
+   */
+  async initialize() {
+    if (this.initialized) {
+      return;
+    }
+
+    if (this.initializationPromise) {
+      return this.initializationPromise;
+    }
+
+    this.initializationPromise = (async () => {
+      try {
+        logger.info('OfflineManager', 'Initializing...');
+
+        if (!browser) {
+          logger.warn('OfflineManager', 'Not in browser environment, skipping initialization');
+          this.initialized = true;
+          return;
+        }
+
+        // Run cache migration if needed
+        try {
+          await cacheMigration.migrate();
+        } catch (error) {
+          logger.warn('OfflineManager', 'Cache migration failed (non-critical)', error);
+        }
+
+        // Sync cache on initialization
+        try {
+          await cacheSync.sync();
+        } catch (error) {
+          logger.warn('OfflineManager', 'Initial cache sync failed (non-critical)', error);
+        }
+
+        this.initialized = true;
+        logger.info('OfflineManager', 'Initialization complete');
+      } catch (error) {
+        logger.error('OfflineManager', 'Initialization failed', error);
+        throw error;
+      } finally {
+        this.initializationPromise = null;
+      }
+    })();
+
+    return this.initializationPromise;
+  }
+
+  /**
+   * Download categories
+   * @param {string[]} categories - Categories to download
+   * @param {Object} [options] - Download options
+   * @param {Function} [options.onProgress] - Progress callback
+   * @param {Array} [options.louvoresData] - Louvores data (if not provided, will be fetched)
+   * @returns {Promise<DownloadResult>} Download result
+   */
+  async downloadCategories(categories, options = {}) {
+    await this.ensureInitialized();
+
+    if (!categories || categories.length === 0) {
+      return {
+        success: true,
+        completed: 0,
+        failed: 0,
+        total: 0,
+        categories: []
+      };
+    }
+
+    logger.info('OfflineManager', `Downloading ${categories.length} categories`);
+
+    try {
+      const result = await downloadManager.downloadCategories(categories, options);
+      return result;
+    } catch (error) {
+      logger.error('OfflineManager', 'Error downloading categories', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Download missing PDFs
+   * @param {string[]} pdfPaths - PDF paths to download
+   * @param {Object} [options] - Download options
+   * @param {Function} [options.onProgress] - Progress callback
+   * @returns {Promise<DownloadResult>} Download result
+   */
+  async downloadMissingPdfs(pdfPaths, options = {}) {
+    await this.ensureInitialized();
+
+    if (!pdfPaths || pdfPaths.length === 0) {
+      return {
+        success: true,
+        completed: 0,
+        failed: 0,
+        total: 0
+      };
+    }
+
+    logger.info('OfflineManager', `Downloading ${pdfPaths.length} PDFs`);
+
+    try {
+      // Note: DownloadManager.downloadPdfs() is not yet fully implemented
+      // For now, we'll need to use the existing approach or implement it
+      const result = await downloadManager.downloadPdfs(pdfPaths, options.onProgress);
+      return result;
+    } catch (error) {
+      // If individual PDF download is not implemented, fall back to category-based download
+      if (error.message.includes('not yet implemented')) {
+        logger.warn('OfflineManager', 'Individual PDF download not implemented, using category-based approach');
+        
+        // Extract categories from PDF paths
+        const louvoresData = options.louvoresData || get(louvores);
+        const categories = new Set();
+        
+        const { atobUTF8 } = await import('$lib/utils/pathUtils.js');
+        
+        for (const pdfPath of pdfPaths) {
+          const louvor = louvoresData.find(l => {
+            if (!l.pdfId) return false;
+            try {
+              const decoded = atobUTF8(l.pdfId);
+              return decoded.includes(pdfPath) || pdfPath.includes(decoded);
+            } catch {
+              return false;
+            }
+          });
+          
+          if (louvor) {
+            categories.add(louvor.categoria);
+          }
+        }
+        
+        if (categories.size > 0) {
+          return await this.downloadCategories(Array.from(categories), options);
+        }
+      }
+      
+      logger.error('OfflineManager', 'Error downloading PDFs', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Cancel current download
+   * @returns {Promise<void>}
+   */
+  async cancelDownload() {
+    logger.info('OfflineManager', 'Cancelling download');
+    await downloadManager.cancel();
+  }
+
+  /**
+   * Validate PDF availability
+   * @param {string} pdfPath - PDF path to validate
+   * @param {Object} [options] - Validation options
+   * @param {boolean} [options.useIndex] - Whether to use index (default: true)
+   * @param {boolean} [options.checkNetwork] - Whether to check network (default: true if online)
+   * @param {string} [options.pdfId] - PDF ID for index lookup
+   * @returns {Promise<ValidationResult>} Validation result
+   */
+  async validatePdfAvailability(pdfPath, options = {}) {
+    await this.ensureInitialized();
+
+    if (!pdfPath) {
+      return {
+        available: false,
+        source: 'unknown',
+        normalizedPath: '',
+        needsDownload: false,
+        error: 'Invalid PDF path'
+      };
+    }
+
+    logger.debug('OfflineManager', `Validating PDF: ${pdfPath}`);
+
+    try {
+      const result = await compositeValidator.validate(pdfPath, options);
+      return result;
+    } catch (error) {
+      logger.error('OfflineManager', 'Error validating PDF', error);
+      return {
+        available: false,
+        source: 'unknown',
+        normalizedPath: pdfPath,
+        needsDownload: navigator.onLine,
+        error: error.message
+      };
+    }
+  }
+
+  /**
+   * Validate category completeness
+   * @param {string} category - Category name
+   * @param {Object} [options] - Validation options
+   * @param {Array} [options.louvoresData] - Louvores data
+   * @returns {Promise<CategoryValidationResult>} Validation result
+   */
+  async validateCategory(category, options = {}) {
+    await this.ensureInitialized();
+
+    if (!category) {
+      return {
+        isComplete: false,
+        total: 0,
+        available: 0,
+        missing: 0,
+        missingPdfs: []
+      };
+    }
+
+    logger.debug('OfflineManager', `Validating category: ${category}`);
+
+    try {
+      const stats = await this.getCategoryStats(category, options);
+      const louvoresData = options.louvoresData || get(louvores);
+      
+      // Get missing PDFs
+      const categoryLouvores = louvoresData.filter(l => l.categoria === category);
+      const missingPdfs = [];
+      
+      const { atobUTF8 } = await import('$lib/utils/pathUtils.js');
+      
+      for (const louvor of categoryLouvores) {
+        if (!louvor.pdfId) continue;
+        
+        try {
+          const pdfPath = atobUTF8(louvor.pdfId);
+          const validation = await this.validatePdfAvailability(pdfPath, {
+            useIndex: true,
+            pdfId: louvor.pdfId
+          });
+          
+          if (!validation.available) {
+            missingPdfs.push(pdfPath);
+          }
+        } catch (error) {
+          logger.debug('OfflineManager', `Error validating PDF for louvor ${louvor.id}`, error);
+        }
+      }
+
+      return {
+        isComplete: stats.missing === 0,
+        total: stats.total,
+        available: stats.available,
+        missing: stats.missing,
+        missingPdfs
+      };
+    } catch (error) {
+      logger.error('OfflineManager', 'Error validating category', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Get category statistics
+   * @param {string} category - Category name
+   * @param {Object} [options] - Stats options
+   * @param {boolean} [options.useCache] - Use cached stats (default: true)
+   * @param {boolean} [options.forceRecalculate] - Force recalculation (default: false)
+   * @param {Array} [options.louvoresData] - Louvores data
+   * @param {Array} [options.cachedPdfs] - Cached PDFs list
+   * @returns {Promise<CategoryStats>} Category statistics
+   */
+  async getCategoryStats(category, options = {}) {
+    await this.ensureInitialized();
+
+    if (!category) {
+      return { total: 0, available: 0, missing: 0, percentage: 0 };
+    }
+
+    logger.debug('OfflineManager', `Getting stats for category: ${category}`);
+
+    try {
+      const stats = await statsCalculator.getCategoryStats(category, options);
+      return stats;
+    } catch (error) {
+      logger.error('OfflineManager', 'Error getting category stats', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Get all category statistics
+   * @param {Object} [options] - Stats options
+   * @param {boolean} [options.useCache] - Use cached stats (default: true)
+   * @param {Array} [options.louvoresData] - Louvores data
+   * @returns {Promise<Record<string, CategoryStats>>} All category statistics
+   */
+  async getAllStats(options = {}) {
+    await this.ensureInitialized();
+
+    logger.debug('OfflineManager', 'Getting all category stats');
+
+    try {
+      const louvoresData = options.louvoresData || get(louvores);
+      const categories = new Set(louvoresData.map(l => l.categoria));
+      const stats = {};
+
+      // Get stats for each category
+      for (const category of categories) {
+        try {
+          stats[category] = await this.getCategoryStats(category, options);
+        } catch (error) {
+          logger.warn('OfflineManager', `Error getting stats for category ${category}`, error);
+          stats[category] = { total: 0, available: 0, missing: 0, percentage: 0 };
+        }
+      }
+
+      return stats;
+    } catch (error) {
+      logger.error('OfflineManager', 'Error getting all stats', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Clear all cache
+   * @returns {Promise<void>}
+   */
+  async clearCache() {
+    await this.ensureInitialized();
+
+    logger.info('OfflineManager', 'Clearing cache');
+
+    try {
+      await cacheStorageAdapter.clear();
+      
+      // Invalidate stats cache
+      statsCalculator.invalidateAll();
+      
+      // Emit event
+      offlineEvents.emit(EVENTS.CACHE_CLEARED, {
+        timestamp: Date.now()
+      });
+    } catch (error) {
+      logger.error('OfflineManager', 'Error clearing cache', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Synchronize cache
+   * @param {Object} [options] - Sync options
+   * @param {boolean} [options.force] - Force sync even if recently synced
+   * @returns {Promise<void>}
+   */
+  async syncCache(options = {}) {
+    await this.ensureInitialized();
+
+    logger.debug('OfflineManager', 'Syncing cache');
+
+    try {
+      await cacheSync.sync(options);
+    } catch (error) {
+      logger.error('OfflineManager', 'Error syncing cache', error);
+      throw error;
+    }
+  }
+
+  /**
+   * List all cached PDFs
+   * @returns {Promise<string[]>} Array of normalized PDF paths
+   */
+  async listCachedPdfs() {
+    await this.ensureInitialized();
+
+    logger.debug('OfflineManager', 'Listing cached PDFs');
+
+    try {
+      const pdfs = await cacheStorageAdapter.listPdfs();
+      return pdfs;
+    } catch (error) {
+      logger.error('OfflineManager', 'Error listing cached PDFs', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Get louvores manifest
+   * @param {boolean} [useCache=true] - Use cache if available
+   * @returns {Promise<Array>} Louvores manifest array
+   */
+  async getLouvoresManifest(useCache = true) {
+    await this.ensureInitialized();
+
+    logger.debug('OfflineManager', 'Getting louvores manifest');
+
+    try {
+      const manifest = await manifestRepository.getLouvoresManifest(useCache);
+      return manifest;
+    } catch (error) {
+      logger.error('OfflineManager', 'Error getting louvores manifest', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Get offline manifest
+   * @param {boolean} [useCache=true] - Use cache if available
+   * @returns {Promise<Object>} Offline manifest object
+   */
+  async getOfflineManifest(useCache = true) {
+    await this.ensureInitialized();
+
+    logger.debug('OfflineManager', 'Getting offline manifest');
+
+    try {
+      const manifest = await manifestRepository.getOfflineManifest(useCache);
+      return manifest;
+    } catch (error) {
+      logger.error('OfflineManager', 'Error getting offline manifest', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Validate manifests integrity
+   * @returns {Promise<Object>} Validation result
+   */
+  async validateManifests() {
+    await this.ensureInitialized();
+
+    logger.debug('OfflineManager', 'Validating manifests');
+
+    try {
+      const louvoresManifest = await this.getLouvoresManifest();
+      const offlineManifest = await this.getOfflineManifest();
+
+      // Basic validation
+      const result = {
+        valid: true,
+        errors: [],
+        warnings: []
+      };
+
+      if (!louvoresManifest || !Array.isArray(louvoresManifest)) {
+        result.valid = false;
+        result.errors.push('Louvores manifest is invalid or missing');
+      }
+
+      if (!offlineManifest || !offlineManifest.packages) {
+        result.valid = false;
+        result.errors.push('Offline manifest is invalid or missing');
+      }
+
+      return result;
+    } catch (error) {
+      logger.error('OfflineManager', 'Error validating manifests', error);
+      return {
+        valid: false,
+        errors: [error.message],
+        warnings: []
+      };
+    }
+  }
+
+  /**
+   * Get current download progress
+   * @returns {Object|null} Progress object or null if not downloading
+   */
+  getDownloadProgress() {
+    return downloadManager.getProgress();
+  }
+
+  /**
+   * Check if currently downloading
+   * @returns {boolean} True if downloading
+   */
+  isDownloading() {
+    return downloadManager.isDownloadingNow();
+  }
+
+  /**
+   * Check if initialized
+   * @returns {boolean} True if initialized
+   */
+  isInitialized() {
+    return this.initialized;
+  }
+
+  /**
+   * Ensure manager is initialized
+   * @private
+   */
+  async ensureInitialized() {
+    if (!this.initialized) {
+      await this.initialize();
+    }
+  }
+}
+
+// Create singleton instance
+const offlineManager = new OfflineManager();
+
+export default offlineManager;
+
