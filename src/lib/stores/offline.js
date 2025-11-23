@@ -17,6 +17,9 @@ import { validateManifestsIntegrity } from '$lib/utils/manifestValidation';
 import { CATEGORY_OPTIONS } from './filters';
 import { atobUTF8 } from '$lib/utils/pathUtils';
 import { findMissingPdfs, findRequiredPackages } from '$lib/utils/pdfValidation';
+import downloadManager from '$lib/offline/download/DownloadManager.js';
+import offlineEvents, { EVENTS as OFFLINE_EVENTS } from '$lib/offline/core/OfflineEvents.js';
+import cacheMigration from '$lib/offline/storage/CacheMigration.js';
 
 const ALLOW_OFFLINE_KEY = 'ALLOW_OFFLINE';
 const CACHED_PDFS_KEY = 'cachedPdfsList';
@@ -158,6 +161,13 @@ async function initialize() {
   if (!browser) return;
 
   try {
+    // FASE 3: Run cache migration if needed
+    if (await cacheMigration.needsMigration()) {
+      console.log('[Offline Store] Running cache migration...');
+      const migrationResult = await cacheMigration.migrate();
+      console.log(`[Offline Store] Cache migration complete: ${migrationResult.migrated} migrated, ${migrationResult.errors} errors`);
+    }
+
     // Fetch offline manifest
     await fetchOfflineManifest();
 
@@ -1704,49 +1714,87 @@ async function downloadByCategories(categories) {
     window.open(leitorUrl, '_blank', 'noopener');
   }
 
-  // NOVA LÓGICA: Obter manifest e identificar lotes necessários
-  let manifest = state.offlineManifest;
-  if (!manifest) {
-    try {
-      manifest = await fetchOfflineManifest();
-    } catch (error) {
-      console.error('[Offline Store] Failed to fetch manifest:', error);
-      offlineState.update(s => ({
-        ...s,
-        error: 'Não foi possível carregar o manifest de pacotes offline. Tente novamente.'
+  // FASE 3: Use DownloadManager for downloads
+  try {
+    // Initialize state
+    offlineState.update(state => ({
+      ...state,
+      downloading: true,
+      autoDownloading: false,
+      progress: 0,
+      completed: 0,
+      failed: 0,
+      total: filteredLouvores.length,
+      selectedCategories: validCategories,
+      error: null
+    }));
+
+    // Setup progress listener
+    const progressHandler = (progress) => {
+      offlineState.update(state => ({
+        ...state,
+        progress: progress.progress,
+        completed: progress.completed,
+        failed: progress.failed,
+        total: progress.total
       }));
-      return;
+    };
+
+    offlineEvents.on(OFFLINE_EVENTS.DOWNLOAD_PROGRESS, progressHandler);
+
+    // Download using DownloadManager
+    const result = await downloadManager.downloadCategories(validCategories, {
+      louvoresData,
+      onProgress: progressHandler
+    });
+
+    // Remove progress listener
+    offlineEvents.off(OFFLINE_EVENTS.DOWNLOAD_PROGRESS, progressHandler);
+
+    // Update final state
+    offlineState.update(state => ({
+      ...state,
+      downloading: false,
+      progress: result.total === 0 ? 100 : Math.floor((result.completed / result.total) * 100),
+      completed: result.completed,
+      failed: result.failed,
+      error: result.failed > 0 ? `${result.failed} PDFs não foram encontrados nos pacotes selecionados.` : null
+    }));
+
+    // Sync after download
+    if (result.success || result.completed > 0) {
+      await syncAfterDownload();
+      
+      // Update downloaded categories
+      const completelyDownloaded = [];
+      for (const category of validCategories) {
+        const updatedCachedPdfs = await getCachedPDFsFast();
+        const isDownloaded = await isCategoryCompletelyDownloaded(category, updatedCachedPdfs, louvoresData);
+        if (isDownloaded) {
+          completelyDownloaded.push(category);
+        }
+      }
+      const currentDownloaded = getDownloadedCategories();
+      const updatedDownloaded = [...new Set([...currentDownloaded, ...completelyDownloaded])];
+      saveDownloadedCategories(updatedDownloaded);
     }
-  }
 
-  // Encontrar lotes necessários baseado nos PDFs faltantes
-  const requiredParts = findRequiredPackagesForMissing(missingPdfs, manifest);
-  
-  if (requiredParts.length === 0) {
-    console.warn('[Offline Store] No packages found for missing PDFs, falling back to full category download');
-    // Fallback: baixar todas as categorias se não conseguir identificar lotes
-    const pdfUrls = filteredLouvores.map(getPdfUrl).filter(url => url !== null);
-    await startZipDownload(validCategories, pdfUrls);
-    return;
-  }
-
-  console.log(`[Offline Store] Identified ${requiredParts.length} package parts needed for ${missingPdfs.length} missing PDFs`);
-
-  // Agrupar partes por categoria
-  const partsByCategory = {};
-  for (const part of requiredParts) {
-    if (!partsByCategory[part.category]) {
-      partsByCategory[part.category] = [];
+    // Update PDF index after download
+    if (browser && (result.success || result.completed > 0)) {
+      const { updatePdfIndexInBackground, invalidatePdfIndexSession } = await import('$lib/utils/pdfIndex');
+      invalidatePdfIndexSession();
+      updatePdfIndexInBackground(louvoresData);
     }
-    partsByCategory[part.category].push(part);
+
+  } catch (error) {
+    console.error('[Offline Store] Error during download:', error);
+    
+    offlineState.update(state => ({
+      ...state,
+      downloading: false,
+      error: error.message === 'DOWNLOAD_CANCELLED' ? 'Download cancelado' : `Erro durante download: ${error.message}`
+    }));
   }
-
-  // Obter todos os PDFs das categorias (para validação durante extração)
-  const pdfUrls = filteredLouvores.map(getPdfUrl).filter(url => url !== null);
-  const categoriesToDownload = Object.keys(partsByCategory);
-
-  // Usar nova função que baixa apenas os lotes específicos
-  await startZipDownloadWithSpecificParts(categoriesToDownload, pdfUrls, partsByCategory, manifest);
 }
 
 
@@ -1757,6 +1805,14 @@ async function downloadByCategories(categories) {
 async function cancelDownload() {
   if (!browser) return;
 
+  // FASE 3: Use DownloadManager to cancel
+  try {
+    await downloadManager.cancel();
+  } catch (error) {
+    console.warn('[Offline Store] Error cancelling via DownloadManager:', error);
+  }
+
+  // Also cancel legacy download if active
   if (isZipDownloadActive) {
     zipDownloadCancelled = true;
     if (zipDownloadController) {
@@ -1766,24 +1822,20 @@ async function cancelDownload() {
         console.warn('[Offline Store] Failed to abort ZIP download controller:', err);
       }
     }
-
-    offlineState.update(state => ({
-      ...state,
-      error: 'Cancelando download...'
-    }));
-    return;
   }
 
+  // Cancel Service Worker download
   try {
     await cancelDownloadSW();
-    offlineState.update(state => ({
-      ...state,
-      downloading: false,
-      error: 'Download cancelado'
-    }));
   } catch (error) {
-    console.error('[Offline Store] Failed to cancel download:', error);
+    console.warn('[Offline Store] Error cancelling Service Worker download:', error);
   }
+
+  offlineState.update(state => ({
+    ...state,
+    downloading: false,
+    error: 'Download cancelado'
+  }));
 }
 
 /**
