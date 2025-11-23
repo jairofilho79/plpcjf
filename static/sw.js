@@ -1,9 +1,11 @@
 // Service Worker for PWA Offline Mode
 // Handles caching of PDFs and app resources for offline access
 
+// IMPORTANT: Cache names must match OfflineConfig.js
+// All environments use the same cache name to avoid mismatches
 const CACHE_VERSION = 'plpc-v3-dev';
 const APP_CACHE = `${CACHE_VERSION}-app`;
-const PDF_CACHE = `${CACHE_VERSION}-pdfs`;
+const PDF_CACHE = 'plpc-pdfs'; // Single cache name for all environments
 const PDFJS_CACHE = `${CACHE_VERSION}-pdfjs`;
 
 // Detect if we're in development mode

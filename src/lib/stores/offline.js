@@ -17,6 +17,7 @@ import { validateManifestsIntegrity } from '$lib/utils/manifestValidation';
 import { CATEGORY_OPTIONS } from './filters';
 import { atobUTF8 } from '$lib/utils/pathUtils';
 import { findMissingPdfs, findRequiredPackages } from '$lib/utils/pdfValidation';
+import { getConfig } from '$lib/offline/core/OfflineConfig.js';
 
 const ALLOW_OFFLINE_KEY = 'ALLOW_OFFLINE';
 const CACHED_PDFS_KEY = 'cachedPdfsList';
@@ -27,7 +28,8 @@ const OFFLINE_CATEGORIAS_SALVAS = 'OFFLINE_CATEGORIAS_SALVAS';
 const OFFLINE_MANIFEST_KEY = 'offlineManifest';
 
 const PACKAGES_BASE_PATH = '/packages';
-const DEFAULT_PDF_CACHE_FALLBACK = 'plpc-v2-pdfs';
+// Use centralized cache name from OfflineConfig - ensures consistency across all code
+const DEFAULT_PDF_CACHE_FALLBACK = getConfig('PDF_CACHE_NAME') || 'plpc-pdfs';
 /**
  * @type {AbortController | null}
  */
@@ -394,13 +396,8 @@ async function openPdfCache() {
     throw new Error('Caches API nao esta disponivel neste ambiente');
   }
 
-  const cacheKeys = await caches.keys();
-  const pdfCacheKey = cacheKeys.find(key => key.endsWith('-pdfs'));
-
-  if (pdfCacheKey) {
-    return caches.open(pdfCacheKey);
-  }
-
+  // Always use the configured cache name to ensure consistency
+  // Don't search for any cache ending with '-pdfs' as this can cause mismatches
   return caches.open(DEFAULT_PDF_CACHE_FALLBACK);
 }
 

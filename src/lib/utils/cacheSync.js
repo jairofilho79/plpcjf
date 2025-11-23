@@ -1,6 +1,8 @@
 // Cache Synchronization Utility
 // Handles synchronization between tabs and Service Worker notifications
 
+import { getConfig } from '$lib/offline/core/OfflineConfig.js';
+
 const CACHE_SYNC_CHANNEL = 'pdf-cache-sync';
 const CACHE_VERSION_KEY = 'pdfCacheVersion';
 
@@ -109,14 +111,9 @@ export async function getCacheVersion() {
   }
 
   try {
-    const cacheKeys = await caches.keys();
-    const pdfCacheKey = cacheKeys.find(key => key.endsWith('-pdfs'));
-    
-    if (!pdfCacheKey) {
-      return null;
-    }
-
-    const cache = await caches.open(pdfCacheKey);
+    // Use centralized cache name from OfflineConfig to ensure consistency
+    const pdfCacheName = getConfig('PDF_CACHE_NAME') || getConfig('DEFAULT_PDF_CACHE_FALLBACK') || 'plpc-pdfs';
+    const cache = await caches.open(pdfCacheName);
     const keys = await cache.keys();
     
     // Generate version based on count and a hash of URLs

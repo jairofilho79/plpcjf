@@ -7,6 +7,7 @@ import cacheStorageAdapter from './CacheStorageAdapter.js';
 import urlNormalizer from '../normalization/UrlNormalizer.js';
 import { createLogger } from '../utils/OfflineLogger.js';
 import { browser } from '$app/environment';
+import { getConfig } from '../core/OfflineConfig.js';
 
 const logger = createLogger('CacheMigration');
 const MIGRATION_COMPLETE_KEY = 'cache_migration_v1_complete';
@@ -71,7 +72,9 @@ export class CacheMigration {
         return { migrated: 0, errors: 0 };
       }
 
-      const cache = await caches.open('plpc-v2-pdfs');
+      // Use centralized cache name from OfflineConfig
+      const pdfCacheName = getConfig('PDF_CACHE_NAME') || getConfig('DEFAULT_PDF_CACHE_FALLBACK') || 'plpc-pdfs';
+      const cache = await caches.open(pdfCacheName);
       const keys = await cache.keys();
 
       logger.info('CacheMigration', `Found ${keys.length} cache entries to check`);

@@ -21,7 +21,8 @@ export class CacheStorageAdapter extends CacheRepository {
    */
   constructor(cacheName = null) {
     super();
-    this.cacheName = cacheName || getConfig('DEFAULT_PDF_CACHE_FALLBACK');
+    // Use PDF_CACHE_NAME first, fallback to DEFAULT_PDF_CACHE_FALLBACK for backward compatibility
+    this.cacheName = cacheName || getConfig('PDF_CACHE_NAME') || getConfig('DEFAULT_PDF_CACHE_FALLBACK') || 'plpc-pdfs';
     this._cachePromise = null;
     
     // Cache de variações testadas para otimizar performance

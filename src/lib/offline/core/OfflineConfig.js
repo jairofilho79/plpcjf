@@ -23,8 +23,11 @@
  */
 const config = {
   // Cache configuration
-  DEFAULT_PDF_CACHE_FALLBACK: 'plpc-v2-pdfs',
-  ALLOWED_CACHE_NAMES: ['plpc-v2-pdfs', 'plpc-pdfs', 'pdfs-cache'],
+  // IMPORTANT: Use a single cache name across all environments to avoid mismatches
+  // All code (service worker, offline.js, CacheStorageAdapter, etc.) must use the same name
+  PDF_CACHE_NAME: 'plpc-pdfs',
+  DEFAULT_PDF_CACHE_FALLBACK: 'plpc-pdfs', // Deprecated: use PDF_CACHE_NAME instead
+  ALLOWED_CACHE_NAMES: ['plpc-pdfs'],
 
   // Paths
   PACKAGES_BASE_PATH: '/packages',
