@@ -12,11 +12,17 @@ import {
 } from '$lib/utils/swRegistration';
 import { unzip } from 'fflate';
 import { louvores } from './louvores';
-import { normalizePdfUrl } from '$lib/utils/pathUtils';
+import urlNormalizer from '$lib/offline/normalization/UrlNormalizer.js';
 import { validateManifestsIntegrity } from '$lib/utils/manifestValidation';
 import { CATEGORY_OPTIONS } from './filters';
 import { atobUTF8 } from '$lib/utils/pathUtils';
 import { findMissingPdfs, findRequiredPackages } from '$lib/utils/pdfValidation';
+import downloadManager from '$lib/offline/download/DownloadManager.js';
+import offlineEvents, { EVENTS as OFFLINE_EVENTS } from '$lib/offline/core/OfflineEvents.js';
+import cacheMigration from '$lib/offline/storage/CacheMigration.js';
+import statsCalculator from '$lib/offline/stats/StatsCalculator.js';
+import cacheSync from '$lib/offline/storage/CacheSync.js';
+import offlineManager from '$lib/offline/core/OfflineManager.js';
 
 const ALLOW_OFFLINE_KEY = 'ALLOW_OFFLINE';
 const CACHED_PDFS_KEY = 'cachedPdfsList';
@@ -57,18 +63,12 @@ const offlineState = writable(initialState);
 
 /**
  * Fetch offline manifest from backend
+ * FASE 5: Now uses OfflineManager
  */
 async function fetchOfflineManifest() {
   try {
-    const response = await fetch('/offline-manifest.json', {
-      cache: 'no-cache'
-    });
-
-    if (!response.ok) {
-      throw new Error(`Failed to fetch offline manifest: ${response.status}`);
-    }
-
-    const manifest = await response.json();
+    // FASE 5: Use OfflineManager to get manifest
+    const manifest = await offlineManager.getOfflineManifest(true);
     
     // Calculate category sizes
     const categorySizes = {};
@@ -153,11 +153,22 @@ async function fetchOfflineManifest() {
 
 /**
  * Initialize offline store
+ * FASE 5: Now initializes OfflineManager
  */
 async function initialize() {
   if (!browser) return;
 
   try {
+    // FASE 5: Initialize OfflineManager first (it handles cache migration internally)
+    await offlineManager.initialize();
+
+    // FASE 3: Run cache migration if needed (backup, OfflineManager also does this)
+    if (await cacheMigration.needsMigration()) {
+      console.log('[Offline Store] Running cache migration...');
+      const migrationResult = await cacheMigration.migrate();
+      console.log(`[Offline Store] Cache migration complete: ${migrationResult.migrated} migrated, ${migrationResult.errors} errors`);
+    }
+
     // Fetch offline manifest
     await fetchOfflineManifest();
 
@@ -259,6 +270,23 @@ async function syncAfterDownload() {
     // Save to OFFLINE_CATEGORIAS_SALVAS flag
     saveDownloadedCategories(completelyDownloaded);
     
+    // FASE 4: Invalidate stats for affected categories
+    // Identify which categories might have been affected by the download
+    const allCategories = [...new Set(louvoresData.map(l => l.categoria).filter(Boolean))];
+    const affectedCategories = allCategories.filter(cat => {
+      // Invalidate categories that were just marked as downloaded or might have changed
+      return completelyDownloaded.includes(cat);
+    });
+    
+    if (affectedCategories.length > 0) {
+      affectedCategories.forEach(category => {
+        statsCalculator.invalidateCategory(category);
+      });
+    }
+    
+    // Sync caches
+    await cacheSync.sync();
+    
     // Validate and clear error if no PDFs are actually missing
     const currentState = get(offlineState);
     if (currentState.error) {
@@ -353,8 +381,8 @@ function normalizeZipEntryName(entryName) {
   }
 
   // Use unified normalization function for consistency
-  // normalizePdfUrl handles trimming, URI decoding, lowercase, path separators, and ensures assets/ prefix
-  const normalized = normalizePdfUrl(entryName);
+  // urlNormalizer handles trimming, URI decoding, lowercase, path separators, and ensures assets/ prefix
+  const normalized = urlNormalizer.normalizePdfUrl(entryName);
 
   if (!normalized || normalized.endsWith('/')) {
     return '';
@@ -409,7 +437,7 @@ async function startZipDownloadWithSpecificParts(categories, pdfUrls, partsByCat
   // Normalize PDF URLs for comparison using unified function
   // Add leading slash for set comparison consistency
   const normalizeForSetComparison = (/** @type {string} */ url) => {
-    const normalized = normalizePdfUrl(url);
+    const normalized = urlNormalizer.normalizePdfUrl(url);
     return normalized ? `/${normalized}` : '';
   };
   
@@ -789,7 +817,7 @@ async function isCategoryCompletelyDownloaded(category, cachedPdfs, louvoresData
 
   // Normalize cached PDFs URLs for comparison using unified function
   const normalizedCachedPdfs = new Set(
-    cachedPdfs.map((/** @type {string} */ url) => normalizePdfUrl(url))
+    cachedPdfs.map((/** @type {string} */ url) => urlNormalizer.normalizePdfUrl(url))
   );
 
   // Track unique PDFs found for counting validation
@@ -804,7 +832,7 @@ async function isCategoryCompletelyDownloaded(category, cachedPdfs, louvoresData
     }
 
     // Normalize PDF URL for comparison using unified function
-    const normalizedPdfUrl = normalizePdfUrl(pdfUrl);
+    const normalizedPdfUrl = urlNormalizer.normalizePdfUrl(pdfUrl);
 
     // Check if PDF is in cache using multiple strategies
     let isCached = false;
@@ -1015,26 +1043,31 @@ function getPdfUrl(louvor) {
 
 /**
  * Identifies missing PDFs by comparing louvores-manifest.json with cache
+ * FASE 5: Wrapper removed, use findMissingPdfs directly from pdfValidation
  * @param {Array} louvoresData - Array of louvor objects
  * @param {Array} cachedPdfs - Array of cached PDF URLs
  * @returns {Array} - Array of louvor objects with missing PDFs
  */
 function identifyMissingPdfs(louvoresData, cachedPdfs) {
+  // FASE 5: Direct call to pdfValidation utility
   return findMissingPdfs(louvoresData, cachedPdfs);
 }
 
 /**
  * Finds required packages based on missing PDFs and offline manifest
+ * FASE 5: Wrapper removed, use findRequiredPackages directly from pdfValidation
  * @param {Array} missingPdfs - Array of louvor objects with missing PDFs
  * @param {Object} offlineManifest - Offline manifest object
  * @returns {Array} - Array of package parts that need to be downloaded
  */
 function findRequiredPackagesForMissing(missingPdfs, offlineManifest) {
+  // FASE 5: Direct call to pdfValidation utility
   return findRequiredPackages(missingPdfs, offlineManifest);
 }
 
 /**
  * Downloads only the packages needed for missing PDFs
+ * FASE 5: Refactored to use OfflineManager
  * @param {Array} missingPdfs - Array of louvor objects with missing PDFs
  * @returns {Promise<void>}
  */
@@ -1043,153 +1076,59 @@ async function downloadMissingPackages(missingPdfs) {
     return;
   }
 
-  // Get offline manifest
-  const state = get(offlineState);
-  let manifest = state.offlineManifest;
-
-  if (!manifest) {
-    try {
-      manifest = await fetchOfflineManifest();
-    } catch (error) {
-      console.error('[Offline Store] Failed to fetch manifest:', error);
-      offlineState.update(s => ({
-        ...s,
-        error: 'Não foi possível carregar o manifest de pacotes offline.'
-      }));
-      return;
+  try {
+    // FASE 5: Extract categories from missing PDFs and use OfflineManager
+    const louvoresData = get(louvores);
+    const categories = new Set();
+    
+    for (const missingPdf of missingPdfs) {
+      if (missingPdf.categoria) {
+        categories.add(missingPdf.categoria);
+      }
     }
-  }
-
-  // Find required packages
-  const requiredParts = findRequiredPackagesForMissing(missingPdfs, manifest);
-
-  if (requiredParts.length === 0) {
-    console.log('[Offline Store] No packages needed for missing PDFs');
-    return;
-  }
-
-  console.log(`[Offline Store] Found ${requiredParts.length} packages needed for ${missingPdfs.length} missing PDFs`);
-
-  // Group by category and download
-  const categoriesToDownload = [...new Set(requiredParts.map(part => part.category))];
-  
-  // Get all PDF URLs for these categories
-  /**
-   * @type {any[]}
-   */
-  const louvoresData = get(louvores);
-  const pdfUrls = louvoresData
-    .filter(louvor => categoriesToDownload.includes(louvor.categoria))
-    .map(getPdfUrl)
-    .filter(url => url !== null);
-
-  if (pdfUrls.length > 0) {
-    // Use existing zip download function
-    await startZipDownload(categoriesToDownload, pdfUrls);
+    
+    if (categories.size > 0) {
+      // Use OfflineManager to download categories
+      await offlineManager.downloadCategories(Array.from(categories), {
+        louvoresData
+      });
+    }
+  } catch (error) {
+    console.error('[Offline Store] Failed to download missing packages:', error);
+    offlineState.update(s => ({
+      ...s,
+      error: `Erro ao baixar pacotes: ${error.message}`
+    }));
   }
 }
 
-// FASE 3: Cache de memoização para cálculos de stats
-const statsCalculationCache = new Map();
-const CACHE_KEY_SEPARATOR = '|||';
-
+// FASE 4: Cache de memoização removido - agora gerenciado por StatsCalculator
+// Mantendo função clearStatsCalculationCache para compatibilidade
 /**
- * FASE 3: Gerar chave de cache para memoização
- * @param {string} category - Categoria
- * @param {number} louvoresHash - Hash simples do número de louvores
- * @param {number} cachedPdfsHash - Hash simples do número de PDFs em cache
- * @returns {string} - Chave de cache
- */
-function getStatsCacheKey(category, louvoresHash, cachedPdfsHash) {
-  return `${category}${CACHE_KEY_SEPARATOR}${louvoresHash}${CACHE_KEY_SEPARATOR}${cachedPdfsHash}`;
-}
-
-/**
- * FASE 3: Limpar cache de memoização (chamado quando há mudanças)
+ * FASE 4: Limpar cache de memoização (chamado quando há mudanças)
+ * Agora delega para StatsCalculator
  */
 function clearStatsCalculationCache() {
-  statsCalculationCache.clear();
+  // FASE 4: Invalidar cache via StatsCalculator
+  statsCalculator.invalidateAll();
 }
 
 /**
  * Get availability statistics for a category
- * FASE 3: Com memoização para otimizar cálculos repetidos
+ * FASE 5: Now uses OfflineManager, maintaining wrapper for compatibility
  * @param {string} category - Category name
  * @param {Array} louvoresData - All louvores
  * @param {Array} cachedPdfs - Cached PDF URLs
  * @returns {Promise<{total: number, available: number, missing: number, percentage: number}>}
  */
 async function getCategoryAvailabilityStats(category, louvoresData, cachedPdfs) {
-  if (!category || !louvoresData || !cachedPdfs) {
-    return { total: 0, available: 0, missing: 0, percentage: 0 };
-  }
-
-  // FASE 3: Verificar cache de memoização
-  const louvoresHash = louvoresData.length;
-  const cachedPdfsHash = cachedPdfs.length;
-  const cacheKey = getStatsCacheKey(category, louvoresHash, cachedPdfsHash);
-  
-  if (statsCalculationCache.has(cacheKey)) {
-    const cached = statsCalculationCache.get(cacheKey);
-    // Verificar se os dados ainda são válidos (mesmo número de louvores e PDFs)
-    if (cached.louvoresCount === louvoresData.length && 
-        cached.cachedPdfsCount === cachedPdfs.length) {
-      return cached.stats;
-    }
-  }
-
-  const categoryLouvores = louvoresData.filter(l => l.categoria === category);
-  const total = categoryLouvores.length;
-  
-  if (total === 0) {
-    const result = { total: 0, available: 0, missing: 0, percentage: 0 };
-    // Cachear resultado vazio também
-    statsCalculationCache.set(cacheKey, {
-      stats: result,
-      louvoresCount: louvoresData.length,
-      cachedPdfsCount: cachedPdfs.length
-    });
-    return result;
-  }
-
-  // FASE 3: Processar cálculo em chunks se houver muitos louvores
-  let missing;
-  if (categoryLouvores.length > 100) {
-    // Para categorias grandes, processar em chunks para não bloquear UI
-    missing = [];
-    const chunkSize = 50;
-    for (let i = 0; i < categoryLouvores.length; i += chunkSize) {
-      const chunk = categoryLouvores.slice(i, i + chunkSize);
-      const chunkMissing = identifyMissingPdfs(chunk, cachedPdfs);
-      missing.push(...chunkMissing);
-      // Yield para UI se necessário
-      if (i + chunkSize < categoryLouvores.length) {
-        await new Promise(resolve => setTimeout(resolve, 0));
-      }
-    }
-  } else {
-    missing = identifyMissingPdfs(categoryLouvores, cachedPdfs);
-  }
-
-  const available = total - missing.length;
-  const percentage = total > 0 ? Math.round((available / total) * 100) : 0;
-
-  const result = { total, available, missing: missing.length, percentage };
-  
-  // FASE 3: Cachear resultado
-  statsCalculationCache.set(cacheKey, {
-    stats: result,
-    louvoresCount: louvoresData.length,
-    cachedPdfsCount: cachedPdfs.length
+  // FASE 5: Use OfflineManager instead of direct StatsCalculator
+  // Maintain wrapper for compatibility with existing code
+  return await offlineManager.getCategoryStats(category, {
+    louvoresData,
+    cachedPdfs,
+    useCache: true
   });
-  
-  // Limitar tamanho do cache (manter apenas últimos 50)
-  if (statsCalculationCache.size > 50) {
-    const firstKey = statsCalculationCache.keys().next().value;
-    statsCalculationCache.delete(firstKey);
-  }
-
-  return result;
 }
 
 /**
@@ -1341,7 +1280,7 @@ async function startZipDownload(categories, pdfUrls, alreadyDownloadedCategories
   // Normalize PDF URLs for comparison using unified function
   // Add leading slash for set comparison consistency
   const normalizeForSetComparison = (/** @type {string} */ url) => {
-    const normalized = normalizePdfUrl(url);
+    const normalized = urlNormalizer.normalizePdfUrl(url);
     return normalized ? `/${normalized}` : '';
   };
   
@@ -1704,59 +1643,108 @@ async function downloadByCategories(categories) {
     window.open(leitorUrl, '_blank', 'noopener');
   }
 
-  // NOVA LÓGICA: Obter manifest e identificar lotes necessários
-  let manifest = state.offlineManifest;
-  if (!manifest) {
+    // FASE 5: Use OfflineManager for downloads
     try {
-      manifest = await fetchOfflineManifest();
-    } catch (error) {
-      console.error('[Offline Store] Failed to fetch manifest:', error);
-      offlineState.update(s => ({
-        ...s,
-        error: 'Não foi possível carregar o manifest de pacotes offline. Tente novamente.'
+      // Initialize state
+      offlineState.update(state => ({
+        ...state,
+        downloading: true,
+        autoDownloading: false,
+        progress: 0,
+        completed: 0,
+        failed: 0,
+        total: filteredLouvores.length,
+        selectedCategories: validCategories,
+        error: null
       }));
-      return;
+
+      // Setup progress listener
+      const progressHandler = (progress) => {
+        offlineState.update(state => ({
+          ...state,
+          progress: progress.progress,
+          completed: progress.completed,
+          failed: progress.failed,
+          total: progress.total
+        }));
+      };
+
+      offlineEvents.on(OFFLINE_EVENTS.DOWNLOAD_PROGRESS, progressHandler);
+
+      // FASE 5: Download using OfflineManager
+      const result = await offlineManager.downloadCategories(validCategories, {
+        louvoresData,
+        onProgress: progressHandler
+      });
+
+      // Remove progress listener
+      offlineEvents.off(OFFLINE_EVENTS.DOWNLOAD_PROGRESS, progressHandler);
+
+    // Update final state
+    offlineState.update(state => ({
+      ...state,
+      downloading: false,
+      progress: result.total === 0 ? 100 : Math.floor((result.completed / result.total) * 100),
+      completed: result.completed,
+      failed: result.failed,
+      error: result.failed > 0 ? `${result.failed} PDFs não foram encontrados nos pacotes selecionados.` : null
+    }));
+
+    // Sync after download
+    if (result.success || result.completed > 0) {
+      // FASE 5: Use OfflineManager to sync cache
+      await offlineManager.syncCache();
+      await syncAfterDownload();
+      
+      // Update downloaded categories
+      const completelyDownloaded = [];
+      for (const category of validCategories) {
+        const updatedCachedPdfs = await getCachedPDFsFast();
+        const isDownloaded = await isCategoryCompletelyDownloaded(category, updatedCachedPdfs, louvoresData);
+        if (isDownloaded) {
+          completelyDownloaded.push(category);
+        }
+      }
+      const currentDownloaded = getDownloadedCategories();
+      const updatedDownloaded = [...new Set([...currentDownloaded, ...completelyDownloaded])];
+      saveDownloadedCategories(updatedDownloaded);
     }
-  }
 
-  // Encontrar lotes necessários baseado nos PDFs faltantes
-  const requiredParts = findRequiredPackagesForMissing(missingPdfs, manifest);
-  
-  if (requiredParts.length === 0) {
-    console.warn('[Offline Store] No packages found for missing PDFs, falling back to full category download');
-    // Fallback: baixar todas as categorias se não conseguir identificar lotes
-    const pdfUrls = filteredLouvores.map(getPdfUrl).filter(url => url !== null);
-    await startZipDownload(validCategories, pdfUrls);
-    return;
-  }
-
-  console.log(`[Offline Store] Identified ${requiredParts.length} package parts needed for ${missingPdfs.length} missing PDFs`);
-
-  // Agrupar partes por categoria
-  const partsByCategory = {};
-  for (const part of requiredParts) {
-    if (!partsByCategory[part.category]) {
-      partsByCategory[part.category] = [];
+    // Update PDF index after download
+    if (browser && (result.success || result.completed > 0)) {
+      const { updatePdfIndexInBackground, invalidatePdfIndexSession } = await import('$lib/utils/pdfIndex');
+      invalidatePdfIndexSession();
+      updatePdfIndexInBackground(louvoresData);
     }
-    partsByCategory[part.category].push(part);
+
+  } catch (error) {
+    console.error('[Offline Store] Error during download:', error);
+    
+    offlineState.update(state => ({
+      ...state,
+      downloading: false,
+      error: error.message === 'DOWNLOAD_CANCELLED' ? 'Download cancelado' : `Erro durante download: ${error.message}`
+    }));
   }
-
-  // Obter todos os PDFs das categorias (para validação durante extração)
-  const pdfUrls = filteredLouvores.map(getPdfUrl).filter(url => url !== null);
-  const categoriesToDownload = Object.keys(partsByCategory);
-
-  // Usar nova função que baixa apenas os lotes específicos
-  await startZipDownloadWithSpecificParts(categoriesToDownload, pdfUrls, partsByCategory, manifest);
 }
 
 
 
 /**
  * Cancel ongoing download
+ * FASE 5: Now uses OfflineManager
  */
 async function cancelDownload() {
   if (!browser) return;
 
+  // FASE 5: Use OfflineManager to cancel
+  try {
+    await offlineManager.cancelDownload();
+  } catch (error) {
+    console.warn('[Offline Store] Error cancelling via OfflineManager:', error);
+  }
+
+  // Also cancel legacy download if active
   if (isZipDownloadActive) {
     zipDownloadCancelled = true;
     if (zipDownloadController) {
@@ -1766,33 +1754,34 @@ async function cancelDownload() {
         console.warn('[Offline Store] Failed to abort ZIP download controller:', err);
       }
     }
-
-    offlineState.update(state => ({
-      ...state,
-      error: 'Cancelando download...'
-    }));
-    return;
   }
 
+  // Cancel Service Worker download
   try {
     await cancelDownloadSW();
-    offlineState.update(state => ({
-      ...state,
-      downloading: false,
-      error: 'Download cancelado'
-    }));
   } catch (error) {
-    console.error('[Offline Store] Failed to cancel download:', error);
+    console.warn('[Offline Store] Error cancelling Service Worker download:', error);
   }
+
+  offlineState.update(state => ({
+    ...state,
+    downloading: false,
+    error: 'Download cancelado'
+  }));
 }
 
 /**
  * Clear all cached data
+ * FASE 5: Now uses OfflineManager
  */
 async function clearAllCache() {
   if (!browser) return;
 
   try {
+    // FASE 5: Use OfflineManager to clear cache
+    await offlineManager.clearCache();
+    
+    // Also clear Service Worker cache (legacy)
     await clearCacheSW();
     
     // Invalidate local PDFs cache
@@ -1861,11 +1850,42 @@ let isInitialized = false;
 /**
  * Lazy initialization function - must be called explicitly
  */
+/**
+ * FASE 4: Setup automatic stats invalidation on download complete
+ */
+function setupAutoStatsInvalidation() {
+  if (!browser) return;
+
+  // Listen for download complete events
+  offlineEvents.on(OFFLINE_EVENTS.DOWNLOAD_COMPLETE, async (event) => {
+    const detail = /** @type {{categories?: string[]}} */ (event.detail || {});
+    const categories = detail.categories || [];
+
+    if (categories.length > 0) {
+      console.log('[Offline Store] FASE 4: Invalidating stats for categories after download:', categories);
+      
+      // Invalidate stats for affected categories
+      categories.forEach((/** @type {string} */ category) => {
+        statsCalculator.invalidateCategory(category);
+      });
+
+      // Sync caches
+      await cacheSync.sync().catch(err => {
+        console.error('[Offline Store] Error syncing caches after download:', err);
+      });
+    }
+  });
+}
+
 async function lazyInitialize() {
   if (!browser || isInitialized) {
     return;
   }
   isInitialized = true;
+  
+  // FASE 4: Setup automatic stats invalidation
+  setupAutoStatsInvalidation();
+  
   await initialize();
 }
 
