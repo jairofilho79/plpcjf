@@ -220,14 +220,19 @@ export class CacheStorageAdapter extends CacheRepository {
 
       const cache = await this._openCache();
       
-      // STAGE 1 (Fast): Try original path first (as encoded in base64)
-      // This is the correct way - preserves case and accents
+      // STAGE 1 (Fast): Try original path with URL encoding FIRST
+      // CRITICAL: Cache stores with URL encoding (new URL() does automatic encoding)
+      // So we must try with encoding first to match what's actually stored
       const originalVariations = [
-        originalPath,
-        originalPath.startsWith('/') ? originalPath : `/${originalPath}`,
+        // Try with URL encoding first (as stored in cache by new URL())
         new URL(originalPath, window.location.origin).toString(),
-        encodeURI(originalPath),
-        new URL(encodeURI(originalPath), window.location.origin).toString()
+        // Also try with explicit encoding
+        new URL(encodeURI(originalPath), window.location.origin).toString(),
+        // Try path with leading slash and encoding
+        new URL(`/${originalPath}`, window.location.origin).toString(),
+        // Fallback: try without encoding (for compatibility)
+        originalPath.startsWith('/') ? originalPath : `/${originalPath}`,
+        originalPath
       ];
 
       for (const url of originalVariations) {
@@ -278,8 +283,11 @@ export class CacheStorageAdapter extends CacheRepository {
         }
       }
 
-      // STAGE 3 (Last resort): Try additional variations
+      // STAGE 3 (Last resort): Try additional variations with different encodings
+      // Try with encodeURIComponent (more aggressive encoding)
       const stage3Variations = [
+        new URL(encodeURIComponent(originalPath), window.location.origin).toString(),
+        // Try decoding and re-encoding (in case of double encoding)
         decodeURIComponent(originalPath),
         // Try filename-only matching as last resort (less reliable)
         originalPath.split('/').pop()
@@ -422,22 +430,27 @@ export class CacheStorageAdapter extends CacheRepository {
 
       const cache = await this._openCache();
       
-      // Try multiple URL variations (original path first)
+      // Try multiple URL variations (with URL encoding first, as stored in cache)
+      // CRITICAL: Cache stores with URL encoding (new URL() does automatic encoding)
       const urlVariations = [
-        originalPath,
-        originalPath.startsWith('/') ? originalPath : `/${originalPath}`,
+        // Try with URL encoding first (as stored in cache by new URL())
         new URL(originalPath, window.location.origin).toString(),
-        encodeURI(originalPath),
-        new URL(encodeURI(originalPath), window.location.origin).toString()
+        // Also try with explicit encoding
+        new URL(encodeURI(originalPath), window.location.origin).toString(),
+        // Try path with leading slash and encoding
+        new URL(`/${originalPath}`, window.location.origin).toString(),
+        // Fallback: try without encoding (for compatibility)
+        originalPath.startsWith('/') ? originalPath : `/${originalPath}`,
+        originalPath
       ];
 
       // Also try normalized path for compatibility
       const normalizedPath = this._normalizePath(pdfPath);
       if (normalizedPath && normalizedPath !== originalPath) {
         urlVariations.push(
-          normalizedPath,
+          new URL(normalizedPath, window.location.origin).toString(),
           normalizedPath.startsWith('/') ? normalizedPath : `/${normalizedPath}`,
-          new URL(normalizedPath, window.location.origin).toString()
+          normalizedPath
         );
       }
 
