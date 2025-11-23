@@ -131,8 +131,12 @@ class StatsCalculator {
         }
       }
 
-      // Filter louvores by category
-      const categoryLouvores = louvores.filter(l => l.categoria === category);
+      // Normalize category and get all variants (e.g., "Cifra" includes "Cifra nível I" and "Cifra nível II")
+      const normalizedCategory = this._normalizeCategory(category);
+      const categoryVariants = this._getCategoryVariants(normalizedCategory);
+      
+      // Filter louvores by category and its variants
+      const categoryLouvores = louvores.filter(l => categoryVariants.includes(l.categoria));
       const total = categoryLouvores.length;
 
       if (total === 0) {
@@ -207,8 +211,9 @@ class StatsCalculator {
       return {};
     }
 
-    // Get all unique categories
-    const categories = [...new Set(louvores.map(l => l.categoria).filter(Boolean))];
+      // Get all unique categories and normalize them
+      const allCategories = [...new Set(louvores.map(l => l.categoria).filter(Boolean))];
+      const categories = [...new Set(allCategories.map(cat => this._normalizeCategory(cat)))];
 
     // Load all cached stats if available
     if (useCache && !forceRecalculate) {
@@ -295,6 +300,33 @@ class StatsCalculator {
     this.invalidateAll();
 
     logger.debug('StatsCalculator', 'Stats sync completed');
+  }
+
+  /**
+   * Normalize category name - aggregates subcategories into main category
+   * @param {string} category - Category name to normalize
+   * @returns {string} Normalized category name
+   * @private
+   */
+  _normalizeCategory(category) {
+    if (!category) return category;
+    if (category === 'Cifra nível I' || category === 'Cifra nível II') {
+      return 'Cifra';
+    }
+    return category;
+  }
+
+  /**
+   * Get all categories that should be aggregated into a normalized category
+   * @param {string} normalizedCategory - Normalized category name
+   * @returns {string[]} Array of category names that map to this normalized category
+   * @private
+   */
+  _getCategoryVariants(normalizedCategory) {
+    if (normalizedCategory === 'Cifra') {
+      return ['Cifra', 'Cifra nível I', 'Cifra nível II'];
+    }
+    return [normalizedCategory];
   }
 
   /**

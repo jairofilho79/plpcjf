@@ -277,6 +277,13 @@
         const allCategories = [...new Set([...selectedCategories, ...downloadedCategories])];
         selectedCategories = allCategories;
         
+        // FIX: Invalidate stats for downloaded categories since validation just completed
+        // This ensures UI shows fresh stats after validation
+        if (downloadedCats.length > 0) {
+          invalidateCategories(downloadedCats);
+          downloadedCats.forEach(cat => statsCache.delete(cat));
+        }
+        
         // FASE 3: Carregar stats do cache para renderização inicial rápida
         const cachedStats = getAllCachedStats();
         if (Object.keys(cachedStats).length > 0) {
@@ -695,8 +702,8 @@
             selectedCategories = [...selectedCategories, cat];
           }
         });
-        // FASE 3: Invalidar apenas categorias afetadas pelo download
-        // Identificar categorias que foram baixadas
+        // FIX: Invalidar apenas categorias afetadas pelo download
+        // Identificar categorias que foram baixadas (normalizadas)
         const affectedCategories = cats.length > 0 ? cats : selectedCategories;
         if (affectedCategories.length > 0) {
           invalidateCategories(affectedCategories);
@@ -705,6 +712,7 @@
         }
         loadedCategories.clear();
         // Reload stats after download (force to bypass rate limiting)
+        // This ensures UI updates with fresh stats after validation
         await loadCategoryStats(true);
       }
     }, 1000);

@@ -37,6 +37,32 @@ let zipDownloadController = null;
 let isZipDownloadActive = false;
 let zipDownloadCancelled = false;
 
+/**
+ * Normalize category name - aggregates subcategories into main category
+ * Maps "Cifra nível I" and "Cifra nível II" to "Cifra"
+ * @param {string} category - Category name to normalize
+ * @returns {string} Normalized category name
+ */
+function normalizeCategory(category) {
+  if (!category) return category;
+  if (category === 'Cifra nível I' || category === 'Cifra nível II') {
+    return 'Cifra';
+  }
+  return category;
+}
+
+/**
+ * Get all categories that should be aggregated into a normalized category
+ * @param {string} normalizedCategory - Normalized category name
+ * @returns {string[]} Array of category names that map to this normalized category
+ */
+function getCategoryVariants(normalizedCategory) {
+  if (normalizedCategory === 'Cifra') {
+    return ['Cifra', 'Cifra nível I', 'Cifra nível II'];
+  }
+  return [normalizedCategory];
+}
+
 // Offline state
 const initialState = {
   enabled: false, // Offline mode enabled/disabled
@@ -879,6 +905,7 @@ async function verifyPdfInCacheStorage(pdfUrl) {
  * 
  * FIX: Added strict validation mode for problematic categories like "Gestos em Gravura"
  * that verifies directly in Cache Storage to avoid false positives from filename matching.
+ * FIX: Now handles category normalization - aggregates "Cifra nível I" and "Cifra nível II" into "Cifra"
  * @param {string} category
  * @param {any[]} cachedPdfs
  * @param {any[]} louvoresData
@@ -888,8 +915,14 @@ async function isCategoryCompletelyDownloaded(category, cachedPdfs, louvoresData
     return false;
   }
 
-  // Get all PDFs for this category
-  const categoryLouvores = louvoresData.filter((/** @type {{ categoria: any; }} */ louvor) => louvor.categoria === category);
+  // Normalize category name - aggregate subcategories
+  const normalizedCategory = normalizeCategory(category);
+  
+  // Get all PDFs for this category and its variants (e.g., for "Cifra" include "Cifra nível I" and "Cifra nível II")
+  const categoryVariants = getCategoryVariants(normalizedCategory);
+  const categoryLouvores = louvoresData.filter((/** @type {{ categoria: any; }} */ louvor) => 
+    categoryVariants.includes(louvor.categoria)
+  );
   
   if (categoryLouvores.length === 0) {
     return false;
@@ -992,7 +1025,25 @@ async function isCategoryCompletelyDownloaded(category, cachedPdfs, louvoresData
 
   // Log success for debugging
   if (strictMode && foundCount === expectedCount) {
-    console.log(`[Offline Store] Category "${category}": Strict validation passed - ${foundCount} PDFs verified.`);
+    console.log(`[Offline Store] Category "${normalizedCategory}": Strict validation passed - ${foundCount} PDFs verified.`);
+  }
+
+  // Invalidate stats cache for the normalized category after validation completes
+  // This ensures UI updates with fresh stats
+  try {
+    const { invalidateCategory } = await import('$lib/utils/statsCache');
+    invalidateCategory(normalizedCategory);
+    
+    // Also invalidate in StatsCalculator if available
+    try {
+      const { default: statsCalculator } = await import('$lib/offline/stats/StatsCalculator.js');
+      statsCalculator.invalidateCategory(normalizedCategory);
+    } catch (e) {
+      // Ignore if StatsCalculator not available
+    }
+  } catch (e) {
+    // Ignore errors in stats invalidation - not critical
+    console.debug('[Offline Store] Could not invalidate stats cache:', e);
   }
 
   return true;
@@ -1000,6 +1051,7 @@ async function isCategoryCompletelyDownloaded(category, cachedPdfs, louvoresData
 
 /**
  * Get list of completely downloaded categories
+ * FIX: Now normalizes categories - aggregates "Cifra nível I" and "Cifra nível II" into "Cifra"
  * @param {any[]} louvoresData
  * @param {any[]} cachedPdfs
  */
@@ -1008,13 +1060,19 @@ async function getCompletelyDownloadedCategories(louvoresData, cachedPdfs) {
     return [];
   }
 
-  const categories = [...new Set(louvoresData.map((/** @type {{ categoria: any; }} */ l) => l.categoria).filter(Boolean))];
+  // Get all unique categories and normalize them
+  const allCategories = [...new Set(louvoresData.map((/** @type {{ categoria: any; }} */ l) => l.categoria).filter(Boolean))];
+  const normalizedCategories = [...new Set(allCategories.map(cat => normalizeCategory(cat)))];
+  
   const downloadedCategories = [];
 
-  for (const category of categories) {
-    const isDownloaded = await isCategoryCompletelyDownloaded(category, cachedPdfs, louvoresData);
+  // Check each normalized category (this will aggregate subcategories)
+  for (const normalizedCategory of normalizedCategories) {
+    // Check if all variants of this normalized category are downloaded
+    // We check using the normalized category name, which will aggregate subcategories
+    const isDownloaded = await isCategoryCompletelyDownloaded(normalizedCategory, cachedPdfs, louvoresData);
     if (isDownloaded) {
-      downloadedCategories.push(category);
+      downloadedCategories.push(normalizedCategory);
     }
   }
 
@@ -1234,7 +1292,16 @@ async function getRequiredPackagesInfo(categories, louvoresData, cachedPdfs, man
     return { totalParts: 0, totalSize: 0, partsByCategory: {} };
   }
 
-  const filteredLouvores = louvoresData.filter(l => categories.includes(l.categoria));
+  // Get all category variants (e.g., for "Cifra" include "Cifra nível I" and "Cifra nível II")
+  const categoryVariantsMap = new Map();
+  categories.forEach(cat => {
+    const normalized = normalizeCategory(cat);
+    const variants = getCategoryVariants(normalized);
+    categoryVariantsMap.set(normalized, variants);
+  });
+  
+  const allCategoryVariants = Array.from(categoryVariantsMap.values()).flat();
+  const filteredLouvores = louvoresData.filter(l => allCategoryVariants.includes(l.categoria));
   const missingPdfs = identifyMissingPdfs(filteredLouvores, cachedPdfs);
   const requiredParts = findRequiredPackagesForMissing(missingPdfs, manifest);
 
@@ -1242,10 +1309,12 @@ async function getRequiredPackagesInfo(categories, louvoresData, cachedPdfs, man
   let totalSize = 0;
 
   for (const part of requiredParts) {
-    if (!partsByCategory[part.category]) {
-      partsByCategory[part.category] = [];
+    // Normalize category name when grouping parts
+    const normalizedCategory = normalizeCategory(part.category);
+    if (!partsByCategory[normalizedCategory]) {
+      partsByCategory[normalizedCategory] = [];
     }
-    partsByCategory[part.category].push(part);
+    partsByCategory[normalizedCategory].push(part);
     totalSize += part.size || 0;
   }
 
@@ -1687,9 +1756,18 @@ async function downloadByCategories(categories) {
     }
   }
 
-  // Filter louvores by selected categories
+  // Filter louvores by selected categories (including variants for normalized categories)
+  // For "Cifra", include "Cifra nível I" and "Cifra nível II"
+  const categoryVariantsMap = new Map();
+  validCategories.forEach(cat => {
+    const normalized = normalizeCategory(cat);
+    const variants = getCategoryVariants(normalized);
+    categoryVariantsMap.set(normalized, variants);
+  });
+  
+  const allCategoryVariants = Array.from(categoryVariantsMap.values()).flat();
   const filteredLouvores = louvoresData.filter(louvor =>
-    validCategories.includes(louvor.categoria)
+    allCategoryVariants.includes(louvor.categoria)
   );
 
   if (filteredLouvores.length === 0) {
@@ -1724,11 +1802,13 @@ async function downloadByCategories(categories) {
     console.log('[Offline Store] All PDFs in selected categories are already downloaded.');
     
     // Update downloaded categories list - check which categories are now complete
+    // Normalize categories before checking to aggregate subcategories
+    const normalizedCategories = [...new Set(validCategories.map(cat => normalizeCategory(cat)))];
     const completelyDownloaded = [];
-    for (const category of validCategories) {
-      const isDownloaded = await isCategoryCompletelyDownloaded(category, cachedPdfs, louvoresData);
+    for (const normalizedCategory of normalizedCategories) {
+      const isDownloaded = await isCategoryCompletelyDownloaded(normalizedCategory, cachedPdfs, louvoresData);
       if (isDownloaded) {
-        completelyDownloaded.push(category);
+        completelyDownloaded.push(normalizedCategory);
       }
     }
     const currentDownloaded = getDownloadedCategories();
@@ -1769,20 +1849,23 @@ async function downloadByCategories(categories) {
   if (requiredParts.length === 0) {
     console.warn('[Offline Store] No packages found for missing PDFs, falling back to full category download');
     // Fallback: baixar todas as categorias se não conseguir identificar lotes
+    // Use normalized categories for download
+    const normalizedCategories = [...new Set(validCategories.map(cat => normalizeCategory(cat)))];
     const pdfUrls = filteredLouvores.map(getPdfUrl).filter(url => url !== null);
-    await startZipDownload(validCategories, pdfUrls);
+    await startZipDownload(normalizedCategories, pdfUrls);
     return;
   }
 
   console.log(`[Offline Store] Identified ${requiredParts.length} package parts needed for ${missingPdfs.length} missing PDFs`);
 
-  // Agrupar partes por categoria
+  // Agrupar partes por categoria (normalize categories)
   const partsByCategory = {};
   for (const part of requiredParts) {
-    if (!partsByCategory[part.category]) {
-      partsByCategory[part.category] = [];
+    const normalizedCategory = normalizeCategory(part.category);
+    if (!partsByCategory[normalizedCategory]) {
+      partsByCategory[normalizedCategory] = [];
     }
-    partsByCategory[part.category].push(part);
+    partsByCategory[normalizedCategory].push(part);
   }
 
   // Obter todos os PDFs das categorias (para validação durante extração)
