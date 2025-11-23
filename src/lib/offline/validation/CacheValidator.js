@@ -22,7 +22,7 @@ export class CacheValidator extends PdfValidator {
     this._isDev = typeof window !== 'undefined' && 
                   (window.location.hostname === 'localhost' || 
                    window.location.hostname === '127.0.0.1' ||
-                   (typeof import !== 'undefined' && import.meta && import.meta.env && import.meta.env.DEV));
+                   (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.DEV));
   }
 
   /**
