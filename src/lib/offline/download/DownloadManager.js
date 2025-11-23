@@ -532,6 +532,8 @@ export class DownloadManager {
     }
 
     try {
+      // CRÍTICO: Usar atobUTF8 (UTF-8), NÃO atob() (latin-1)
+      // pdfId está codificado em base64 UTF-8, não latin-1
       const decoded = atobUTF8(louvor.pdfId);
       // Normalize removing leading slashes
       let path = decoded.replace(/^\/+/, '').trim();

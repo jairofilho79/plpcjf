@@ -84,21 +84,8 @@ export class CacheMigration {
           const url = request.url;
           const path = new URL(url).pathname;
 
-          // Normalize the path
-          const normalized = urlNormalizer.normalizePdfUrl(path);
-
-          if (!normalized) {
-            continue;
-          }
-
-          // Check if normalization changed the path
-          const normalizedPath = normalized.startsWith('/') ? normalized : `/${normalized}`;
+          // Use original path (preserves case and accents) - this is the correct way
           const originalPath = path.startsWith('/') ? path : `/${path}`;
-
-          if (normalizedPath === originalPath) {
-            // Already normalized, skip
-            continue;
-          }
 
           // Get the response
           const response = await cache.match(request);
@@ -106,8 +93,9 @@ export class CacheMigration {
             continue;
           }
 
-          // Store with normalized path
-          await cacheStorageAdapter.putPdf(normalizedPath, response);
+          // Store with original path (preserves encoding as in base64)
+          // The CacheStorageAdapter will prepare it correctly
+          await cacheStorageAdapter.putPdf(originalPath, response);
 
           // Try to delete old entry (may fail if URL format is different)
           try {

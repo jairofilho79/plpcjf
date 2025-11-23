@@ -1,10 +1,34 @@
-// Função helper para decodificar base64 para UTF-8 corretamente
+/**
+ * Decodifica base64 para UTF-8 corretamente
+ * 
+ * CRÍTICO: Esta função deve SEMPRE ser usada para decodificar pdfId.
+ * NÃO use atob() diretamente, pois atob() decodifica para latin-1, não UTF-8.
+ * 
+ * A função atob() nativa do JavaScript decodifica base64 para uma string
+ * binária usando codificação latin-1, o que quebra caracteres UTF-8 como
+ * acentos (á, é, ã, etc.) e caracteres especiais.
+ * 
+ * Esta implementação:
+ * 1. Usa atob() para obter a string binária
+ * 2. Converte cada caractere para byte usando charCodeAt()
+ * 3. Usa TextDecoder('utf-8') para decodificar corretamente os bytes como UTF-8
+ * 
+ * @param {string} base64 - String base64 a ser decodificada
+ * @returns {string} String decodificada em UTF-8
+ * @throws {Error} Se a decodificação falhar
+ */
 export function atobUTF8(base64) {
+  if (!base64 || typeof base64 !== 'string') {
+    throw new Error('atobUTF8: base64 must be a non-empty string');
+  }
+  
+  // atob() decodifica para latin-1, não UTF-8
   const binaryString = atob(base64);
   const bytes = new Uint8Array(binaryString.length);
   for (let i = 0; i < binaryString.length; i++) {
     bytes[i] = binaryString.charCodeAt(i);
   }
+  // TextDecoder('utf-8') decodifica corretamente os bytes como UTF-8
   const decoder = new TextDecoder('utf-8');
   return decoder.decode(bytes);
 }
@@ -16,6 +40,8 @@ export function getPdfRelPath(louvor) {
   }
   
   try {
+    // CRÍTICO: Usar atobUTF8 (UTF-8), NÃO atob() (latin-1)
+    // pdfId está codificado em base64 UTF-8, não latin-1
     const decoded = atobUTF8(louvor.pdfId);
     // normaliza removendo barras iniciais
     let path = decoded.replace(/^\/+/, '').trim();

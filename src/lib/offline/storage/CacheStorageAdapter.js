@@ -108,8 +108,66 @@ export class CacheStorageAdapter extends CacheRepository {
   }
 
   /**
+   * Prepare original path (preserves case and accents, only cleans format)
+   * This is used to maintain the original URL as encoded in base64
+   * @param {string} pdfPath - PDF path
+   * @returns {string} Prepared path preserving original encoding
+   * @private
+   */
+  _prepareOriginalPath(pdfPath) {
+    if (!pdfPath || typeof pdfPath !== 'string') {
+      return '';
+    }
+
+    try {
+      // Remove protocol and domain if present
+      let prepared = pdfPath.replace(/^https?:\/\/[^/]+/, '');
+      
+      // Remove leading/trailing slashes
+      prepared = prepared.replace(/^\/+/, '').replace(/\/+$/, '');
+      
+      // Decode URI encoding (handle multiple encodings) but preserve case and accents
+      try {
+        for (let i = 0; i < 3; i++) {
+          if (prepared.includes('%')) {
+            const decoded = decodeURIComponent(prepared);
+            if (decoded !== prepared) {
+              prepared = decoded;
+            } else {
+              break;
+            }
+          } else {
+            break;
+          }
+        }
+      } catch {
+        // If decoding fails, continue with original
+      }
+      
+      // Normalize path separators (Windows vs Unix)
+      prepared = prepared.replace(/\\/g, '/');
+      
+      // Ensure starts with 'assets/'
+      if (!prepared.toLowerCase().startsWith('assets/')) {
+        prepared = `assets/${prepared}`;
+      }
+      
+      // Return without leading slash (consistent format: 'assets/...')
+      return prepared.replace(/^\/+/, '');
+    } catch {
+      // Fallback: simple preparation
+      let fallback = pdfPath.replace(/^\/+/, '').replace(/\\/g, '/');
+      if (!fallback.toLowerCase().startsWith('assets/')) {
+        fallback = `assets/${fallback}`;
+      }
+      return fallback.replace(/^\/+/, '');
+    }
+  }
+
+  /**
    * Get PDF from cache with optimized two-stage verification
-   * @param {string} pdfPath - PDF path (will be normalized)
+   * Tries original path first (as encoded in base64), then normalized path for compatibility
+   * @param {string} pdfPath - PDF path
    * @returns {Promise<Response|null>} PDF Response or null if not found
    */
   async getPdf(pdfPath) {
@@ -118,16 +176,20 @@ export class CacheStorageAdapter extends CacheRepository {
     }
 
     try {
-      const normalizedPath = this._normalizePath(pdfPath);
-      if (!normalizedPath) {
+      // Prepare original path (preserves case and accents)
+      const originalPath = this._prepareOriginalPath(pdfPath);
+      if (!originalPath) {
         return null;
       }
+
+      // Also get normalized path for compatibility with old cache entries
+      const normalizedPath = this._normalizePath(pdfPath);
 
       // Clean expired cache entries periodically
       this._cleanExpiredCache();
 
-      // Check variation cache first (fast path)
-      const cached = this._variationCache.get(normalizedPath);
+      // Check variation cache first (fast path) - use original path as key
+      const cached = this._variationCache.get(originalPath);
       if (cached && (Date.now() - cached.timestamp) < this._variationCacheTTL) {
         if (cached.found) {
           // We know this path exists, try to get it
@@ -136,47 +198,50 @@ export class CacheStorageAdapter extends CacheRepository {
             const request = new Request(cached.url);
             const response = await cache.match(request);
             if (response) {
-              logger.debug('CacheStorageAdapter', `PDF found via variation cache: ${normalizedPath}`);
+              logger.debug('CacheStorageAdapter', `PDF found via variation cache: ${originalPath}`);
               return response;
             }
           } catch (e) {
             // Cache entry may be stale, continue to full verification
-            this._variationCache.delete(normalizedPath);
+            this._variationCache.delete(originalPath);
           }
         } else {
           // We know this path doesn't exist (cached miss)
-          logger.debug('CacheStorageAdapter', `PDF not found (cached miss): ${normalizedPath}`);
+          logger.debug('CacheStorageAdapter', `PDF not found (cached miss): ${originalPath}`);
           return null;
         }
       }
 
       // Check miss cache (avoid repeated failed attempts)
-      if (this._missCache.has(normalizedPath)) {
-        logger.debug('CacheStorageAdapter', `PDF in miss cache, skipping: ${normalizedPath}`);
+      if (this._missCache.has(originalPath)) {
+        logger.debug('CacheStorageAdapter', `PDF in miss cache, skipping: ${originalPath}`);
         return null;
       }
 
       const cache = await this._openCache();
       
-      // STAGE 1 (Fast): Try most common variations (3 attempts)
-      const stage1Variations = [
-        normalizedPath,
-        normalizedPath.startsWith('/') ? normalizedPath : `/${normalizedPath}`,
-        new URL(normalizedPath, window.location.origin).toString()
+      // STAGE 1 (Fast): Try original path first (as encoded in base64)
+      // This is the correct way - preserves case and accents
+      const originalVariations = [
+        originalPath,
+        originalPath.startsWith('/') ? originalPath : `/${originalPath}`,
+        new URL(originalPath, window.location.origin).toString(),
+        encodeURI(originalPath),
+        new URL(encodeURI(originalPath), window.location.origin).toString()
       ];
 
-      for (const url of stage1Variations) {
+      for (const url of originalVariations) {
         try {
           const request = new Request(url);
           const response = await cache.match(request);
           if (response) {
             // Cache successful result
-            this._variationCache.set(normalizedPath, {
+            this._variationCache.set(originalPath, {
               found: true,
               url: url,
               timestamp: Date.now()
             });
-            logger.debug('CacheStorageAdapter', `PDF found in cache (stage 1): ${normalizedPath}`);
+            logger.debug('CacheStorageAdapter', `PDF found in cache (original path): ${originalPath}`);
             return response;
           }
         } catch (e) {
@@ -184,28 +249,54 @@ export class CacheStorageAdapter extends CacheRepository {
         }
       }
 
-      // STAGE 2 (Slow): Try additional variations only if stage 1 failed
-      // These are less common but may be needed for edge cases
-      const stage2Variations = [
-        // Try with different encodings
-        encodeURI(normalizedPath),
-        decodeURIComponent(normalizedPath),
+      // STAGE 2 (Compatibility): Try normalized path for backward compatibility
+      // This handles old cache entries that were stored with normalized paths
+      if (normalizedPath && normalizedPath !== originalPath) {
+        const normalizedVariations = [
+          normalizedPath,
+          normalizedPath.startsWith('/') ? normalizedPath : `/${normalizedPath}`,
+          new URL(normalizedPath, window.location.origin).toString()
+        ];
+
+        for (const url of normalizedVariations) {
+          try {
+            const request = new Request(url);
+            const response = await cache.match(request);
+            if (response) {
+              // Cache successful result (but use original path as key)
+              this._variationCache.set(originalPath, {
+                found: true,
+                url: url,
+                timestamp: Date.now()
+              });
+              logger.debug('CacheStorageAdapter', `PDF found in cache (normalized path, compatibility): ${normalizedPath}`);
+              return response;
+            }
+          } catch (e) {
+            // Continue to next variation
+          }
+        }
+      }
+
+      // STAGE 3 (Last resort): Try additional variations
+      const stage3Variations = [
+        decodeURIComponent(originalPath),
         // Try filename-only matching as last resort (less reliable)
-        normalizedPath.split('/').pop()
+        originalPath.split('/').pop()
       ].filter(Boolean);
 
-      for (const url of stage2Variations) {
+      for (const url of stage3Variations) {
         try {
           const request = new Request(url);
           const response = await cache.match(request);
           if (response) {
             // Cache successful result
-            this._variationCache.set(normalizedPath, {
+            this._variationCache.set(originalPath, {
               found: true,
               url: url,
               timestamp: Date.now()
             });
-            logger.debug('CacheStorageAdapter', `PDF found in cache (stage 2): ${normalizedPath}`);
+            logger.debug('CacheStorageAdapter', `PDF found in cache (stage 3): ${originalPath}`);
             return response;
           }
         } catch (e) {
@@ -214,8 +305,8 @@ export class CacheStorageAdapter extends CacheRepository {
       }
 
       // Not found - cache the miss to avoid repeated attempts
-      this._missCache.add(normalizedPath);
-      this._variationCache.set(normalizedPath, {
+      this._missCache.add(originalPath);
+      this._variationCache.set(originalPath, {
         found: false,
         url: null,
         timestamp: Date.now()
@@ -223,10 +314,10 @@ export class CacheStorageAdapter extends CacheRepository {
       
       // Clear miss cache after TTL
       setTimeout(() => {
-        this._missCache.delete(normalizedPath);
+        this._missCache.delete(originalPath);
       }, this._missCacheTTL);
 
-      logger.debug('CacheStorageAdapter', `PDF not found in cache: ${normalizedPath}`);
+      logger.debug('CacheStorageAdapter', `PDF not found in cache: ${originalPath}`);
       return null;
     } catch (error) {
       logger.error('CacheStorageAdapter', `Error getting PDF: ${pdfPath}`, error);
@@ -236,7 +327,8 @@ export class CacheStorageAdapter extends CacheRepository {
 
   /**
    * Store PDF in cache
-   * @param {string} pdfPath - PDF path (will be normalized)
+   * Uses original path (as encoded in base64) to preserve case and accents
+   * @param {string} pdfPath - PDF path
    * @param {Blob|Response} pdfData - PDF data to store
    * @returns {Promise<void>}
    */
@@ -246,28 +338,36 @@ export class CacheStorageAdapter extends CacheRepository {
     }
 
     try {
-      const normalizedPath = this._normalizePath(pdfPath);
-      if (!normalizedPath) {
+      // Use original path (preserves case and accents) - this is the correct way
+      const originalPath = this._prepareOriginalPath(pdfPath);
+      if (!originalPath) {
         throw new Error('Invalid PDF path');
       }
 
       const cache = await this._openCache();
       const response = this._toResponse(pdfData);
       
-      // Create request URL
-      const requestUrl = new URL(normalizedPath, window.location.origin).toString();
+      // Create request URL using original path (preserves encoding)
+      const requestUrl = new URL(originalPath, window.location.origin).toString();
       const request = new Request(requestUrl);
 
       await cache.put(request, response);
       
-      logger.info('CacheStorageAdapter', `PDF stored in cache: ${normalizedPath}`);
+      logger.info('CacheStorageAdapter', `PDF stored in cache: ${originalPath}`);
       
       // Invalidate variation cache for this path (new PDF may match)
-      this._variationCache.delete(normalizedPath);
-      this._missCache.delete(normalizedPath);
+      this._variationCache.delete(originalPath);
+      this._missCache.delete(originalPath);
+      
+      // Also invalidate normalized path for compatibility
+      const normalizedPath = this._normalizePath(pdfPath);
+      if (normalizedPath && normalizedPath !== originalPath) {
+        this._variationCache.delete(normalizedPath);
+        this._missCache.delete(normalizedPath);
+      }
       
       // Cache the successful storage for future lookups
-      this._variationCache.set(normalizedPath, {
+      this._variationCache.set(originalPath, {
         found: true,
         url: requestUrl,
         timestamp: Date.now()
@@ -275,13 +375,13 @@ export class CacheStorageAdapter extends CacheRepository {
       
       // Emit event
       offlineEvents.emit(EVENTS.PDF_DOWNLOADED, {
-        path: normalizedPath,
+        path: originalPath,
         originalPath: pdfPath
       });
       
       offlineEvents.emit(EVENTS.CACHE_UPDATED, {
         type: 'pdf-added',
-        path: normalizedPath
+        path: originalPath
       });
     } catch (error) {
       logger.error('CacheStorageAdapter', `Error storing PDF: ${pdfPath}`, error);
@@ -305,7 +405,8 @@ export class CacheStorageAdapter extends CacheRepository {
 
   /**
    * Delete PDF from cache
-   * @param {string} pdfPath - PDF path (will be normalized)
+   * Tries original path first, then normalized path for compatibility
+   * @param {string} pdfPath - PDF path
    * @returns {Promise<boolean>} True if PDF was deleted
    */
   async deletePdf(pdfPath) {
@@ -314,19 +415,31 @@ export class CacheStorageAdapter extends CacheRepository {
     }
 
     try {
-      const normalizedPath = this._normalizePath(pdfPath);
-      if (!normalizedPath) {
+      const originalPath = this._prepareOriginalPath(pdfPath);
+      if (!originalPath) {
         return false;
       }
 
       const cache = await this._openCache();
       
-      // Try multiple URL variations
+      // Try multiple URL variations (original path first)
       const urlVariations = [
-        normalizedPath,
-        normalizedPath.startsWith('/') ? normalizedPath : `/${normalizedPath}`,
-        new URL(normalizedPath, window.location.origin).toString()
+        originalPath,
+        originalPath.startsWith('/') ? originalPath : `/${originalPath}`,
+        new URL(originalPath, window.location.origin).toString(),
+        encodeURI(originalPath),
+        new URL(encodeURI(originalPath), window.location.origin).toString()
       ];
+
+      // Also try normalized path for compatibility
+      const normalizedPath = this._normalizePath(pdfPath);
+      if (normalizedPath && normalizedPath !== originalPath) {
+        urlVariations.push(
+          normalizedPath,
+          normalizedPath.startsWith('/') ? normalizedPath : `/${normalizedPath}`,
+          new URL(normalizedPath, window.location.origin).toString()
+        );
+      }
 
       let deleted = false;
       for (const url of urlVariations) {
@@ -342,17 +455,25 @@ export class CacheStorageAdapter extends CacheRepository {
       }
 
       if (deleted) {
-        logger.info('CacheStorageAdapter', `PDF deleted from cache: ${normalizedPath}`);
+        logger.info('CacheStorageAdapter', `PDF deleted from cache: ${originalPath}`);
+        
+        // Invalidate variation cache
+        this._variationCache.delete(originalPath);
+        this._missCache.delete(originalPath);
+        if (normalizedPath && normalizedPath !== originalPath) {
+          this._variationCache.delete(normalizedPath);
+          this._missCache.delete(normalizedPath);
+        }
         
         // Emit event
         offlineEvents.emit(EVENTS.PDF_DELETED, {
-          path: normalizedPath,
+          path: originalPath,
           originalPath: pdfPath
         });
         
         offlineEvents.emit(EVENTS.CACHE_UPDATED, {
           type: 'pdf-deleted',
-          path: normalizedPath
+          path: originalPath
         });
       }
 
@@ -365,7 +486,8 @@ export class CacheStorageAdapter extends CacheRepository {
 
   /**
    * List all PDFs in cache
-   * @returns {Promise<string[]>} Array of normalized PDF paths
+   * Returns paths as stored (preserving original encoding)
+   * @returns {Promise<string[]>} Array of PDF paths
    */
   async listPdfs() {
     if (!browser) {
@@ -382,10 +504,10 @@ export class CacheStorageAdapter extends CacheRepository {
           const url = new URL(request.url);
           const path = url.pathname;
           
-          // Normalize the path
-          const normalized = this._normalizePath(path);
-          if (normalized) {
-            pdfPaths.push(normalized);
+          // Use original path preparation (preserves case and accents)
+          const prepared = this._prepareOriginalPath(path);
+          if (prepared) {
+            pdfPaths.push(prepared);
           }
         } catch (e) {
           logger.debug('CacheStorageAdapter', `Error processing cache key: ${request.url}`, e);

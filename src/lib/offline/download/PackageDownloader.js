@@ -192,6 +192,7 @@ export class PackageDownloader {
 
   /**
    * Store extracted PDFs in cache
+   * Uses original filename (preserves case and accents) instead of normalized path
    * @param {ExtractedPdf[]} pdfs - Extracted PDFs
    * @returns {Promise<number>} Number of PDFs stored
    */
@@ -204,19 +205,23 @@ export class PackageDownloader {
 
     for (const pdf of pdfs) {
       try {
-        if (isDev && (pdf.normalizedPath.includes('cifra') || pdf.normalizedPath.includes('nivel'))) {
-          logger.debug('PackageDownloader', `Storing PDF (Cifra): ${pdf.originalName} -> ${pdf.normalizedPath}`);
+        // Use original filename (preserves case and accents) - this is the correct way
+        // The CacheStorageAdapter will prepare it correctly (add assets/ prefix, etc)
+        const pathToStore = pdf.originalName || pdf.normalizedPath;
+        
+        if (isDev && (pathToStore.includes('cifra') || pathToStore.includes('nivel') || pathToStore.includes('Cifra') || pathToStore.includes('Nivel'))) {
+          logger.debug('PackageDownloader', `Storing PDF (Cifra): ${pdf.originalName} -> ${pathToStore}`);
         }
-        await cacheStorageAdapter.putPdf(pdf.normalizedPath, pdf.blob);
+        await cacheStorageAdapter.putPdf(pathToStore, pdf.blob);
         stored++;
       } catch (error) {
-        logger.error('PackageDownloader', `Error storing PDF: ${pdf.normalizedPath}`, error);
+        logger.error('PackageDownloader', `Error storing PDF: ${pdf.originalName || pdf.normalizedPath}`, error);
         // Continue with other PDFs
       }
     }
 
     logger.info('PackageDownloader', `Stored ${stored}/${pdfs.length} PDFs in cache`);
-
+    
     return stored;
   }
 

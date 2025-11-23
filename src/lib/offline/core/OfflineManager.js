@@ -190,6 +190,7 @@ class OfflineManager {
           const louvor = louvoresData.find(l => {
             if (!l.pdfId) return false;
             try {
+              // CRÍTICO: Usar atobUTF8 (UTF-8), NÃO atob() (latin-1)
               const decoded = atobUTF8(l.pdfId);
               return decoded.includes(pdfPath) || pdfPath.includes(decoded);
             } catch {
@@ -296,6 +297,7 @@ class OfflineManager {
         if (!louvor.pdfId) continue;
         
         try {
+          // CRÍTICO: Usar atobUTF8 (UTF-8), NÃO atob() (latin-1)
           const pdfPath = atobUTF8(louvor.pdfId);
           const validation = await this.validatePdfAvailability(pdfPath, {
             useIndex: true,
