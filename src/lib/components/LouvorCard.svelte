@@ -69,8 +69,8 @@
         // Verificar cache de validação primeiro (Fase 2)
         const cached = getCachedValidation(louvor.pdfId);
         if (cached && cached.available) {
-          // Cache diz que está disponível - usar URL do cache e pular validação
-          const fileParam = encodeURIComponent(cached.url || `/${pdfPath}`);
+          // Cache diz que está disponível - usar caminho original do pdfId (NÃO usar cached.url que pode estar normalizado)
+          const fileParam = encodeURIComponent(`/${pdfPath}`);
           const tituloParam = encodeURIComponent(louvor.nome || '');
           const subtituloText = `${louvor.categoria || ''} | ${louvor.classificacao || ''}`.trim();
           const subtituloParam = encodeURIComponent(subtituloText);

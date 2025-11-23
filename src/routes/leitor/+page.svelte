@@ -217,11 +217,14 @@
     pdfLoading = true;
     pdfError = null;
     
-    // Extract PDF path from URL and normalize using unified function (outside try for catch access)
+    // Extract PDF path from URL - usar caminho original (NÃO normalizar)
+    // A normalização só é usada para validação no cache, mas o PDF deve ser carregado com o caminho original
     const urlObj = new URL(fileUrl, window.location.origin);
     const pdfPath = urlObj.pathname.startsWith('/') ? urlObj.pathname.substring(1) : urlObj.pathname;
+    const originalFullUrl = new URL(`/${pdfPath}`, window.location.origin).href;
+    
+    // Normalizar apenas para validação no cache (mas não usar para carregar o PDF)
     const normalizedPath = urlNormalizer.normalizePdfUrl(pdfPath);
-    const normalizedFullUrl = new URL(`/${normalizedPath}`, window.location.origin).href;
     
     try {
       
@@ -274,8 +277,8 @@
         }
       }
       
-      // PDF is available, load using normalized URL for consistency with cache
-      const loadingTask = getDocument({ url: normalizedFullUrl, withCredentials: false });
+      // PDF is available, load using ORIGINAL URL (not normalized) to preserve exact path from pdfId
+      const loadingTask = getDocument({ url: originalFullUrl, withCredentials: false });
       const pdfDocument = await loadingTask.promise;
       linkService.setDocument(pdfDocument);
       viewer.setDocument(pdfDocument);
@@ -287,24 +290,22 @@
     } catch (error) {
       console.error('[Leitor] Erro ao carregar PDF:', error);
       
-      // Try fallback variations if normalized URL failed
-      // Extract PDF path from URL for fallback attempts
-      const urlObj = new URL(fileUrl, window.location.origin);
-      const pdfPath = urlObj.pathname.startsWith('/') ? urlObj.pathname.substring(1) : urlObj.pathname;
-      const normalizedPath = urlNormalizer.normalizePdfUrl(pdfPath);
+      // Try fallback variations if original URL failed
+      // Try variations of the URL (original first, then normalized as fallback)
+      const normalizedFullUrl = new URL(`/${normalizedPath}`, window.location.origin).href;
       
-      // Try variations of the URL
       const urlVariations = [
-        normalizedFullUrl, // Already tried, but keep for reference
-        new URL(`/${normalizedPath}`, window.location.origin).href, // Normalized with leading slash
-        new URL(normalizedPath, window.location.origin).href, // Normalized without leading slash
-        fileUrl, // Original URL
+        originalFullUrl, // Already tried, but keep for reference
+        fileUrl, // Original URL from parameter
         new URL(`/${pdfPath}`, window.location.origin).href, // Original path with leading slash
-        new URL(pdfPath, window.location.origin).href // Original path without leading slash
+        new URL(pdfPath, window.location.origin).href, // Original path without leading slash
+        normalizedFullUrl, // Normalized as last resort fallback
+        new URL(`/${normalizedPath}`, window.location.origin).href, // Normalized with leading slash
+        new URL(normalizedPath, window.location.origin).href // Normalized without leading slash
       ];
       
       // Remove duplicates and already tried URL
-      const uniqueVariations = [...new Set(urlVariations)].filter(url => url !== normalizedFullUrl);
+      const uniqueVariations = [...new Set(urlVariations)].filter(url => url !== originalFullUrl);
       
       let loadedSuccessfully = false;
       for (const variationUrl of uniqueVariations) {

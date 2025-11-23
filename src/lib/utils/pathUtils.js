@@ -34,6 +34,8 @@ export function atobUTF8(base64) {
 }
 
 // Retorna caminho relativo sem barra inicial, ex: "assets/ColAdultos/arquivo.pdf"
+// CRÍTICO: Esta função NÃO normaliza o caminho (não converte para minúsculas, não remove acentos)
+// O caminho é usado exatamente como está no pdfId decodificado em base64 UTF-8
 export function getPdfRelPath(louvor) {
   if (!louvor || !louvor.pdfId) {
     return null;
@@ -43,7 +45,7 @@ export function getPdfRelPath(louvor) {
     // CRÍTICO: Usar atobUTF8 (UTF-8), NÃO atob() (latin-1)
     // pdfId está codificado em base64 UTF-8, não latin-1
     const decoded = atobUTF8(louvor.pdfId);
-    // normaliza removendo barras iniciais
+    // Remove apenas barras iniciais, preservando o resto do caminho original
     let path = decoded.replace(/^\/+/, '').trim();
     
     if (!path) {
@@ -59,11 +61,15 @@ export function getPdfRelPath(louvor) {
       // Se decodeURIComponent falhar, mantém o path original
     }
     
-    // assegura prefixo assets/
-    if (path.toLowerCase().startsWith('assets/')) {
+    // Verifica se começa com "assets/" (case-sensitive para preservar o caminho original)
+    // Mas aceita variações de case para compatibilidade
+    const lowerPath = path.toLowerCase();
+    if (lowerPath.startsWith('assets/')) {
+      // Se já começa com assets/, retorna o path original (preservando case)
       return path;
     }
     
+    // Se não começa com assets/, adiciona o prefixo preservando o case original
     return `assets/${path}`;
   } catch (_) {
     return null;
