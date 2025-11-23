@@ -168,11 +168,42 @@ const CACHED_PDFS_LOCAL_KEY = 'cachedPdfsListLocal';
 const CACHE_TTL = 5 * 60 * 1000; // 5 minutos
 
 /**
+ * Check if cache storage is actually available
+ * @returns {Promise<boolean>}
+ */
+async function isCacheStorageAvailable() {
+  if (typeof caches === 'undefined') {
+    return false;
+  }
+  
+  try {
+    // Try to open the PDF cache to verify it exists
+    const cache = await caches.open('plpc-pdfs');
+    // If we can open it, cache storage is available
+    return true;
+  } catch (err) {
+    // If we can't open it, cache storage is not available
+    return false;
+  }
+}
+
+/**
  * Get list of cached PDFs with local cache optimization
  * Uses localStorage cache first, then falls back to Service Worker
+ * IMPORTANT: Invalidates localStorage cache if cache storage is not available
  * @returns {Promise<string[]>}
  */
 export async function getCachedPDFsFast() {
+  // Verificar se cache storage está disponível
+  const cacheStorageAvailable = await isCacheStorageAvailable();
+  
+  // Se cache storage não está disponível, invalidar cache do localStorage
+  if (!cacheStorageAvailable) {
+    console.log('[SW Message] Cache storage not available, invalidating localStorage cache');
+    invalidateCachedPDFsLocal();
+    return [];
+  }
+  
   // Verificar cache local primeiro
   if (typeof window !== 'undefined' && typeof localStorage !== 'undefined') {
     try {
@@ -193,8 +224,37 @@ export async function getCachedPDFsFast() {
   // Cache expirado ou não disponível - buscar do Service Worker
   const pdfs = await getCachedPDFs();
   
-  // Atualizar cache local
-  if (typeof window !== 'undefined' && typeof localStorage !== 'undefined') {
+  // Se Service Worker retornou array vazio, verificar novamente se cache storage existe
+  // Isso pode acontecer se o cache foi limpo mas localStorage ainda tem dados antigos
+  if (pdfs.length === 0 && cacheStorageAvailable) {
+    // Verificar diretamente no cache storage se há PDFs
+    try {
+      const cache = await caches.open('plpc-pdfs');
+      const requests = await cache.keys();
+      const pdfCount = requests.filter(req => {
+        try {
+          const url = new URL(req.url);
+          return url.pathname.endsWith('.pdf') && 
+                 !url.pathname.includes('/_app/') &&
+                 !url.pathname.includes('/node_modules/');
+        } catch {
+          return false;
+        }
+      }).length;
+      
+      // Se não há PDFs no cache storage, invalidar localStorage
+      if (pdfCount === 0) {
+        console.log('[SW Message] No PDFs in cache storage, invalidating localStorage cache');
+        invalidateCachedPDFsLocal();
+        return [];
+      }
+    } catch (err) {
+      console.warn('[SW Message] Failed to verify cache storage:', err);
+    }
+  }
+  
+  // Atualizar cache local apenas se houver PDFs
+  if (pdfs.length > 0 && typeof window !== 'undefined' && typeof localStorage !== 'undefined') {
     try {
       localStorage.setItem(CACHED_PDFS_LOCAL_KEY, JSON.stringify({
         pdfs,
@@ -203,6 +263,9 @@ export async function getCachedPDFsFast() {
     } catch (err) {
       console.warn('[SW Message] Failed to update local cache:', err);
     }
+  } else if (pdfs.length === 0) {
+    // Se não há PDFs, limpar cache do localStorage para evitar dados antigos
+    invalidateCachedPDFsLocal();
   }
   
   return pdfs;
