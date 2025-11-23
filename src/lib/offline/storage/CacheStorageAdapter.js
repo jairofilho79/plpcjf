@@ -23,6 +23,40 @@ export class CacheStorageAdapter extends CacheRepository {
     super();
     this.cacheName = cacheName || getConfig('DEFAULT_PDF_CACHE_FALLBACK');
     this._cachePromise = null;
+    
+    // Cache de variações testadas para otimizar performance
+    // Estrutura: Map<normalizedPath, {found: boolean, url: string, timestamp: number}>
+    this._variationCache = new Map();
+    this._variationCacheTTL = 5 * 60 * 1000; // 5 minutos
+    this._missCache = new Set(); // Cache de "misses" para evitar tentativas repetidas
+    this._missCacheTTL = 1 * 60 * 1000; // 1 minuto
+  }
+  
+  /**
+   * Clear variation cache (called when cache is updated)
+   * @private
+   */
+  _clearVariationCache() {
+    this._variationCache.clear();
+    this._missCache.clear();
+  }
+  
+  /**
+   * Clean expired entries from variation cache
+   * @private
+   */
+  _cleanExpiredCache() {
+    const now = Date.now();
+    
+    // Clean variation cache
+    for (const [key, value] of this._variationCache.entries()) {
+      if (now - value.timestamp > this._variationCacheTTL) {
+        this._variationCache.delete(key);
+      }
+    }
+    
+    // Miss cache is cleared entirely on TTL (simpler)
+    // It will be repopulated as needed
   }
 
   /**
@@ -73,7 +107,7 @@ export class CacheStorageAdapter extends CacheRepository {
   }
 
   /**
-   * Get PDF from cache
+   * Get PDF from cache with optimized two-stage verification
    * @param {string} pdfPath - PDF path (will be normalized)
    * @returns {Promise<Response|null>} PDF Response or null if not found
    */
@@ -88,27 +122,108 @@ export class CacheStorageAdapter extends CacheRepository {
         return null;
       }
 
+      // Clean expired cache entries periodically
+      this._cleanExpiredCache();
+
+      // Check variation cache first (fast path)
+      const cached = this._variationCache.get(normalizedPath);
+      if (cached && (Date.now() - cached.timestamp) < this._variationCacheTTL) {
+        if (cached.found) {
+          // We know this path exists, try to get it
+          try {
+            const cache = await this._openCache();
+            const request = new Request(cached.url);
+            const response = await cache.match(request);
+            if (response) {
+              logger.debug('CacheStorageAdapter', `PDF found via variation cache: ${normalizedPath}`);
+              return response;
+            }
+          } catch (e) {
+            // Cache entry may be stale, continue to full verification
+            this._variationCache.delete(normalizedPath);
+          }
+        } else {
+          // We know this path doesn't exist (cached miss)
+          logger.debug('CacheStorageAdapter', `PDF not found (cached miss): ${normalizedPath}`);
+          return null;
+        }
+      }
+
+      // Check miss cache (avoid repeated failed attempts)
+      if (this._missCache.has(normalizedPath)) {
+        logger.debug('CacheStorageAdapter', `PDF in miss cache, skipping: ${normalizedPath}`);
+        return null;
+      }
+
       const cache = await this._openCache();
       
-      // Try multiple URL variations for compatibility
-      const urlVariations = [
+      // STAGE 1 (Fast): Try most common variations (3 attempts)
+      const stage1Variations = [
         normalizedPath,
         normalizedPath.startsWith('/') ? normalizedPath : `/${normalizedPath}`,
         new URL(normalizedPath, window.location.origin).toString()
       ];
 
-      for (const url of urlVariations) {
+      for (const url of stage1Variations) {
         try {
           const request = new Request(url);
           const response = await cache.match(request);
           if (response) {
-            logger.debug('CacheStorageAdapter', `PDF found in cache: ${normalizedPath}`);
+            // Cache successful result
+            this._variationCache.set(normalizedPath, {
+              found: true,
+              url: url,
+              timestamp: Date.now()
+            });
+            logger.debug('CacheStorageAdapter', `PDF found in cache (stage 1): ${normalizedPath}`);
             return response;
           }
         } catch (e) {
           // Continue to next variation
         }
       }
+
+      // STAGE 2 (Slow): Try additional variations only if stage 1 failed
+      // These are less common but may be needed for edge cases
+      const stage2Variations = [
+        // Try with different encodings
+        encodeURI(normalizedPath),
+        decodeURIComponent(normalizedPath),
+        // Try filename-only matching as last resort (less reliable)
+        normalizedPath.split('/').pop()
+      ].filter(Boolean);
+
+      for (const url of stage2Variations) {
+        try {
+          const request = new Request(url);
+          const response = await cache.match(request);
+          if (response) {
+            // Cache successful result
+            this._variationCache.set(normalizedPath, {
+              found: true,
+              url: url,
+              timestamp: Date.now()
+            });
+            logger.debug('CacheStorageAdapter', `PDF found in cache (stage 2): ${normalizedPath}`);
+            return response;
+          }
+        } catch (e) {
+          // Continue to next variation
+        }
+      }
+
+      // Not found - cache the miss to avoid repeated attempts
+      this._missCache.add(normalizedPath);
+      this._variationCache.set(normalizedPath, {
+        found: false,
+        url: null,
+        timestamp: Date.now()
+      });
+      
+      // Clear miss cache after TTL
+      setTimeout(() => {
+        this._missCache.delete(normalizedPath);
+      }, this._missCacheTTL);
 
       logger.debug('CacheStorageAdapter', `PDF not found in cache: ${normalizedPath}`);
       return null;
@@ -145,6 +260,17 @@ export class CacheStorageAdapter extends CacheRepository {
       await cache.put(request, response);
       
       logger.info('CacheStorageAdapter', `PDF stored in cache: ${normalizedPath}`);
+      
+      // Invalidate variation cache for this path (new PDF may match)
+      this._variationCache.delete(normalizedPath);
+      this._missCache.delete(normalizedPath);
+      
+      // Cache the successful storage for future lookups
+      this._variationCache.set(normalizedPath, {
+        found: true,
+        url: requestUrl,
+        timestamp: Date.now()
+      });
       
       // Emit event
       offlineEvents.emit(EVENTS.PDF_DOWNLOADED, {
@@ -312,6 +438,9 @@ export class CacheStorageAdapter extends CacheRepository {
       
       // Reset cache promise to force reopen
       this._cachePromise = null;
+      
+      // Clear variation cache
+      this._clearVariationCache();
       
       logger.info('CacheStorageAdapter', `Cache cleared: ${this.cacheName}`);
       

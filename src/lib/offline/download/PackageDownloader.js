@@ -197,9 +197,16 @@ export class PackageDownloader {
    */
   async storePdfsInCache(pdfs) {
     let stored = 0;
+    const isDev = typeof window !== 'undefined' && 
+                  (window.location.hostname === 'localhost' || 
+                   window.location.hostname === '127.0.0.1' ||
+                   (typeof import !== 'undefined' && import.meta && import.meta.env && import.meta.env.DEV));
 
     for (const pdf of pdfs) {
       try {
+        if (isDev && (pdf.normalizedPath.includes('cifra') || pdf.normalizedPath.includes('nivel'))) {
+          logger.debug('PackageDownloader', `Storing PDF (Cifra): ${pdf.originalName} -> ${pdf.normalizedPath}`);
+        }
         await cacheStorageAdapter.putPdf(pdf.normalizedPath, pdf.blob);
         stored++;
       } catch (error) {
