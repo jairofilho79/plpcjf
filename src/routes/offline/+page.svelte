@@ -382,6 +382,11 @@
   let lastSyncTriggerTime = 0;
   const MIN_SYNC_INTERVAL = 5000; // Minimum 5 seconds between sync triggers
   
+  // Track last cache update to prevent infinite loops
+  let lastCacheUpdateTime = 0;
+  let isProcessingCacheUpdate = false;
+  const MIN_CACHE_UPDATE_INTERVAL = 1000; // Minimum 1 second between cache updates
+  
   /**
    * @param {Event} event
    */
@@ -399,7 +404,7 @@
       console.log('[Offline Page] Cache sync required:', event.detail);
     }
   }
-  
+
   async function checkSyncOnFocus() {
     const changed = await checkCacheVersionChanged();
     if (changed) {
@@ -413,30 +418,56 @@
    */
   async function handleOfflineCacheUpdated(event) {
     if (event instanceof CustomEvent) {
-      console.log('[Offline Page] Cache updated event received:', event.detail);
+      const now = Date.now();
       
-      // Reload cached PDFs list to get updated count
-      await offline.loadCachedPdfsList();
+      // Prevent infinite loops: skip if processing or too soon since last update
+      if (isProcessingCacheUpdate || (now - lastCacheUpdateTime) < MIN_CACHE_UPDATE_INTERVAL) {
+        console.log('[Offline Page] Cache update ignored - already processing or too soon');
+        return;
+      }
       
-      // Update downloaded categories
-      const updatedDownloaded = await offline.checkAndUpdateDownloadedCategories();
-      downloadedCategories = updatedDownloaded;
+      // Check if this is a duplicate event (same source and timestamp)
+      const eventDetail = event.detail || {};
+      const eventSource = eventDetail.source || 'unknown';
+      const eventTimestamp = eventDetail.timestamp || now;
       
-      // Ensure downloaded categories are selected
-      updatedDownloaded.forEach((cat) => {
-        if (!selectedCategories.includes(cat)) {
-          selectedCategories = [...selectedCategories, cat];
-        }
-      });
+      // Skip if this is a cache-reload event that we triggered ourselves
+      if (eventSource === 'cache-reload') {
+        console.log('[Offline Page] Cache update ignored - recursive cache-reload event');
+        return;
+      }
       
-      // Invalidate stats cache and reload for affected categories
-      if (updatedDownloaded.length > 0) {
-        invalidateCategories(updatedDownloaded);
-        updatedDownloaded.forEach(cat => statsCache.delete(cat));
-        loadedCategories.clear();
+      isProcessingCacheUpdate = true;
+      lastCacheUpdateTime = now;
+      
+      try {
+        console.log('[Offline Page] Cache updated event received:', eventDetail);
         
-        // Reload stats for updated categories
-        await loadCategoryStatsForCategories(updatedDownloaded, true);
+        // Reload cached PDFs list to get updated count (skip event to prevent loop)
+        await offline.loadCachedPdfsList(false, true);
+        
+        // Update downloaded categories
+        const updatedDownloaded = await offline.checkAndUpdateDownloadedCategories();
+        downloadedCategories = updatedDownloaded;
+        
+        // Ensure downloaded categories are selected
+        updatedDownloaded.forEach((cat) => {
+          if (!selectedCategories.includes(cat)) {
+            selectedCategories = [...selectedCategories, cat];
+          }
+        });
+        
+        // Invalidate stats cache and reload for affected categories
+        if (updatedDownloaded.length > 0) {
+          invalidateCategories(updatedDownloaded);
+          updatedDownloaded.forEach(cat => statsCache.delete(cat));
+          loadedCategories.clear();
+          
+          // Reload stats for updated categories
+          await loadCategoryStatsForCategories(updatedDownloaded, true);
+        }
+      } finally {
+        isProcessingCacheUpdate = false;
       }
     }
   }

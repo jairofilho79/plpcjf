@@ -230,8 +230,10 @@ async function initialize() {
 
 /**
  * Load list of cached PDFs from service worker
+ * @param {boolean} forceRefresh - Force refresh of cache
+ * @param {boolean} skipEvent - Skip dispatching offline-cache-updated event (prevents infinite loops)
  */
-async function loadCachedPdfsList(forceRefresh = false) {
+async function loadCachedPdfsList(forceRefresh = false, skipEvent = false) {
   try {
     // FASE 4: Invalidar cache de stats quando recarregamos lista de PDFs
     // pois os dados podem ter mudado
@@ -263,14 +265,16 @@ async function loadCachedPdfsList(forceRefresh = false) {
     if (browser) {
       localStorage.setItem(CACHED_PDFS_KEY, JSON.stringify(cachedUrls));
       
-      // Dispatch event to notify UI of cache update
-      window.dispatchEvent(new CustomEvent('offline-cache-updated', {
-        detail: {
-          source: forceRefresh ? 'force-reload' : 'cache-reload',
-          cachedCount: cachedUrls.length,
-          timestamp: Date.now()
-        }
-      }));
+      // Dispatch event to notify UI of cache update (only if not skipped)
+      if (!skipEvent) {
+        window.dispatchEvent(new CustomEvent('offline-cache-updated', {
+          detail: {
+            source: forceRefresh ? 'force-reload' : 'cache-reload',
+            cachedCount: cachedUrls.length,
+            timestamp: Date.now()
+          }
+        }));
+      }
       
       // FASE 2: Invalidar cache de validação quando cache é atualizado
       if (typeof window !== 'undefined') {
