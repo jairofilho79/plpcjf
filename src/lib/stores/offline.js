@@ -22,6 +22,7 @@ import offlineEvents, { EVENTS as OFFLINE_EVENTS } from '$lib/offline/core/Offli
 import cacheMigration from '$lib/offline/storage/CacheMigration.js';
 import statsCalculator from '$lib/offline/stats/StatsCalculator.js';
 import cacheSync from '$lib/offline/storage/CacheSync.js';
+import offlineManager from '$lib/offline/core/OfflineManager.js';
 
 const ALLOW_OFFLINE_KEY = 'ALLOW_OFFLINE';
 const CACHED_PDFS_KEY = 'cachedPdfsList';
@@ -62,18 +63,12 @@ const offlineState = writable(initialState);
 
 /**
  * Fetch offline manifest from backend
+ * FASE 5: Now uses OfflineManager
  */
 async function fetchOfflineManifest() {
   try {
-    const response = await fetch('/offline-manifest.json', {
-      cache: 'no-cache'
-    });
-
-    if (!response.ok) {
-      throw new Error(`Failed to fetch offline manifest: ${response.status}`);
-    }
-
-    const manifest = await response.json();
+    // FASE 5: Use OfflineManager to get manifest
+    const manifest = await offlineManager.getOfflineManifest(true);
     
     // Calculate category sizes
     const categorySizes = {};
@@ -158,12 +153,16 @@ async function fetchOfflineManifest() {
 
 /**
  * Initialize offline store
+ * FASE 5: Now initializes OfflineManager
  */
 async function initialize() {
   if (!browser) return;
 
   try {
-    // FASE 3: Run cache migration if needed
+    // FASE 5: Initialize OfflineManager first (it handles cache migration internally)
+    await offlineManager.initialize();
+
+    // FASE 3: Run cache migration if needed (backup, OfflineManager also does this)
     if (await cacheMigration.needsMigration()) {
       console.log('[Offline Store] Running cache migration...');
       const migrationResult = await cacheMigration.migrate();
@@ -1044,26 +1043,31 @@ function getPdfUrl(louvor) {
 
 /**
  * Identifies missing PDFs by comparing louvores-manifest.json with cache
+ * FASE 5: Wrapper removed, use findMissingPdfs directly from pdfValidation
  * @param {Array} louvoresData - Array of louvor objects
  * @param {Array} cachedPdfs - Array of cached PDF URLs
  * @returns {Array} - Array of louvor objects with missing PDFs
  */
 function identifyMissingPdfs(louvoresData, cachedPdfs) {
+  // FASE 5: Direct call to pdfValidation utility
   return findMissingPdfs(louvoresData, cachedPdfs);
 }
 
 /**
  * Finds required packages based on missing PDFs and offline manifest
+ * FASE 5: Wrapper removed, use findRequiredPackages directly from pdfValidation
  * @param {Array} missingPdfs - Array of louvor objects with missing PDFs
  * @param {Object} offlineManifest - Offline manifest object
  * @returns {Array} - Array of package parts that need to be downloaded
  */
 function findRequiredPackagesForMissing(missingPdfs, offlineManifest) {
+  // FASE 5: Direct call to pdfValidation utility
   return findRequiredPackages(missingPdfs, offlineManifest);
 }
 
 /**
  * Downloads only the packages needed for missing PDFs
+ * FASE 5: Refactored to use OfflineManager
  * @param {Array} missingPdfs - Array of louvor objects with missing PDFs
  * @returns {Promise<void>}
  */
@@ -1072,49 +1076,29 @@ async function downloadMissingPackages(missingPdfs) {
     return;
   }
 
-  // Get offline manifest
-  const state = get(offlineState);
-  let manifest = state.offlineManifest;
-
-  if (!manifest) {
-    try {
-      manifest = await fetchOfflineManifest();
-    } catch (error) {
-      console.error('[Offline Store] Failed to fetch manifest:', error);
-      offlineState.update(s => ({
-        ...s,
-        error: 'Não foi possível carregar o manifest de pacotes offline.'
-      }));
-      return;
+  try {
+    // FASE 5: Extract categories from missing PDFs and use OfflineManager
+    const louvoresData = get(louvores);
+    const categories = new Set();
+    
+    for (const missingPdf of missingPdfs) {
+      if (missingPdf.categoria) {
+        categories.add(missingPdf.categoria);
+      }
     }
-  }
-
-  // Find required packages
-  const requiredParts = findRequiredPackagesForMissing(missingPdfs, manifest);
-
-  if (requiredParts.length === 0) {
-    console.log('[Offline Store] No packages needed for missing PDFs');
-    return;
-  }
-
-  console.log(`[Offline Store] Found ${requiredParts.length} packages needed for ${missingPdfs.length} missing PDFs`);
-
-  // Group by category and download
-  const categoriesToDownload = [...new Set(requiredParts.map(part => part.category))];
-  
-  // Get all PDF URLs for these categories
-  /**
-   * @type {any[]}
-   */
-  const louvoresData = get(louvores);
-  const pdfUrls = louvoresData
-    .filter(louvor => categoriesToDownload.includes(louvor.categoria))
-    .map(getPdfUrl)
-    .filter(url => url !== null);
-
-  if (pdfUrls.length > 0) {
-    // Use existing zip download function
-    await startZipDownload(categoriesToDownload, pdfUrls);
+    
+    if (categories.size > 0) {
+      // Use OfflineManager to download categories
+      await offlineManager.downloadCategories(Array.from(categories), {
+        louvoresData
+      });
+    }
+  } catch (error) {
+    console.error('[Offline Store] Failed to download missing packages:', error);
+    offlineState.update(s => ({
+      ...s,
+      error: `Erro ao baixar pacotes: ${error.message}`
+    }));
   }
 }
 
@@ -1131,16 +1115,16 @@ function clearStatsCalculationCache() {
 
 /**
  * Get availability statistics for a category
- * FASE 4: Refatorado para usar StatsCalculator, mantendo wrapper para compatibilidade
+ * FASE 5: Now uses OfflineManager, maintaining wrapper for compatibility
  * @param {string} category - Category name
  * @param {Array} louvoresData - All louvores
  * @param {Array} cachedPdfs - Cached PDF URLs
  * @returns {Promise<{total: number, available: number, missing: number, percentage: number}>}
  */
 async function getCategoryAvailabilityStats(category, louvoresData, cachedPdfs) {
-  // FASE 4: Usar StatsCalculator ao invés de cálculo direto
-  // Manter wrapper para compatibilidade com código existente
-  return await statsCalculator.getCategoryStats(category, {
+  // FASE 5: Use OfflineManager instead of direct StatsCalculator
+  // Maintain wrapper for compatibility with existing code
+  return await offlineManager.getCategoryStats(category, {
     louvoresData,
     cachedPdfs,
     useCache: true
@@ -1659,42 +1643,42 @@ async function downloadByCategories(categories) {
     window.open(leitorUrl, '_blank', 'noopener');
   }
 
-  // FASE 3: Use DownloadManager for downloads
-  try {
-    // Initialize state
-    offlineState.update(state => ({
-      ...state,
-      downloading: true,
-      autoDownloading: false,
-      progress: 0,
-      completed: 0,
-      failed: 0,
-      total: filteredLouvores.length,
-      selectedCategories: validCategories,
-      error: null
-    }));
-
-    // Setup progress listener
-    const progressHandler = (progress) => {
+    // FASE 5: Use OfflineManager for downloads
+    try {
+      // Initialize state
       offlineState.update(state => ({
         ...state,
-        progress: progress.progress,
-        completed: progress.completed,
-        failed: progress.failed,
-        total: progress.total
+        downloading: true,
+        autoDownloading: false,
+        progress: 0,
+        completed: 0,
+        failed: 0,
+        total: filteredLouvores.length,
+        selectedCategories: validCategories,
+        error: null
       }));
-    };
 
-    offlineEvents.on(OFFLINE_EVENTS.DOWNLOAD_PROGRESS, progressHandler);
+      // Setup progress listener
+      const progressHandler = (progress) => {
+        offlineState.update(state => ({
+          ...state,
+          progress: progress.progress,
+          completed: progress.completed,
+          failed: progress.failed,
+          total: progress.total
+        }));
+      };
 
-    // Download using DownloadManager
-    const result = await downloadManager.downloadCategories(validCategories, {
-      louvoresData,
-      onProgress: progressHandler
-    });
+      offlineEvents.on(OFFLINE_EVENTS.DOWNLOAD_PROGRESS, progressHandler);
 
-    // Remove progress listener
-    offlineEvents.off(OFFLINE_EVENTS.DOWNLOAD_PROGRESS, progressHandler);
+      // FASE 5: Download using OfflineManager
+      const result = await offlineManager.downloadCategories(validCategories, {
+        louvoresData,
+        onProgress: progressHandler
+      });
+
+      // Remove progress listener
+      offlineEvents.off(OFFLINE_EVENTS.DOWNLOAD_PROGRESS, progressHandler);
 
     // Update final state
     offlineState.update(state => ({
@@ -1708,6 +1692,8 @@ async function downloadByCategories(categories) {
 
     // Sync after download
     if (result.success || result.completed > 0) {
+      // FASE 5: Use OfflineManager to sync cache
+      await offlineManager.syncCache();
       await syncAfterDownload();
       
       // Update downloaded categories
@@ -1746,15 +1732,16 @@ async function downloadByCategories(categories) {
 
 /**
  * Cancel ongoing download
+ * FASE 5: Now uses OfflineManager
  */
 async function cancelDownload() {
   if (!browser) return;
 
-  // FASE 3: Use DownloadManager to cancel
+  // FASE 5: Use OfflineManager to cancel
   try {
-    await downloadManager.cancel();
+    await offlineManager.cancelDownload();
   } catch (error) {
-    console.warn('[Offline Store] Error cancelling via DownloadManager:', error);
+    console.warn('[Offline Store] Error cancelling via OfflineManager:', error);
   }
 
   // Also cancel legacy download if active
@@ -1785,11 +1772,16 @@ async function cancelDownload() {
 
 /**
  * Clear all cached data
+ * FASE 5: Now uses OfflineManager
  */
 async function clearAllCache() {
   if (!browser) return;
 
   try {
+    // FASE 5: Use OfflineManager to clear cache
+    await offlineManager.clearCache();
+    
+    // Also clear Service Worker cache (legacy)
     await clearCacheSW();
     
     // Invalidate local PDFs cache

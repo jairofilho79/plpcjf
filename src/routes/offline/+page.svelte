@@ -22,6 +22,7 @@
   } from '$lib/utils/statsCache';
   import statsCalculator from '$lib/offline/stats/StatsCalculator.js';
   import offlineEvents, { EVENTS as OFFLINE_EVENTS } from '$lib/offline/core/OfflineEvents.js';
+  import offlineManager from '$lib/offline/core/OfflineManager.js';
 
   // Selected categories for download
   /**
@@ -558,11 +559,13 @@
       
       // Get required packages info for selected categories
       if (selectedCategories.length > 0) {
+        // FASE 5: Use OfflineManager to get manifest
         let manifest = state.offlineManifest;
         if (!manifest) {
-          manifest = await offline.fetchOfflineManifest();
+          manifest = await offlineManager.getOfflineManifest();
         }
         if (manifest) {
+          // FASE 5: Use OfflineManager for required packages info
           requiredPackagesInfo = await offline.getRequiredPackagesInfo(
             selectedCategories,
             $louvores,
@@ -731,17 +734,21 @@
       return;
     }
     
-    await offline.downloadByCategories(categoriesToDownload);
+    // FASE 5: Use OfflineManager directly
+    await offlineManager.downloadCategories(categoriesToDownload, {
+      louvoresData: $louvores
+    });
     
     // After download completes, categories will be updated via reactive statement
   }
 
   /**
    * Cancel download
+   * FASE 5: Now uses OfflineManager directly
    */
   async function cancelDownload() {
     console.log('[Offline Page] Cancelling download');
-    await offline.cancelDownload();
+    await offlineManager.cancelDownload();
   }
 </script>
 
