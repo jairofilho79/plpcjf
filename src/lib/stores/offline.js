@@ -57,9 +57,54 @@ const offlineState = writable(initialState);
 
 /**
  * Fetch offline manifest from backend
+ * FASE 2: Usa ManifestRepository quando disponível, mantém compatibilidade
  */
 async function fetchOfflineManifest() {
   try {
+    // Tentar usar ManifestRepository primeiro (nova arquitetura)
+    try {
+      const manifestRepository = await import('$lib/offline/manifest/ManifestRepository.js');
+      const manifest = await manifestRepository.default.getOfflineManifest(true);
+      
+      if (manifest && manifest.packages) {
+        // Calculate category sizes
+        const categorySizes = {};
+        for (const [category, packageData] of Object.entries(manifest.packages)) {
+          categorySizes[category] = packageData.totalSize || 0;
+        }
+
+        // Update state with manifest
+        offlineState.update(state => ({
+          ...state,
+          offlineManifest: manifest,
+          categorySizes
+        }));
+
+        // Validate integrity in background
+        validateManifestsIntegrity()
+          .then(result => {
+            if (!result.valid) {
+              console.warn('[Manifest Validation] Manifest integrity issues detected:', {
+                missingInOffline: result.missingInOffline.length,
+                extraInOffline: result.extraInOffline.length,
+                stats: result.stats
+              });
+            } else {
+              console.log('[Manifest Validation] Manifest integrity check passed:', result.stats);
+            }
+          })
+          .catch(error => {
+            console.error('[Manifest Validation] Error during integrity check:', error);
+          });
+
+        return manifest;
+      }
+    } catch (e) {
+      // Fallback para método antigo se ManifestRepository não disponível
+      console.debug('[Offline Store] ManifestRepository not available, using fallback');
+    }
+
+    // Fallback: método original
     const response = await fetch('/offline-manifest.json', {
       cache: 'no-cache'
     });
@@ -186,9 +231,16 @@ async function initialize() {
  */
 async function loadCachedPdfsList(forceRefresh = false) {
   try {
-    // FASE 3: Limpar cache de memoização quando recarregamos lista de PDFs
+    // FASE 4: Invalidar cache de stats quando recarregamos lista de PDFs
     // pois os dados podem ter mudado
     clearStatsCalculationCache();
+    // Invalidar também no StatsCalculator
+    try {
+      const { default: statsCalculator } = await import('$lib/offline/stats/StatsCalculator.js');
+      statsCalculator.invalidateAll();
+    } catch (e) {
+      // Ignorar erro se StatsCalculator não disponível
+    }
     
     // If force refresh, invalidate local cache first
     if (forceRefresh && browser) {
@@ -378,6 +430,8 @@ async function removeZipFromCache(zipUrl) {
 }
 
 /**
+ * Normalize ZIP entry name for cache storage
+ * FASE 2: Usa normalizePdfUrl para consistência (UrlNormalizer wrapper)
  * @param {string} entryName
  */
 function normalizeZipEntryName(entryName) {
@@ -1137,107 +1191,29 @@ async function downloadMissingPackages(missingPdfs) {
   }
 }
 
-// FASE 3: Cache de memoização para cálculos de stats
-const statsCalculationCache = new Map();
-const CACHE_KEY_SEPARATOR = '|||';
-
-/**
- * FASE 3: Gerar chave de cache para memoização
- * @param {string} category - Categoria
- * @param {number} louvoresHash - Hash simples do número de louvores
- * @param {number} cachedPdfsHash - Hash simples do número de PDFs em cache
- * @returns {string} - Chave de cache
- */
-function getStatsCacheKey(category, louvoresHash, cachedPdfsHash) {
-  return `${category}${CACHE_KEY_SEPARATOR}${louvoresHash}${CACHE_KEY_SEPARATOR}${cachedPdfsHash}`;
-}
-
-/**
- * FASE 3: Limpar cache de memoização (chamado quando há mudanças)
- */
+// FASE 3: Cache de memoização removido - agora usando StatsCalculator
+// Função mantida apenas para compatibilidade com código existente
 function clearStatsCalculationCache() {
-  statsCalculationCache.clear();
+  // StatsCalculator gerencia seu próprio cache
+  // Esta função é mantida para compatibilidade mas não faz nada
 }
 
 /**
  * Get availability statistics for a category
- * FASE 3: Com memoização para otimizar cálculos repetidos
+ * FASE 4: Delegado para StatsCalculator
  * @param {string} category - Category name
  * @param {Array} louvoresData - All louvores
  * @param {Array} cachedPdfs - Cached PDF URLs
  * @returns {Promise<{total: number, available: number, missing: number, percentage: number}>}
  */
 async function getCategoryAvailabilityStats(category, louvoresData, cachedPdfs) {
-  if (!category || !louvoresData || !cachedPdfs) {
-    return { total: 0, available: 0, missing: 0, percentage: 0 };
-  }
-
-  // FASE 3: Verificar cache de memoização
-  const louvoresHash = louvoresData.length;
-  const cachedPdfsHash = cachedPdfs.length;
-  const cacheKey = getStatsCacheKey(category, louvoresHash, cachedPdfsHash);
-  
-  if (statsCalculationCache.has(cacheKey)) {
-    const cached = statsCalculationCache.get(cacheKey);
-    // Verificar se os dados ainda são válidos (mesmo número de louvores e PDFs)
-    if (cached.louvoresCount === louvoresData.length && 
-        cached.cachedPdfsCount === cachedPdfs.length) {
-      return cached.stats;
-    }
-  }
-
-  const categoryLouvores = louvoresData.filter(l => l.categoria === category);
-  const total = categoryLouvores.length;
-  
-  if (total === 0) {
-    const result = { total: 0, available: 0, missing: 0, percentage: 0 };
-    // Cachear resultado vazio também
-    statsCalculationCache.set(cacheKey, {
-      stats: result,
-      louvoresCount: louvoresData.length,
-      cachedPdfsCount: cachedPdfs.length
-    });
-    return result;
-  }
-
-  // FASE 3: Processar cálculo em chunks se houver muitos louvores
-  let missing;
-  if (categoryLouvores.length > 100) {
-    // Para categorias grandes, processar em chunks para não bloquear UI
-    missing = [];
-    const chunkSize = 50;
-    for (let i = 0; i < categoryLouvores.length; i += chunkSize) {
-      const chunk = categoryLouvores.slice(i, i + chunkSize);
-      const chunkMissing = identifyMissingPdfs(chunk, cachedPdfs);
-      missing.push(...chunkMissing);
-      // Yield para UI se necessário
-      if (i + chunkSize < categoryLouvores.length) {
-        await new Promise(resolve => setTimeout(resolve, 0));
-      }
-    }
-  } else {
-    missing = identifyMissingPdfs(categoryLouvores, cachedPdfs);
-  }
-
-  const available = total - missing.length;
-  const percentage = total > 0 ? Math.round((available / total) * 100) : 0;
-
-  const result = { total, available, missing: missing.length, percentage };
-  
-  // FASE 3: Cachear resultado
-  statsCalculationCache.set(cacheKey, {
-    stats: result,
-    louvoresCount: louvoresData.length,
-    cachedPdfsCount: cachedPdfs.length
+  // Usar StatsCalculator que já gerencia cache e otimizações
+  const { default: statsCalculator } = await import('$lib/offline/stats/StatsCalculator.js');
+  return await statsCalculator.getCategoryStats(category, {
+    louvoresData,
+    cachedPdfs,
+    useCache: true
   });
-  
-  // Limitar tamanho do cache (manter apenas últimos 50)
-  if (statsCalculationCache.size > 50) {
-    const firstKey = statsCalculationCache.keys().next().value;
-    statsCalculationCache.delete(firstKey);
-  }
-
-  return result;
 }
 
 /**
