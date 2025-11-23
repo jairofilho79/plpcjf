@@ -12,7 +12,7 @@ import {
 } from '$lib/utils/swRegistration';
 import { unzip } from 'fflate';
 import { louvores } from './louvores';
-import { normalizePdfUrl } from '$lib/utils/pathUtils';
+import urlNormalizer from '$lib/offline/normalization/UrlNormalizer.js';
 import { validateManifestsIntegrity } from '$lib/utils/manifestValidation';
 import { CATEGORY_OPTIONS } from './filters';
 import { atobUTF8 } from '$lib/utils/pathUtils';
@@ -353,8 +353,8 @@ function normalizeZipEntryName(entryName) {
   }
 
   // Use unified normalization function for consistency
-  // normalizePdfUrl handles trimming, URI decoding, lowercase, path separators, and ensures assets/ prefix
-  const normalized = normalizePdfUrl(entryName);
+  // urlNormalizer handles trimming, URI decoding, lowercase, path separators, and ensures assets/ prefix
+  const normalized = urlNormalizer.normalizePdfUrl(entryName);
 
   if (!normalized || normalized.endsWith('/')) {
     return '';
@@ -409,7 +409,7 @@ async function startZipDownloadWithSpecificParts(categories, pdfUrls, partsByCat
   // Normalize PDF URLs for comparison using unified function
   // Add leading slash for set comparison consistency
   const normalizeForSetComparison = (/** @type {string} */ url) => {
-    const normalized = normalizePdfUrl(url);
+    const normalized = urlNormalizer.normalizePdfUrl(url);
     return normalized ? `/${normalized}` : '';
   };
   
@@ -789,7 +789,7 @@ async function isCategoryCompletelyDownloaded(category, cachedPdfs, louvoresData
 
   // Normalize cached PDFs URLs for comparison using unified function
   const normalizedCachedPdfs = new Set(
-    cachedPdfs.map((/** @type {string} */ url) => normalizePdfUrl(url))
+    cachedPdfs.map((/** @type {string} */ url) => urlNormalizer.normalizePdfUrl(url))
   );
 
   // Track unique PDFs found for counting validation
@@ -804,7 +804,7 @@ async function isCategoryCompletelyDownloaded(category, cachedPdfs, louvoresData
     }
 
     // Normalize PDF URL for comparison using unified function
-    const normalizedPdfUrl = normalizePdfUrl(pdfUrl);
+    const normalizedPdfUrl = urlNormalizer.normalizePdfUrl(pdfUrl);
 
     // Check if PDF is in cache using multiple strategies
     let isCached = false;
@@ -1341,7 +1341,7 @@ async function startZipDownload(categories, pdfUrls, alreadyDownloadedCategories
   // Normalize PDF URLs for comparison using unified function
   // Add leading slash for set comparison consistency
   const normalizeForSetComparison = (/** @type {string} */ url) => {
-    const normalized = normalizePdfUrl(url);
+    const normalized = urlNormalizer.normalizePdfUrl(url);
     return normalized ? `/${normalized}` : '';
   };
   

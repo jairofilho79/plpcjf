@@ -2,7 +2,8 @@
 // Manages availability index for PDFs to enable fast validation
 
 import { getCachedPDFsFast, waitForServiceWorker } from '$lib/utils/swRegistration';
-import { getPdfRelPath, normalizePdfUrl } from '$lib/utils/pathUtils';
+import { getPdfRelPath } from '$lib/utils/pathUtils';
+import urlNormalizer from '$lib/offline/normalization/UrlNormalizer.js';
 
 const PDF_INDEX_KEY = 'pdfAvailabilityIndex';
 const INDEX_VERSION = 1;
@@ -47,7 +48,7 @@ export async function generatePdfIndex(louvores) {
     // Normalize cached PDF URLs using centralized function (same as findMissingPdfs)
     const normalizedCacheSet = new Set();
     cachedPdfs.forEach(url => {
-      const normalized = normalizePdfUrl(url);
+      const normalized = urlNormalizer.normalizePdfUrl(url);
       normalizedCacheSet.add(normalized);
       
       // Also add filename-only variation (same logic as findMissingPdfs)
@@ -55,14 +56,14 @@ export async function generatePdfIndex(louvores) {
         const urlObj = new URL(url);
         const filename = urlObj.pathname.split('/').pop();
         if (filename) {
-          const normalizedFilename = normalizePdfUrl(filename);
+          const normalizedFilename = urlNormalizer.normalizePdfUrl(filename);
           normalizedCacheSet.add(normalizedFilename);
         }
       } catch {
         const parts = url.split('/');
         const filename = parts[parts.length - 1];
         if (filename) {
-          const normalizedFilename = normalizePdfUrl(filename);
+          const normalizedFilename = urlNormalizer.normalizePdfUrl(filename);
           normalizedCacheSet.add(normalizedFilename);
         }
       }
@@ -87,7 +88,7 @@ export async function generatePdfIndex(louvores) {
         }
 
         // Normalize expected path using centralized function
-        const normalizedPath = normalizePdfUrl(pdfPath);
+        const normalizedPath = urlNormalizer.normalizePdfUrl(pdfPath);
         
         // Check using same strategies as findMissingPdfs
         let isAvailable = false;

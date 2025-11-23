@@ -6,7 +6,8 @@
   import GestureButton from '$lib/components/GestureButton.svelte';
   import CarouselNavigator from '$lib/components/CarouselNavigator.svelte';
   import { carousel } from '$lib/stores/carousel';
-  import { getPdfRelPath, normalizePdfUrl } from '$lib/utils/pathUtils';
+  import { getPdfRelPath } from '$lib/utils/pathUtils';
+  import urlNormalizer from '$lib/offline/normalization/UrlNormalizer.js';
   import { loadPdfJsComplete, loadPdfJsViewer } from '$lib/utils/pdfjsLoader';
 
   // Type for PDF.js getDocument function
@@ -219,7 +220,7 @@
     // Extract PDF path from URL and normalize using unified function (outside try for catch access)
     const urlObj = new URL(fileUrl, window.location.origin);
     const pdfPath = urlObj.pathname.startsWith('/') ? urlObj.pathname.substring(1) : urlObj.pathname;
-    const normalizedPath = normalizePdfUrl(pdfPath);
+    const normalizedPath = urlNormalizer.normalizePdfUrl(pdfPath);
     const normalizedFullUrl = new URL(`/${normalizedPath}`, window.location.origin).href;
     
     try {
@@ -290,7 +291,7 @@
       // Extract PDF path from URL for fallback attempts
       const urlObj = new URL(fileUrl, window.location.origin);
       const pdfPath = urlObj.pathname.startsWith('/') ? urlObj.pathname.substring(1) : urlObj.pathname;
-      const normalizedPath = normalizePdfUrl(pdfPath);
+      const normalizedPath = urlNormalizer.normalizePdfUrl(pdfPath);
       
       // Try variations of the URL
       const urlVariations = [

@@ -2,8 +2,11 @@
 // Validates PDF availability and identifies missing PDFs
 
 import { getCachedPDFsFast, waitForServiceWorker, downloadPDFsViaSW, invalidateCachedPDFsLocal, getCachedPDFs } from '$lib/utils/swRegistration';
-import { getPdfRelPath, normalizePdfUrl } from '$lib/utils/pathUtils';
+import { getPdfRelPath } from '$lib/utils/pathUtils';
 import { isPdfAvailableInIndex } from '$lib/utils/pdfIndex';
+import compositeValidator from '$lib/offline/validation/CompositeValidator.js';
+import cacheStorageAdapter from '$lib/offline/storage/CacheStorageAdapter.js';
+import urlNormalizer from '$lib/offline/normalization/UrlNormalizer.js';
 
 // Cache de validação de PDFs - Fase 2
 const VALIDATION_CACHE_TTL = 24 * 60 * 60 * 1000; // 24 horas
@@ -153,32 +156,26 @@ export async function validatePdfAvailabilityFast(pdfPath, pdfId = null) {
     }
   }
 
-  // Strategy 2: Quick index check (if PDF ID is provided)
-  if (pdfId) {
-    const indexCheck = isPdfAvailableInIndex(pdfId);
-    if (indexCheck === true) {
-      // Index says available - trust it and return quickly
-      // Cache the result for future use
-      cacheValidation(pdfId, { available: true, url: fullUrl });
-      return { available: true, needsDownload: false, url: fullUrl };
-    } else if (indexCheck === false) {
-      // Index says not available - check if can be downloaded
-      // Cache the result for future use
-      cacheValidation(pdfId, { available: false, url: fullUrl });
-      return { available: false, needsDownload: navigator.onLine, url: fullUrl };
-    }
-    // If indexCheck is null, index doesn't have info - continue to full validation
-  }
-
-  // Strategy 3: Full validation (index unavailable or no PDF ID provided)
-  const result = await validatePdfAvailability(pdfPath);
+  // Strategy 2: Use CompositeValidator with optimized options
+  const result = await compositeValidator.validate(normalizedPath, {
+    useIndex: true,
+    checkNetwork: false, // Skip network for fast validation
+    pdfId: pdfId
+  });
+  
+  // Convert ValidationResult to legacy format
+  const legacyResult = {
+    available: result.available,
+    needsDownload: result.needsDownload,
+    url: result.url || fullUrl
+  };
   
   // Cache the result if PDF ID is provided
-  if (pdfId && result.url) {
-    cacheValidation(pdfId, { available: result.available, url: result.url });
+  if (pdfId && legacyResult.url) {
+    cacheValidation(pdfId, { available: legacyResult.available, url: legacyResult.url });
   }
   
-  return result;
+  return legacyResult;
 }
 
 /**
@@ -204,141 +201,38 @@ export async function validatePdfAvailability(pdfPath, pdfId = null) {
   }
 
   try {
-    // Check cache via Service Worker (using fast version with local cache)
-    let cachedPdfs = await getCachedPDFsFast();
+    // Use CompositeValidator with full validation (cache + network)
+    const result = await compositeValidator.validate(normalizedPath, {
+      useIndex: true,
+      checkNetwork: navigator.onLine,
+      pdfId: pdfId
+    });
     
-    // Normalize target path using centralized function
-    const normalizedTarget = normalizePdfUrl(normalizedPath);
-    
-    // Helper function to check if PDF is in cached set
-    const checkPdfInCache = (pdfList) => {
-      const normalizedCacheSet = new Set();
-      pdfList.forEach(url => {
-        const normalized = normalizePdfUrl(url);
-        normalizedCacheSet.add(normalized);
-        
-        // Also add filename-only variation
-        try {
-          const urlObj = new URL(url);
-          const filename = urlObj.pathname.split('/').pop();
-          if (filename) {
-            const normalizedFilename = normalizePdfUrl(filename);
-            normalizedCacheSet.add(normalizedFilename);
-          }
-        } catch {
-          const parts = url.split('/');
-          const filename = parts[parts.length - 1];
-          if (filename) {
-            const normalizedFilename = normalizePdfUrl(filename);
-            normalizedCacheSet.add(normalizedFilename);
-          }
-        }
-      });
-      
-      // Check using same strategies as findMissingPdfs
-      let isCached = false;
-      
-      // Strategy 1: Exact match
-      if (normalizedCacheSet.has(normalizedTarget)) {
-        isCached = true;
-      }
-      
-      // Strategy 2: Filename match
-      if (!isCached) {
-        const filename = normalizedTarget.split('/').pop();
-        if (filename && normalizedCacheSet.has(filename)) {
-          isCached = true;
-        }
-      }
-      
-      // Strategy 3: Partial match (same logic as findMissingPdfs)
-      if (!isCached) {
-        isCached = Array.from(normalizedCacheSet).some(cached => {
-          if (cached === normalizedTarget) return true;
-          if (cached.endsWith(normalizedTarget)) return true;
-          if (normalizedTarget.endsWith(cached)) return true;
-          
-          const cachedFilename = cached.split('/').pop();
-          const expectedFilename = normalizedTarget.split('/').pop();
-          if (cachedFilename && expectedFilename && cachedFilename === expectedFilename) {
-            return true;
-          }
-          
-          if (cachedFilename && expectedFilename) {
-            const cachedBase = cachedFilename.replace(/\.pdf$/i, '');
-            const expectedBase = expectedFilename.replace(/\.pdf$/i, '');
-            if (cachedBase && expectedBase && cachedBase === expectedBase) {
-              return true;
-            }
-          }
-          
-          return false;
-        });
-      }
-      
-      return { isCached, normalizedCacheSet };
+    // Convert ValidationResult to legacy format
+    const legacyResult = {
+      available: result.available,
+      needsDownload: result.needsDownload,
+      url: result.url || fullUrl
     };
     
-    // First check with cached list
-    let { isCached, normalizedCacheSet } = checkPdfInCache(cachedPdfs);
-    
-    // If not found and we're using cached data, invalidate cache and try again
-    // This fixes the issue where lazy loading might use stale cache
-    if (!isCached && cachedPdfs.length > 0) {
-      // Invalidate local cache to force fresh fetch from Service Worker
-      invalidateCachedPDFsLocal();
-      
-      // Try again with fresh data from Service Worker
-      cachedPdfs = await getCachedPDFs();
-      const retryCheck = checkPdfInCache(cachedPdfs);
-      isCached = retryCheck.isCached;
-      normalizedCacheSet = retryCheck.normalizedCacheSet;
-    }
-
-    if (isCached) {
-      const result = { available: true, needsDownload: false, url: fullUrl };
-      // Cache the result if PDF ID is provided
-      if (pdfId) {
-        cacheValidation(pdfId, { available: true, url: fullUrl });
-      }
-      return result;
+    // Cache the result if PDF ID is provided
+    if (pdfId && legacyResult.url) {
+      cacheValidation(pdfId, { available: legacyResult.available, url: legacyResult.url });
     }
     
     // Debug: Log when PDF is not found (only for first few misses to avoid spam)
-    if (!validatePdfAvailability._missCount) {
-      validatePdfAvailability._missCount = 0;
-    }
-    if (validatePdfAvailability._missCount < 3) {
-      validatePdfAvailability._missCount++;
-      console.warn(`[PDF Validation] PDF not found in cache: ${pdfPath} (normalized: ${normalizedTarget})`);
-      console.warn(`[PDF Validation] Sample cached PDFs:`, Array.from(normalizedCacheSet).slice(0, 5));
-      console.warn(`[PDF Validation] Total cached PDFs: ${cachedPdfs.length}`);
-    }
-
-    // If not in cache, check if it can be downloaded (online)
-    if (navigator.onLine) {
-      // Try HEAD request to verify if PDF exists
-      try {
-        const response = await fetch(fullUrl, { 
-          method: 'HEAD', 
-          cache: 'no-cache',
-          signal: AbortSignal.timeout(5000) // 5 second timeout
-        });
-        if (response.ok) {
-          return { available: false, needsDownload: true, url: fullUrl };
-        }
-      } catch (err) {
-        // Network error or timeout - assume not available
-        console.warn('[PDF Validation] Network check failed:', err);
+    if (!legacyResult.available) {
+      if (!validatePdfAvailability._missCount) {
+        validatePdfAvailability._missCount = 0;
+      }
+      if (validatePdfAvailability._missCount < 3) {
+        validatePdfAvailability._missCount++;
+        console.warn(`[PDF Validation] PDF not found: ${pdfPath} (normalized: ${result.normalizedPath})`);
+        console.warn(`[PDF Validation] Source: ${result.source}`);
       }
     }
-
-    const result = { available: false, needsDownload: false, url: fullUrl };
-    // Cache the result if PDF ID is provided
-    if (pdfId) {
-      cacheValidation(pdfId, { available: false, url: fullUrl });
-    }
-    return result;
+    
+    return legacyResult;
   } catch (error) {
     console.error('[PDF Validation] Error:', error);
     const result = { available: false, needsDownload: false, url: fullUrl };
@@ -407,7 +301,7 @@ export function findMissingPdfs(louvores, cachedPdfs) {
   const normalizedCacheVariations = new Map(); // Map normalized -> original for debugging
   
   cachedPdfs.forEach(url => {
-    const normalized = normalizePdfUrl(url);
+    const normalized = urlNormalizer.normalizePdfUrl(url);
     normalizedCacheSet.add(normalized);
     normalizedCacheVariations.set(normalized, url);
     
@@ -416,14 +310,14 @@ export function findMissingPdfs(louvores, cachedPdfs) {
       const urlObj = new URL(url);
       const filename = urlObj.pathname.split('/').pop();
       if (filename) {
-        const normalizedFilename = normalizePdfUrl(filename);
+        const normalizedFilename = urlNormalizer.normalizePdfUrl(filename);
         normalizedCacheSet.add(normalizedFilename);
       }
     } catch {
       const parts = url.split('/');
       const filename = parts[parts.length - 1];
       if (filename) {
-        const normalizedFilename = normalizePdfUrl(filename);
+        const normalizedFilename = urlNormalizer.normalizePdfUrl(filename);
         normalizedCacheSet.add(normalizedFilename);
       }
     }
@@ -443,7 +337,7 @@ export function findMissingPdfs(louvores, cachedPdfs) {
     }
 
     // Normalize expected path
-    const normalizedPath = normalizePdfUrl(pdfPath);
+    const normalizedPath = urlNormalizer.normalizePdfUrl(pdfPath);
     
     // Check multiple matching strategies
     let isCached = false;
@@ -594,16 +488,23 @@ export async function validatePdfWithStrategies(louvor, indexCheck = null) {
     // If index says available or null, continue to full validation
   }
 
-  // Strategy 2: Full cache validation
+  // Strategy 2: Full cache validation using CompositeValidator
   const pdfPath = getPdfRelPath(louvor);
   if (!pdfPath) {
     return { available: false, needsDownload: false, url: null, method: 'validation' };
   }
 
-  const validation = await validatePdfAvailability(pdfPath);
+  const validation = await compositeValidator.validate(pdfPath, {
+    useIndex: true,
+    checkNetwork: navigator.onLine,
+    pdfId: louvor.pdfId
+  });
+  
   return {
-    ...validation,
-    method: validation.available ? 'cache' : 'validation'
+    available: validation.available,
+    needsDownload: validation.needsDownload,
+    url: validation.url || null,
+    method: validation.source === 'cache' ? 'cache' : validation.source === 'index' ? 'index' : 'validation'
   };
 }
 
