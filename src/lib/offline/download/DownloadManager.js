@@ -17,6 +17,8 @@ import { createLogger } from '../utils/OfflineLogger.js';
 import { browser } from '$app/environment';
 import { notifyCacheUpdate, updateCacheVersion } from '$lib/utils/cacheSync.js';
 import { invalidateCategory, invalidateCategories } from '$lib/utils/statsCache.js';
+import statsCalculator from '../stats/StatsCalculator.js';
+import cacheSync from '../storage/CacheSync.js';
 
 const logger = createLogger('DownloadManager');
 
@@ -351,11 +353,26 @@ export class DownloadManager {
         }
       }
 
-      // Emit complete event
+      // FASE 4: Invalidate stats for affected categories before emitting event
+      // This ensures stats are invalidated and will be recalculated on next access
+      if (categories && categories.length > 0) {
+        logger.debug('DownloadManager', `Invalidating stats for ${categories.length} categories`);
+        invalidateCategories(categories);
+        // Also invalidate via StatsCalculator to clear memory cache
+        categories.forEach(category => {
+          statsCalculator.invalidateCategory(category);
+        });
+      }
+
+      // Sync cache after download
+      await cacheSync.sync();
+
+      // Emit complete event with categories info
       offlineEvents.emit(EVENTS.DOWNLOAD_COMPLETE, {
         completed,
         failed,
-        total: pdfUrls.length
+        total: pdfUrls.length,
+        categories: categories || []
       });
 
       return { completed, failed };

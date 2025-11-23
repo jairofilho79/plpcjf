@@ -20,6 +20,8 @@ import { findMissingPdfs, findRequiredPackages } from '$lib/utils/pdfValidation'
 import downloadManager from '$lib/offline/download/DownloadManager.js';
 import offlineEvents, { EVENTS as OFFLINE_EVENTS } from '$lib/offline/core/OfflineEvents.js';
 import cacheMigration from '$lib/offline/storage/CacheMigration.js';
+import statsCalculator from '$lib/offline/stats/StatsCalculator.js';
+import cacheSync from '$lib/offline/storage/CacheSync.js';
 
 const ALLOW_OFFLINE_KEY = 'ALLOW_OFFLINE';
 const CACHED_PDFS_KEY = 'cachedPdfsList';
@@ -268,6 +270,23 @@ async function syncAfterDownload() {
     
     // Save to OFFLINE_CATEGORIAS_SALVAS flag
     saveDownloadedCategories(completelyDownloaded);
+    
+    // FASE 4: Invalidate stats for affected categories
+    // Identify which categories might have been affected by the download
+    const allCategories = [...new Set(louvoresData.map(l => l.categoria).filter(Boolean))];
+    const affectedCategories = allCategories.filter(cat => {
+      // Invalidate categories that were just marked as downloaded or might have changed
+      return completelyDownloaded.includes(cat);
+    });
+    
+    if (affectedCategories.length > 0) {
+      affectedCategories.forEach(category => {
+        statsCalculator.invalidateCategory(category);
+      });
+    }
+    
+    // Sync caches
+    await cacheSync.sync();
     
     // Validate and clear error if no PDFs are actually missing
     const currentState = get(offlineState);
@@ -1099,107 +1118,33 @@ async function downloadMissingPackages(missingPdfs) {
   }
 }
 
-// FASE 3: Cache de memoização para cálculos de stats
-const statsCalculationCache = new Map();
-const CACHE_KEY_SEPARATOR = '|||';
-
+// FASE 4: Cache de memoização removido - agora gerenciado por StatsCalculator
+// Mantendo função clearStatsCalculationCache para compatibilidade
 /**
- * FASE 3: Gerar chave de cache para memoização
- * @param {string} category - Categoria
- * @param {number} louvoresHash - Hash simples do número de louvores
- * @param {number} cachedPdfsHash - Hash simples do número de PDFs em cache
- * @returns {string} - Chave de cache
- */
-function getStatsCacheKey(category, louvoresHash, cachedPdfsHash) {
-  return `${category}${CACHE_KEY_SEPARATOR}${louvoresHash}${CACHE_KEY_SEPARATOR}${cachedPdfsHash}`;
-}
-
-/**
- * FASE 3: Limpar cache de memoização (chamado quando há mudanças)
+ * FASE 4: Limpar cache de memoização (chamado quando há mudanças)
+ * Agora delega para StatsCalculator
  */
 function clearStatsCalculationCache() {
-  statsCalculationCache.clear();
+  // FASE 4: Invalidar cache via StatsCalculator
+  statsCalculator.invalidateAll();
 }
 
 /**
  * Get availability statistics for a category
- * FASE 3: Com memoização para otimizar cálculos repetidos
+ * FASE 4: Refatorado para usar StatsCalculator, mantendo wrapper para compatibilidade
  * @param {string} category - Category name
  * @param {Array} louvoresData - All louvores
  * @param {Array} cachedPdfs - Cached PDF URLs
  * @returns {Promise<{total: number, available: number, missing: number, percentage: number}>}
  */
 async function getCategoryAvailabilityStats(category, louvoresData, cachedPdfs) {
-  if (!category || !louvoresData || !cachedPdfs) {
-    return { total: 0, available: 0, missing: 0, percentage: 0 };
-  }
-
-  // FASE 3: Verificar cache de memoização
-  const louvoresHash = louvoresData.length;
-  const cachedPdfsHash = cachedPdfs.length;
-  const cacheKey = getStatsCacheKey(category, louvoresHash, cachedPdfsHash);
-  
-  if (statsCalculationCache.has(cacheKey)) {
-    const cached = statsCalculationCache.get(cacheKey);
-    // Verificar se os dados ainda são válidos (mesmo número de louvores e PDFs)
-    if (cached.louvoresCount === louvoresData.length && 
-        cached.cachedPdfsCount === cachedPdfs.length) {
-      return cached.stats;
-    }
-  }
-
-  const categoryLouvores = louvoresData.filter(l => l.categoria === category);
-  const total = categoryLouvores.length;
-  
-  if (total === 0) {
-    const result = { total: 0, available: 0, missing: 0, percentage: 0 };
-    // Cachear resultado vazio também
-    statsCalculationCache.set(cacheKey, {
-      stats: result,
-      louvoresCount: louvoresData.length,
-      cachedPdfsCount: cachedPdfs.length
-    });
-    return result;
-  }
-
-  // FASE 3: Processar cálculo em chunks se houver muitos louvores
-  let missing;
-  if (categoryLouvores.length > 100) {
-    // Para categorias grandes, processar em chunks para não bloquear UI
-    missing = [];
-    const chunkSize = 50;
-    for (let i = 0; i < categoryLouvores.length; i += chunkSize) {
-      const chunk = categoryLouvores.slice(i, i + chunkSize);
-      const chunkMissing = identifyMissingPdfs(chunk, cachedPdfs);
-      missing.push(...chunkMissing);
-      // Yield para UI se necessário
-      if (i + chunkSize < categoryLouvores.length) {
-        await new Promise(resolve => setTimeout(resolve, 0));
-      }
-    }
-  } else {
-    missing = identifyMissingPdfs(categoryLouvores, cachedPdfs);
-  }
-
-  const available = total - missing.length;
-  const percentage = total > 0 ? Math.round((available / total) * 100) : 0;
-
-  const result = { total, available, missing: missing.length, percentage };
-  
-  // FASE 3: Cachear resultado
-  statsCalculationCache.set(cacheKey, {
-    stats: result,
-    louvoresCount: louvoresData.length,
-    cachedPdfsCount: cachedPdfs.length
+  // FASE 4: Usar StatsCalculator ao invés de cálculo direto
+  // Manter wrapper para compatibilidade com código existente
+  return await statsCalculator.getCategoryStats(category, {
+    louvoresData,
+    cachedPdfs,
+    useCache: true
   });
-  
-  // Limitar tamanho do cache (manter apenas últimos 50)
-  if (statsCalculationCache.size > 50) {
-    const firstKey = statsCalculationCache.keys().next().value;
-    statsCalculationCache.delete(firstKey);
-  }
-
-  return result;
 }
 
 /**
@@ -1913,11 +1858,42 @@ let isInitialized = false;
 /**
  * Lazy initialization function - must be called explicitly
  */
+/**
+ * FASE 4: Setup automatic stats invalidation on download complete
+ */
+function setupAutoStatsInvalidation() {
+  if (!browser) return;
+
+  // Listen for download complete events
+  offlineEvents.on(OFFLINE_EVENTS.DOWNLOAD_COMPLETE, async (event) => {
+    const detail = /** @type {{categories?: string[]}} */ (event.detail || {});
+    const categories = detail.categories || [];
+
+    if (categories.length > 0) {
+      console.log('[Offline Store] FASE 4: Invalidating stats for categories after download:', categories);
+      
+      // Invalidate stats for affected categories
+      categories.forEach((/** @type {string} */ category) => {
+        statsCalculator.invalidateCategory(category);
+      });
+
+      // Sync caches
+      await cacheSync.sync().catch(err => {
+        console.error('[Offline Store] Error syncing caches after download:', err);
+      });
+    }
+  });
+}
+
 async function lazyInitialize() {
   if (!browser || isInitialized) {
     return;
   }
   isInitialized = true;
+  
+  // FASE 4: Setup automatic stats invalidation
+  setupAutoStatsInvalidation();
+  
   await initialize();
 }
 
