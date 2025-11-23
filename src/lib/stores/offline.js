@@ -2219,6 +2219,17 @@ async function forceRevalidateCategory(category) {
   }
 }
 
+/**
+ * Update offline state directly (for use by DownloadManager)
+ * @param {Object} updates - State updates
+ */
+function updateOfflineState(updates) {
+  offlineState.update(state => ({
+    ...state,
+    ...updates
+  }));
+}
+
 // Export store and methods
 export const offline = {
   subscribe: offlineState.subscribe,
@@ -2244,7 +2255,8 @@ export const offline = {
   validateAndClearError,
   validateAndSyncStats,
   forceRevalidateCategory,
-  lazyInitialize // Export lazy initialization function
+  lazyInitialize, // Export lazy initialization function
+  updateState: updateOfflineState // Export state update function for DownloadManager
 };
 
 // Derived store for offline status

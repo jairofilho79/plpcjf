@@ -85,6 +85,17 @@ export class DownloadManager {
       // Emit start event
       offlineEvents.emit(EVENTS.DOWNLOAD_STARTED, { categories });
 
+      // Update offline store state for UI compatibility
+      this._updateOfflineState({
+        downloading: true,
+        progress: 0,
+        completed: 0,
+        failed: 0,
+        total: 0,
+        selectedCategories: categories,
+        error: null
+      });
+
       // Get louvores data
       const louvoresData = options.louvoresData || get(louvores);
       if (!louvoresData || louvoresData.length === 0) {
@@ -164,16 +175,45 @@ export class DownloadManager {
         .map(louvor => this._getPdfUrl(louvor))
         .filter(url => url !== null);
 
-      // Download packages
+      // Update total in offline state
+      this._updateOfflineState({
+        total: pdfUrls.length
+      });
+
+      // Download packages with progress callback that updates offline state
       const result = await this._downloadPackages(
         Object.keys(partsByCategory),
         pdfUrls,
         partsByCategory,
-        options.onProgress
+        (progress) => {
+          // Call user's progress callback if provided
+          if (options.onProgress) {
+            options.onProgress(progress);
+          }
+          
+          // Update offline store state for UI
+          this._updateOfflineState({
+            progress: progress.percentage || 0,
+            completed: progress.completed || 0,
+            failed: progress.failed || 0
+          });
+        }
       );
 
       // Sync cache after download
       await this._syncCacheAfterDownload(categories);
+
+      // Update final state
+      const finalProgress = pdfUrls.length > 0 
+        ? Math.floor((result.completed / pdfUrls.length) * 100) 
+        : 100;
+      
+      this._updateOfflineState({
+        downloading: false,
+        progress: finalProgress,
+        completed: result.completed,
+        failed: result.failed
+      });
 
       return {
         success: result.failed === 0,
@@ -184,6 +224,14 @@ export class DownloadManager {
       };
     } catch (error) {
       logger.error('DownloadManager', 'Error downloading categories', error);
+      
+      // Update state with error
+      this._updateOfflineState({
+        downloading: false,
+        error: error.message === 'DOWNLOAD_CANCELLED' 
+          ? 'Download cancelado pelo usuário.' 
+          : error.message || 'Erro ao baixar pacotes ZIP.'
+      });
       
       if (error.message === 'DOWNLOAD_CANCELLED') {
         return {
@@ -265,6 +313,12 @@ export class DownloadManager {
 
     this.queue.cancel();
     this.isDownloading = false;
+
+    // Update offline state
+    this._updateOfflineState({
+      downloading: false,
+      error: 'Download cancelado pelo usuário.'
+    });
 
     offlineEvents.emit(EVENTS.DOWNLOAD_ERROR, { error: 'Download cancelled' });
   }
@@ -405,6 +459,30 @@ export class DownloadManager {
       categories,
       errors: ['Full category download not yet implemented']
     };
+  }
+
+  /**
+   * Update offline store state for UI compatibility
+   * @param {Object} updates - State updates
+   * @private
+   */
+  _updateOfflineState(updates) {
+    try {
+      // Use dynamic import but don't await - we want this to be fire-and-forget
+      // to avoid blocking the download process
+      import('$lib/stores/offline.js').then(({ offline }) => {
+        // Update state using the exposed updateState method
+        if (offline.updateState) {
+          offline.updateState(updates);
+        } else {
+          logger.warn('DownloadManager', 'Offline store updateState method not available');
+        }
+      }).catch(error => {
+        logger.warn('DownloadManager', 'Could not update offline state', error);
+      });
+    } catch (error) {
+      logger.warn('DownloadManager', 'Could not update offline state', error);
+    }
   }
 
   /**
