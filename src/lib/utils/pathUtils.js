@@ -1,3 +1,5 @@
+import { decodeUrlComponentUtf8, decodeUrlUtf8Multiple } from './urlEncoding.js';
+
 /**
  * Decodifica base64 para UTF-8 corretamente
  * 
@@ -53,12 +55,13 @@ export function getPdfRelPath(louvor) {
     }
     
     // Decodifica caracteres URI-encoded se necessário (para evitar dupla codificação)
+    // Usa UTF-8 explicitamente
     try {
       if (path.includes('%')) {
-        path = decodeURIComponent(path);
+        path = decodeUrlUtf8Multiple(path, 3);
       }
     } catch (_) {
-      // Se decodeURIComponent falhar, mantém o path original
+      // Se decodeUrlComponentUtf8 falhar, mantém o path original
     }
     
     // Verifica se começa com "assets/" (case-sensitive para preservar o caminho original)
@@ -133,20 +136,10 @@ export function normalizePdfUrl(url) {
     // Remove leading/trailing slashes
     normalized = normalized.replace(/^\/+/, '').replace(/\/+$/, '');
     
-    // Decode URI encoding (handle multiple encodings)
+    // Decode URI encoding (handle multiple encodings) with UTF-8
     try {
-      // Try decoding up to 3 times to handle double/triple encoding
-      for (let i = 0; i < 3; i++) {
-        if (normalized.includes('%')) {
-          const decoded = decodeURIComponent(normalized);
-          if (decoded !== normalized) {
-            normalized = decoded;
-          } else {
-            break;
-          }
-        } else {
-          break;
-        }
+      if (normalized.includes('%')) {
+        normalized = decodeUrlUtf8Multiple(normalized, 3);
       }
     } catch {
       // If decoding fails, continue with original

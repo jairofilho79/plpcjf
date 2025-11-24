@@ -17,6 +17,14 @@ import { CATEGORY_OPTIONS } from './filters';
 import { atobUTF8 } from '$lib/utils/pathUtils';
 import { findMissingPdfs, findRequiredPackages } from '$lib/utils/pdfValidation';
 import { getConfig } from '$lib/offline/core/OfflineConfig.js';
+import { 
+  encodeUrlUtf8, 
+  decodeUrlUtf8, 
+  encodeUrlComponentUtf8, 
+  decodeUrlComponentUtf8, 
+  createUrlUtf8,
+  decodeUrlUtf8Multiple
+} from '$lib/utils/urlEncoding.js';
 
 const ALLOW_OFFLINE_KEY = 'ALLOW_OFFLINE';
 const CACHED_PDFS_KEY = 'cachedPdfsList';
@@ -471,18 +479,10 @@ function normalizeZipEntryName(entryName) {
   prepared = prepared.replace(/^\/+/, '').replace(/\/+$/, '');
   
   // Decode URI encoding (handle multiple encodings) but preserve case and accents
+  // Use UTF-8 explicit decoding
   try {
-    for (let i = 0; i < 3; i++) {
-      if (prepared.includes('%')) {
-        const decoded = decodeURIComponent(prepared);
-        if (decoded !== prepared) {
-          prepared = decoded;
-        } else {
-          break;
-        }
-      } else {
-        break;
-      }
+    if (prepared.includes('%')) {
+      prepared = decodeUrlUtf8Multiple(prepared, 3);
     }
   } catch {
     // If decoding fails, continue with original
@@ -666,7 +666,7 @@ async function startZipDownloadWithSpecificParts(categories, pdfUrls, partsByCat
           }
 
           const pdfBlob = new Blob([fileData], { type: 'application/pdf' });
-          const requestUrl = new URL(preparedPath, location.origin).toString();
+          const requestUrl = createUrlUtf8(preparedPath, location.origin);
           const pdfResponse = new Response(pdfBlob, {
             headers: { 'Content-Type': 'application/pdf' }
           });
@@ -702,7 +702,7 @@ async function startZipDownloadWithSpecificParts(categories, pdfUrls, partsByCat
         }
 
         // Remove o arquivo ZIP do cache após processar todos os PDFs
-        const fullPackageUrl = new URL(packageUrl, location.origin).toString();
+        const fullPackageUrl = createUrlUtf8(packageUrl, location.origin);
         await removeZipFromCache(fullPackageUrl);
       }
     }
@@ -1602,7 +1602,7 @@ async function startZipDownload(categories, pdfUrls, alreadyDownloadedCategories
           }
 
           const pdfBlob = new Blob([fileData], { type: 'application/pdf' });
-          const requestUrl = new URL(preparedPath, location.origin).toString();
+          const requestUrl = createUrlUtf8(preparedPath, location.origin);
           const pdfResponse = new Response(pdfBlob, {
             headers: { 'Content-Type': 'application/pdf' }
           });
@@ -1638,7 +1638,7 @@ async function startZipDownload(categories, pdfUrls, alreadyDownloadedCategories
         }
 
         // Remove o arquivo ZIP do cache após processar todos os PDFs
-        const fullPackageUrl = new URL(packageUrl, location.origin).toString();
+        const fullPackageUrl = createUrlUtf8(packageUrl, location.origin);
         await removeZipFromCache(fullPackageUrl);
       }
     }

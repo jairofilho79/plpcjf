@@ -6,6 +6,7 @@ import { getPdfRelPath } from '$lib/utils/pathUtils';
 import { isPdfAvailableInIndex } from '$lib/utils/pdfIndex';
 import compositeValidator from '$lib/offline/validation/CompositeValidator.js';
 import cacheStorageAdapter from '$lib/offline/storage/CacheStorageAdapter.js';
+import { createUrlUtf8 } from '$lib/utils/urlEncoding.js';
 
 // Cache de validação de PDFs - Fase 2
 const VALIDATION_CACHE_TTL = 24 * 60 * 60 * 1000; // 24 horas
@@ -141,7 +142,7 @@ export async function validatePdfAvailabilityFast(pdfPath, pdfId = null) {
   }
 
   const normalizedPath = pdfPath.startsWith('/') ? pdfPath.substring(1) : pdfPath;
-  const fullUrl = new URL(`/${normalizedPath}`, window.location.origin).href;
+  const fullUrl = createUrlUtf8(`/${normalizedPath}`, window.location.origin);
 
   // Strategy 1: Check validation cache (if PDF ID is provided) - Fase 2
   if (pdfId) {
@@ -190,7 +191,7 @@ export async function validatePdfAvailability(pdfPath, pdfId = null) {
 
   // Normalize path (remove leading slash if present)
   const normalizedPath = pdfPath.startsWith('/') ? pdfPath.substring(1) : pdfPath;
-  const fullUrl = new URL(`/${normalizedPath}`, window.location.origin).href;
+  const fullUrl = createUrlUtf8(`/${normalizedPath}`, window.location.origin);
 
   // Wait for Service Worker to be ready (reduzido para 500ms para melhor performance)
   const swReady = await waitForServiceWorker(500);

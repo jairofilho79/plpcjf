@@ -8,6 +8,14 @@ import { getConfig } from '../core/OfflineConfig.js';
 import offlineEvents, { EVENTS } from '../core/OfflineEvents.js';
 import { createLogger } from '../utils/OfflineLogger.js';
 import { browser } from '$app/environment';
+import { 
+  encodeUrlUtf8, 
+  decodeUrlUtf8, 
+  encodeUrlComponentUtf8, 
+  decodeUrlComponentUtf8, 
+  createUrlUtf8,
+  decodeUrlUtf8Multiple
+} from '$lib/utils/urlEncoding.js';
 
 const logger = createLogger('CacheStorageAdapter');
 
@@ -127,18 +135,10 @@ export class CacheStorageAdapter extends CacheRepository {
       prepared = prepared.replace(/^\/+/, '').replace(/\/+$/, '');
       
       // Decode URI encoding (handle multiple encodings) but preserve case and accents
+      // Use UTF-8 explicit decoding
       try {
-        for (let i = 0; i < 3; i++) {
-          if (prepared.includes('%')) {
-            const decoded = decodeURIComponent(prepared);
-            if (decoded !== prepared) {
-              prepared = decoded;
-            } else {
-              break;
-            }
-          } else {
-            break;
-          }
+        if (prepared.includes('%')) {
+          prepared = decodeUrlUtf8Multiple(prepared, 3);
         }
       } catch {
         // If decoding fails, continue with original
@@ -217,16 +217,16 @@ export class CacheStorageAdapter extends CacheRepository {
 
       const cache = await this._openCache();
       
-      // STAGE 1 (Fast): Try original path with URL encoding FIRST
-      // CRITICAL: Cache stores with URL encoding (new URL() does automatic encoding)
-      // So we must try with encoding first to match what's actually stored
+      // STAGE 1 (Fast): Try original path with UTF-8 URL encoding
+      // CRITICAL: Cache stores with UTF-8 URL encoding
+      // Use consistent UTF-8 encoding to match what's actually stored
       const originalVariations = [
-        // Try with URL encoding first (as stored in cache by new URL())
-        new URL(originalPath, window.location.origin).toString(),
-        // Also try with explicit encoding
-        new URL(encodeURI(originalPath), window.location.origin).toString(),
-        // Try path with leading slash and encoding
-        new URL(`/${originalPath}`, window.location.origin).toString(),
+        // Try with UTF-8 URL encoding (as stored in cache)
+        createUrlUtf8(originalPath, window.location.origin),
+        // Try path with leading slash and UTF-8 encoding
+        createUrlUtf8(`/${originalPath}`, window.location.origin),
+        // Try with explicit UTF-8 encoding
+        createUrlUtf8(encodeUrlUtf8(originalPath), window.location.origin),
         // Fallback: try without encoding (for compatibility)
         originalPath.startsWith('/') ? originalPath : `/${originalPath}`,
         originalPath
@@ -251,12 +251,12 @@ export class CacheStorageAdapter extends CacheRepository {
         }
       }
 
-      // STAGE 2 (Last resort): Try additional variations with different encodings
-      // Try with encodeURIComponent (more aggressive encoding)
+      // STAGE 2 (Last resort): Try additional variations with different UTF-8 encodings
+      // Try with encodeUrlComponentUtf8 (more aggressive UTF-8 encoding)
       const stage3Variations = [
-        new URL(encodeURIComponent(originalPath), window.location.origin).toString(),
-        // Try decoding and re-encoding (in case of double encoding)
-        decodeURIComponent(originalPath),
+        createUrlUtf8(encodeUrlComponentUtf8(originalPath), window.location.origin),
+        // Try decoding and re-encoding with UTF-8 (in case of double encoding)
+        decodeUrlComponentUtf8(originalPath),
         // Try filename-only matching as last resort (less reliable)
         originalPath.split('/').pop()
       ].filter(Boolean);
@@ -323,8 +323,8 @@ export class CacheStorageAdapter extends CacheRepository {
       const cache = await this._openCache();
       const response = this._toResponse(pdfData);
       
-      // Create request URL using original path (preserves encoding)
-      const requestUrl = new URL(originalPath, window.location.origin).toString();
+      // Create request URL using original path with UTF-8 encoding (preserves encoding)
+      const requestUrl = createUrlUtf8(originalPath, window.location.origin);
       const request = new Request(requestUrl);
 
       await cache.put(request, response);
@@ -391,15 +391,15 @@ export class CacheStorageAdapter extends CacheRepository {
 
       const cache = await this._openCache();
       
-      // Try multiple URL variations (with URL encoding first, as stored in cache)
-      // CRITICAL: Cache stores with URL encoding (new URL() does automatic encoding)
+      // Try multiple URL variations (with UTF-8 URL encoding first, as stored in cache)
+      // CRITICAL: Cache stores with UTF-8 URL encoding
       const urlVariations = [
-        // Try with URL encoding first (as stored in cache by new URL())
-        new URL(originalPath, window.location.origin).toString(),
-        // Also try with explicit encoding
-        new URL(encodeURI(originalPath), window.location.origin).toString(),
-        // Try path with leading slash and encoding
-        new URL(`/${originalPath}`, window.location.origin).toString(),
+        // Try with UTF-8 URL encoding first (as stored in cache)
+        createUrlUtf8(originalPath, window.location.origin),
+        // Also try with explicit UTF-8 encoding
+        createUrlUtf8(encodeUrlUtf8(originalPath), window.location.origin),
+        // Try path with leading slash and UTF-8 encoding
+        createUrlUtf8(`/${originalPath}`, window.location.origin),
         // Fallback: try without encoding (for compatibility)
         originalPath.startsWith('/') ? originalPath : `/${originalPath}`,
         originalPath
@@ -461,8 +461,9 @@ export class CacheStorageAdapter extends CacheRepository {
       const pdfPaths = [];
       for (const request of keys) {
         try {
-          const url = new URL(request.url);
-          const path = url.pathname;
+          const urlObj = new URL(request.url);
+          // Decode pathname with UTF-8 to get original path
+          const path = decodeUrlUtf8(urlObj.pathname);
           
           // Use original path preparation (preserves case and accents)
           const prepared = this._prepareOriginalPath(path);

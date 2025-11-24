@@ -8,6 +8,7 @@ import urlNormalizer from '../normalization/UrlNormalizer.js';
 import { createLogger } from '../utils/OfflineLogger.js';
 import { browser } from '$app/environment';
 import { getConfig } from '../core/OfflineConfig.js';
+import { decodeUrlUtf8 } from '$lib/utils/urlEncoding.js';
 
 const logger = createLogger('CacheMigration');
 const MIGRATION_COMPLETE_KEY = 'cache_migration_v1_complete';
@@ -82,7 +83,9 @@ export class CacheMigration {
       for (const request of keys) {
         try {
           const url = request.url;
-          const path = new URL(url).pathname;
+          const urlObj = new URL(url);
+          // Decode pathname with UTF-8 to get original path
+          const path = decodeUrlUtf8(urlObj.pathname);
 
           // Use original path (preserves case and accents) - this is the correct way
           const originalPath = path.startsWith('/') ? path : `/${path}`;
