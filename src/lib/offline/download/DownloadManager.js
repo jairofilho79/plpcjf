@@ -355,6 +355,7 @@ export class DownloadManager {
 
     let completed = 0;
     let failed = 0;
+    const allSavedPaths = []; // Accumulate all saved paths for batch notification
 
     try {
       // Process each category
@@ -384,17 +385,18 @@ export class DownloadManager {
               this.abortController?.signal
             );
 
-            // Store PDFs in cache
-            const stored = await packageDownloader.storePdfsInCache(result.pdfs);
+            // Store PDFs in cache with silent mode (batch operation)
+            const storeResult = await packageDownloader.storePdfsInCache(result.pdfs, { silent: true });
             
-            completed += stored;
-            this.progress.incrementCompleted(stored, result.bytesDownloaded);
+            completed += storeResult.stored;
+            allSavedPaths.push(...storeResult.paths);
+            this.progress.incrementCompleted(storeResult.stored, result.bytesDownloaded);
 
             if (onProgress) {
               onProgress(this.progress.getProgress());
             }
 
-            logger.debug('DownloadManager', `Stored ${stored} PDFs from package: ${part.filename}`);
+            logger.debug('DownloadManager', `Stored ${storeResult.stored} PDFs from package: ${part.filename}`);
           } catch (error) {
             if (error.message === 'DOWNLOAD_CANCELLED') {
               throw error;
@@ -405,6 +407,45 @@ export class DownloadManager {
             this.progress.incrementFailed();
           }
         }
+      }
+
+      // Emit batch notification after all packages are processed
+      if (allSavedPaths.length > 0) {
+        logger.info('DownloadManager', `Emitting batch cache update for ${allSavedPaths.length} PDFs`);
+        
+        // Emit batch event
+        offlineEvents.emit(EVENTS.BATCH_CACHE_UPDATED, {
+          paths: allSavedPaths,
+          count: allSavedPaths.length,
+          type: 'batch-pdf-added'
+        });
+
+        // Notify Service Worker once with batch data
+        if (typeof navigator !== 'undefined' && navigator.serviceWorker && navigator.serviceWorker.controller) {
+          try {
+            navigator.serviceWorker.controller.postMessage({
+              type: 'CACHE_UPDATED',
+              data: {
+                paths: allSavedPaths,
+                count: allSavedPaths.length,
+                type: 'batch-pdf-added',
+                source: 'download-manager'
+              }
+            });
+          } catch (swError) {
+            logger.warn('DownloadManager', 'Could not notify Service Worker of batch update', swError);
+          }
+        }
+
+        // Notify other tabs once
+        notifyCacheUpdate({
+          source: 'download-manager',
+          batch: true,
+          count: allSavedPaths.length
+        });
+
+        // Update cache version once
+        await updateCacheVersion();
       }
 
       // FASE 4: Invalidate stats for affected categories before emitting event

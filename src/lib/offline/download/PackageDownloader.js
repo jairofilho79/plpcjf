@@ -209,10 +209,14 @@ export class PackageDownloader {
    * Uses PdfPathManager to normalize paths consistently (preserves case and accents)
    * Always uses originalName from ZIP to preserve exact path with accents and case
    * @param {ExtractedPdf[]} pdfs - Extracted PDFs
-   * @returns {Promise<number>} Number of PDFs stored
+   * @param {Object} [options] - Storage options
+   * @param {boolean} [options.silent] - If true, skip notifications (for batch operations)
+   * @returns {Promise<{stored: number, paths: string[]}>} Number of PDFs stored and list of paths
    */
-  async storePdfsInCache(pdfs) {
+  async storePdfsInCache(pdfs, options = {}) {
     let stored = 0;
+    const savedPaths = [];
+    const silent = options.silent === true;
     const isDev = typeof window !== 'undefined' && 
                   (window.location.hostname === 'localhost' || 
                    window.location.hostname === '127.0.0.1' ||
@@ -237,7 +241,8 @@ export class PackageDownloader {
         if (isDev && (normalizedPath.includes('cifra') || normalizedPath.includes('nivel') || normalizedPath.includes('Cifra') || normalizedPath.includes('Nivel'))) {
           logger.debug('PackageDownloader', `Storing PDF (Cifra): ${originalPath} -> ${normalizedPath}`);
         }
-        await cacheStorageAdapter.putPdf(normalizedPath, pdf.blob);
+        await cacheStorageAdapter.putPdf(normalizedPath, pdf.blob, { silent });
+        savedPaths.push(normalizedPath);
         stored++;
       } catch (error) {
         logger.error('PackageDownloader', `Error storing PDF: ${pdf.originalName || pdf.normalizedPath}`, error);
@@ -245,9 +250,13 @@ export class PackageDownloader {
       }
     }
 
-    logger.info('PackageDownloader', `Stored ${stored}/${pdfs.length} PDFs in cache`);
+    if (silent) {
+      logger.debug('PackageDownloader', `Stored ${stored}/${pdfs.length} PDFs in cache (silent mode)`);
+    } else {
+      logger.info('PackageDownloader', `Stored ${stored}/${pdfs.length} PDFs in cache`);
+    }
     
-    return stored;
+    return { stored, paths: savedPaths };
   }
 
   /**

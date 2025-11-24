@@ -22,6 +22,7 @@ export const EVENTS = {
   DOWNLOAD_ERROR: 'download-error',
   CACHE_CLEARED: 'cache-cleared',
   CACHE_SYNCED: 'cache-synced',
+  BATCH_CACHE_UPDATED: 'batch-cache-updated',
   ERROR: 'error'
 };
 
