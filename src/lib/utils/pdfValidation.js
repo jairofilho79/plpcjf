@@ -6,7 +6,7 @@ import { getPdfRelPath } from '$lib/utils/pathUtils';
 import { isPdfAvailableInIndex } from '$lib/utils/pdfIndex';
 import compositeValidator from '$lib/offline/validation/CompositeValidator.js';
 import cacheStorageAdapter from '$lib/offline/storage/CacheStorageAdapter.js';
-import { createUrlUtf8 } from '$lib/utils/urlEncoding.js';
+import { createUrlUtf8, decodeUrlUtf8Multiple } from '$lib/utils/urlEncoding.js';
 
 // Cache de validação de PDFs - Fase 2
 const VALIDATION_CACHE_TTL = 24 * 60 * 60 * 1000; // 24 horas
@@ -296,29 +296,54 @@ export function findMissingPdfs(louvores, cachedPdfs) {
     return louvores.filter(l => l.pdfId);
   }
 
-  // Use original paths for comparison (no normalization)
-  // Prepare cached PDFs for comparison (remove leading slash, preserve case and accents)
+  // Prepare cached PDFs for comparison
+  // Extract pathname from full URLs, decode URL encoding, and preserve exact paths (no normalization)
   const cachedPdfsSet = new Set();
   
   cachedPdfs.forEach(url => {
-    // Prepare path (remove leading slash for comparison)
-    const path = url.replace(/^\/+/, '');
-    if (path) {
-      cachedPdfsSet.add(path);
-    }
-    
-    // Also add filename-only variations for matching
     try {
-      const urlObj = new URL(url);
-      const filename = urlObj.pathname.split('/').pop();
+      // Extract pathname from full URL
+      let pathname = '';
+      try {
+        const urlObj = new URL(url);
+        pathname = urlObj.pathname;
+      } catch {
+        // If URL parsing fails, try to extract path manually
+        // Remove protocol and domain
+        const match = url.match(/https?:\/\/[^\/]+(\/.*)/);
+        if (match) {
+          pathname = match[1];
+        } else {
+          // Assume it's already a path
+          pathname = url;
+        }
+      }
+      
+      // Remove leading slash
+      pathname = pathname.replace(/^\/+/, '');
+      
+      if (!pathname) {
+        return;
+      }
+      
+      // Decode URL encoding to get the actual saved path (preserve accents, case, etc.)
+      // Do NOT normalize - we need the exact path as saved
+      const decodedPath = decodeUrlUtf8Multiple(pathname, 3);
+      
+      // Add decoded path to set
+      cachedPdfsSet.add(decodedPath);
+      
+      // Also add filename-only for matching
+      const filename = decodedPath.split('/').pop();
       if (filename) {
         cachedPdfsSet.add(filename);
       }
-    } catch {
-      const parts = url.split('/');
-      const filename = parts[parts.length - 1];
-      if (filename) {
-        cachedPdfsSet.add(filename);
+    } catch (error) {
+      // If processing fails, try to add the original URL as fallback
+      console.warn('[PDF Validation] Error processing cached URL:', url, error);
+      const fallbackPath = url.replace(/^\/+/, '').replace(/^https?:\/\/[^\/]+/, '');
+      if (fallbackPath) {
+        cachedPdfsSet.add(fallbackPath);
       }
     }
   });
@@ -337,12 +362,13 @@ export function findMissingPdfs(louvores, cachedPdfs) {
     }
 
     // Use original path for comparison (no normalization)
+    // Remove leading slash only - preserve exact path as from getPdfRelPath
     const pdfPathForComparison = pdfPath.replace(/^\/+/, '');
     
-    // Check multiple matching strategies
+    // Check multiple matching strategies (all using decoded, non-normalized paths)
     let isCached = false;
     
-    // Strategy 1: Exact match
+    // Strategy 1: Exact match (decoded cached path vs expected path)
     if (cachedPdfsSet.has(pdfPathForComparison)) {
       isCached = true;
     }
@@ -355,29 +381,23 @@ export function findMissingPdfs(louvores, cachedPdfs) {
       }
     }
     
-    // Strategy 3: Partial match (check if any cached path ends with expected path or vice versa)
+    // Strategy 3: Partial match (check if any decoded cached path matches expected path)
     if (!isCached) {
       isCached = Array.from(cachedPdfsSet).some(cached => {
-        // Check if paths match (handling different URL formats)
+        // Exact match
         if (cached === pdfPathForComparison) return true;
+        
+        // Check if cached path ends with expected path (handles nested directory structures)
         if (cached.endsWith(pdfPathForComparison)) return true;
+        
+        // Check if expected path ends with cached path (handles reverse case)
         if (pdfPathForComparison.endsWith(cached)) return true;
         
-        // Check filename match
+        // Check filename match (exact, no normalization)
         const cachedFilename = cached.split('/').pop();
         const expectedFilename = pdfPathForComparison.split('/').pop();
         if (cachedFilename && expectedFilename && cachedFilename === expectedFilename) {
           return true;
-        }
-        
-        // Check if both contain the same filename (handling encoding differences)
-        if (cachedFilename && expectedFilename) {
-          // Remove file extension and compare
-          const cachedBase = cachedFilename.replace(/\.pdf$/i, '');
-          const expectedBase = expectedFilename.replace(/\.pdf$/i, '');
-          if (cachedBase && expectedBase && cachedBase === expectedBase) {
-            return true;
-          }
         }
         
         return false;
