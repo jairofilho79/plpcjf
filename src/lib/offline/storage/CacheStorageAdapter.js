@@ -182,9 +182,6 @@ export class CacheStorageAdapter extends CacheRepository {
         return null;
       }
 
-      // Also get normalized path for compatibility with old cache entries
-      const normalizedPath = this._normalizePath(pdfPath);
-
       // Clean expired cache entries periodically
       this._cleanExpiredCache();
 
@@ -254,36 +251,7 @@ export class CacheStorageAdapter extends CacheRepository {
         }
       }
 
-      // STAGE 2 (Compatibility): Try normalized path for backward compatibility
-      // This handles old cache entries that were stored with normalized paths
-      if (normalizedPath && normalizedPath !== originalPath) {
-        const normalizedVariations = [
-          normalizedPath,
-          normalizedPath.startsWith('/') ? normalizedPath : `/${normalizedPath}`,
-          new URL(normalizedPath, window.location.origin).toString()
-        ];
-
-        for (const url of normalizedVariations) {
-          try {
-            const request = new Request(url);
-            const response = await cache.match(request);
-            if (response) {
-              // Cache successful result (but use original path as key)
-              this._variationCache.set(originalPath, {
-                found: true,
-                url: url,
-                timestamp: Date.now()
-              });
-              logger.debug('CacheStorageAdapter', `PDF found in cache (normalized path, compatibility): ${normalizedPath}`);
-              return response;
-            }
-          } catch (e) {
-            // Continue to next variation
-          }
-        }
-      }
-
-      // STAGE 3 (Last resort): Try additional variations with different encodings
+      // STAGE 2 (Last resort): Try additional variations with different encodings
       // Try with encodeURIComponent (more aggressive encoding)
       const stage3Variations = [
         new URL(encodeURIComponent(originalPath), window.location.origin).toString(),
@@ -367,13 +335,6 @@ export class CacheStorageAdapter extends CacheRepository {
       this._variationCache.delete(originalPath);
       this._missCache.delete(originalPath);
       
-      // Also invalidate normalized path for compatibility
-      const normalizedPath = this._normalizePath(pdfPath);
-      if (normalizedPath && normalizedPath !== originalPath) {
-        this._variationCache.delete(normalizedPath);
-        this._missCache.delete(normalizedPath);
-      }
-      
       // Cache the successful storage for future lookups
       this._variationCache.set(originalPath, {
         found: true,
@@ -444,16 +405,6 @@ export class CacheStorageAdapter extends CacheRepository {
         originalPath
       ];
 
-      // Also try normalized path for compatibility
-      const normalizedPath = this._normalizePath(pdfPath);
-      if (normalizedPath && normalizedPath !== originalPath) {
-        urlVariations.push(
-          new URL(normalizedPath, window.location.origin).toString(),
-          normalizedPath.startsWith('/') ? normalizedPath : `/${normalizedPath}`,
-          normalizedPath
-        );
-      }
-
       let deleted = false;
       for (const url of urlVariations) {
         try {
@@ -473,10 +424,6 @@ export class CacheStorageAdapter extends CacheRepository {
         // Invalidate variation cache
         this._variationCache.delete(originalPath);
         this._missCache.delete(originalPath);
-        if (normalizedPath && normalizedPath !== originalPath) {
-          this._variationCache.delete(normalizedPath);
-          this._missCache.delete(normalizedPath);
-        }
         
         // Emit event
         offlineEvents.emit(EVENTS.PDF_DELETED, {

@@ -97,9 +97,17 @@ export class CacheRepository {
 
   /**
    * Normalize PDF path using UrlNormalizer
+   * 
+   * WARNING: This method should NOT be used for PDF paths.
+   * PDFs must preserve their original case and accents as encoded in base64.
+   * Use _prepareOriginalPath() or similar methods that preserve the original encoding.
+   * 
+   * This method is kept for backward compatibility with non-PDF resources only.
+   * 
    * @param {string} pdfPath - PDF path to normalize
    * @returns {string} Normalized path
    * @protected
+   * @deprecated For PDFs, use methods that preserve original encoding instead
    */
   _normalizePath(pdfPath) {
     if (!pdfPath || typeof pdfPath !== 'string') {
