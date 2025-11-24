@@ -12,6 +12,7 @@ import compositeValidator from '../validation/CompositeValidator.js';
 import offlineEvents, { EVENTS } from './OfflineEvents.js';
 import cacheSync from '../storage/CacheSync.js';
 import cacheMigration from '../storage/CacheMigration.js';
+import cacheMigrationV2 from '../storage/CacheMigrationV2.js';
 import { createLogger } from '../utils/OfflineLogger.js';
 import { browser } from '$app/environment';
 import { louvores } from '$lib/stores/louvores.js';
@@ -90,11 +91,25 @@ class OfflineManager {
           return;
         }
 
-        // Run cache migration if needed
+        // Run cache migration V1 if needed
         try {
           await cacheMigration.migrate();
         } catch (error) {
-          logger.warn('OfflineManager', 'Cache migration failed (non-critical)', error);
+          logger.warn('OfflineManager', 'Cache migration V1 failed (non-critical)', error);
+        }
+
+        // Run cache migration V2 if needed (unified normalization)
+        try {
+          const migrationV2Completed = await cacheMigrationV2.isMigrationCompleted();
+          if (!migrationV2Completed) {
+            logger.info('OfflineManager', 'Running cache migration V2...');
+            const migrationResult = await cacheMigrationV2.migrate();
+            logger.info('OfflineManager', `Cache migration V2 completed: ${migrationResult.migrated} migrated, ${migrationResult.skipped} skipped, ${migrationResult.errors} errors`);
+          } else {
+            logger.debug('OfflineManager', 'Cache migration V2 already completed');
+          }
+        } catch (error) {
+          logger.warn('OfflineManager', 'Cache migration V2 failed (non-critical)', error);
         }
 
         // Sync cache on initialization

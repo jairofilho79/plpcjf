@@ -4,7 +4,7 @@
  */
 
 import { PdfValidator } from './PdfValidator.js';
-import urlNormalizer from '../normalization/UrlNormalizer.js';
+import PdfPathManager from '../utils/PdfPathManager.js';
 import { createLogger } from '../utils/OfflineLogger.js';
 
 const logger = createLogger('NetworkValidator');
@@ -47,8 +47,8 @@ export class NetworkValidator extends PdfValidator {
     }
 
     try {
-      // Normalize path
-      const normalizedPath = urlNormalizer.normalizeForCache(pdfPath);
+      // Normalize path using PdfPathManager (preserves case and accents)
+      const normalizedPath = PdfPathManager.normalizeForStorage(pdfPath);
       
       if (!normalizedPath) {
         return {
@@ -60,8 +60,8 @@ export class NetworkValidator extends PdfValidator {
         };
       }
 
-      // Build full URL
-      const fullUrl = new URL(`/${normalizedPath}`, window.location.origin).href;
+      // Build full URL using PdfPathManager
+      const fullUrl = PdfPathManager.createRequestUrl(normalizedPath, window.location.origin);
 
       // Try HEAD request to verify if PDF exists
       const response = await fetch(fullUrl, {
@@ -89,7 +89,7 @@ export class NetworkValidator extends PdfValidator {
       return {
         available: false,
         source: 'network',
-        normalizedPath: urlNormalizer.normalizeForCache(pdfPath) || '',
+        normalizedPath: PdfPathManager.normalizeForStorage(pdfPath) || '',
         needsDownload: false,
         error: error.message || 'Network check failed'
       };

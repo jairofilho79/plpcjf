@@ -5,7 +5,7 @@
 
 import { PdfValidator } from './PdfValidator.js';
 import cacheStorageAdapter from '../storage/CacheStorageAdapter.js';
-import urlNormalizer from '../normalization/UrlNormalizer.js';
+import PdfPathManager from '../utils/PdfPathManager.js';
 import { createLogger } from '../utils/OfflineLogger.js';
 
 const logger = createLogger('CacheValidator');
@@ -47,8 +47,8 @@ export class CacheValidator extends PdfValidator {
     const startTime = debug ? performance.now() : 0;
 
     try {
-      // Normalize path
-      const normalizedPath = urlNormalizer.normalizeForCache(pdfPath);
+      // Normalize path using PdfPathManager (preserves case and accents)
+      const normalizedPath = PdfPathManager.normalizeForStorage(pdfPath);
       
       if (debug) {
         logger.debug('CacheValidator', `Validating PDF: ${pdfPath} -> ${normalizedPath}`);
@@ -77,7 +77,7 @@ export class CacheValidator extends PdfValidator {
         source: 'cache',
         normalizedPath: normalizedPath,
         needsDownload: !hasPdf && navigator.onLine,
-        url: new URL(`/${normalizedPath}`, window.location.origin).href
+        url: PdfPathManager.createRequestUrl(normalizedPath, window.location.origin)
       };
 
       this._logValidation(pdfPath, result);
@@ -93,7 +93,7 @@ export class CacheValidator extends PdfValidator {
       return {
         available: false,
         source: 'cache',
-        normalizedPath: urlNormalizer.normalizeForCache(pdfPath) || '',
+        normalizedPath: PdfPathManager.normalizeForStorage(pdfPath) || '',
         needsDownload: false,
         error: error.message || 'Cache validation failed'
       };

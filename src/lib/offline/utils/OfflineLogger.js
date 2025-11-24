@@ -33,19 +33,30 @@ function isLoggingEnabled() {
 }
 
 /**
- * Format log message
+ * Format log message with optional performance metrics
  * @param {string} module - Module name
  * @param {string} level - Log level
  * @param {string} message - Log message
  * @param {any} [data] - Additional data
+ * @param {Object} [metrics] - Performance metrics (duration, etc.)
  * @returns {string} Formatted log message
  */
-function formatMessage(module, level, message, data = null) {
+function formatMessage(module, level, message, data = null, metrics = null) {
   const timestamp = new Date().toISOString();
   const prefix = `[Offline:${module}]`;
   const levelPrefix = `[${level}]`;
   
-  return `${timestamp} ${prefix} ${levelPrefix} ${message}`;
+  let formatted = `${timestamp} ${prefix} ${levelPrefix} ${message}`;
+  
+  // Add metrics if provided
+  if (metrics) {
+    const metricsStr = Object.entries(metrics)
+      .map(([key, value]) => `${key}=${value}`)
+      .join(' ');
+    formatted += ` | ${metricsStr}`;
+  }
+  
+  return formatted;
 }
 
 /**
@@ -111,17 +122,18 @@ export function info(module, message, data = null) {
 }
 
 /**
- * Log debug message
+ * Log debug message with optional metrics
  * @param {string} module - Module name
  * @param {string} message - Debug message
  * @param {any} [data] - Additional data
+ * @param {Object} [metrics] - Performance metrics
  */
-export function debug(module, message, data = null) {
+export function debug(module, message, data = null, metrics = null) {
   if (!isLoggingEnabled() || getLogLevel() < LOG_LEVELS.DEBUG) {
     return;
   }
   
-  const formatted = formatMessage(module, 'DEBUG', message);
+  const formatted = formatMessage(module, 'DEBUG', message, data, metrics);
   
   if (data !== null) {
     console.debug(formatted, data);
@@ -140,7 +152,7 @@ export function createLogger(moduleName) {
     error: (message, error) => error(moduleName, message, error),
     warn: (message, data) => warn(moduleName, message, data),
     info: (message, data) => info(moduleName, message, data),
-    debug: (message, data) => debug(moduleName, message, data)
+    debug: (message, data, metrics) => debug(moduleName, message, data, metrics)
   };
 }
 

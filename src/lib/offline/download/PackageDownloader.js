@@ -8,6 +8,7 @@ import urlNormalizer from '../normalization/UrlNormalizer.js';
 import cacheStorageAdapter from '../storage/CacheStorageAdapter.js';
 import offlineEvents, { EVENTS } from '../core/OfflineEvents.js';
 import { createLogger } from '../utils/OfflineLogger.js';
+import PdfPathManager from '../utils/PdfPathManager.js';
 
 const logger = createLogger('PackageDownloader');
 
@@ -192,7 +193,7 @@ export class PackageDownloader {
 
   /**
    * Store extracted PDFs in cache
-   * Uses original filename (preserves case and accents) instead of normalized path
+   * Uses PdfPathManager to normalize paths consistently (preserves case and accents)
    * @param {ExtractedPdf[]} pdfs - Extracted PDFs
    * @returns {Promise<number>} Number of PDFs stored
    */
@@ -205,14 +206,20 @@ export class PackageDownloader {
 
     for (const pdf of pdfs) {
       try {
-        // Use original filename (preserves case and accents) - this is the correct way
-        // The CacheStorageAdapter will prepare it correctly (add assets/ prefix, etc)
-        const pathToStore = pdf.originalName || pdf.normalizedPath;
+        // Use original filename (preserves case and accents) and normalize via PdfPathManager
+        // PdfPathManager will handle normalization consistently (add assets/ prefix, etc)
+        const originalPath = pdf.originalName || pdf.normalizedPath;
+        const normalizedPath = PdfPathManager.normalizeForStorage(originalPath);
         
-        if (isDev && (pathToStore.includes('cifra') || pathToStore.includes('nivel') || pathToStore.includes('Cifra') || pathToStore.includes('Nivel'))) {
-          logger.debug('PackageDownloader', `Storing PDF (Cifra): ${pdf.originalName} -> ${pathToStore}`);
+        if (!normalizedPath) {
+          logger.warn('PackageDownloader', `Skipping PDF with invalid path: ${originalPath}`);
+          continue;
         }
-        await cacheStorageAdapter.putPdf(pathToStore, pdf.blob);
+        
+        if (isDev && (normalizedPath.includes('cifra') || normalizedPath.includes('nivel') || normalizedPath.includes('Cifra') || normalizedPath.includes('Nivel'))) {
+          logger.debug('PackageDownloader', `Storing PDF (Cifra): ${originalPath} -> ${normalizedPath}`);
+        }
+        await cacheStorageAdapter.putPdf(normalizedPath, pdf.blob);
         stored++;
       } catch (error) {
         logger.error('PackageDownloader', `Error storing PDF: ${pdf.originalName || pdf.normalizedPath}`, error);

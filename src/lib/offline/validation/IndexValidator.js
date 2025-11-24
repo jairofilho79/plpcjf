@@ -5,7 +5,7 @@
 
 import { PdfValidator } from './PdfValidator.js';
 import { isPdfAvailableInIndex } from '$lib/utils/pdfIndex';
-import urlNormalizer from '../normalization/UrlNormalizer.js';
+import PdfPathManager from '../utils/PdfPathManager.js';
 import { createLogger } from '../utils/OfflineLogger.js';
 
 const logger = createLogger('IndexValidator');
@@ -39,15 +39,15 @@ export class IndexValidator extends PdfValidator {
       return {
         available: false,
         source: 'index',
-        normalizedPath: urlNormalizer.normalizeForCache(pdfPath) || '',
+        normalizedPath: PdfPathManager.normalizeForStorage(pdfPath) || '',
         needsDownload: false,
         error: 'PDF ID required for index validation'
       };
     }
 
     try {
-      // Normalize path
-      const normalizedPath = urlNormalizer.normalizeForCache(pdfPath);
+      // Normalize path using PdfPathManager (preserves case and accents)
+      const normalizedPath = PdfPathManager.normalizeForStorage(pdfPath);
       
       if (!normalizedPath) {
         return {
@@ -79,7 +79,7 @@ export class IndexValidator extends PdfValidator {
         source: 'index',
         normalizedPath: normalizedPath,
         needsDownload: !indexResult && navigator.onLine,
-        url: new URL(`/${normalizedPath}`, window.location.origin).href
+        url: PdfPathManager.createRequestUrl(normalizedPath, window.location.origin)
       };
 
       this._logValidation(pdfPath, result);
@@ -90,7 +90,7 @@ export class IndexValidator extends PdfValidator {
       return {
         available: false,
         source: 'index',
-        normalizedPath: urlNormalizer.normalizeForCache(pdfPath) || '',
+        normalizedPath: PdfPathManager.normalizeForStorage(pdfPath) || '',
         needsDownload: false,
         error: error.message || 'Index validation failed'
       };

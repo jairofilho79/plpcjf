@@ -1,6 +1,10 @@
 // Service Worker for PWA Offline Mode
 // Handles caching of PDFs and app resources for offline access
 
+// Import utilities for PDF path normalization
+// NOTE: Service Workers cannot use ES6 imports, so we use importScripts
+importScripts('/sw-utils.js');
+
 // IMPORTANT: Cache names must match OfflineConfig.js
 // All environments use the same cache name to avoid mismatches
 const CACHE_VERSION = 'plpc-v3-dev';
@@ -181,48 +185,79 @@ self.addEventListener('fetch', (event) => {
     !url.pathname.includes('/node_modules/');
   
   if (isPdfRequest) {
-    // Cache First strategy: Check cache FIRST, then network
-    // This avoids network timeout delays when PDF is already cached
+    // Cache First strategy with unified normalization
+    // Normalize PDF path using same strategy as PdfPathManager
+    // Try multiple URL variations for better cache matching
     event.respondWith(
-      caches.match(event.request)
-        .then(cachedResponse => {
+      (async () => {
+        try {
+          // Normalize pathname using unified normalization
+          const normalizedPath = normalizePdfPathForCache(url.pathname);
+          
+          // Generate URL variations for search
+          const searchVariations = createPdfRequestVariations(url.pathname, self.location.origin);
+          
+          // Try direct match first (original request)
+          const cache = await caches.open(PDF_CACHE);
+          let cachedResponse = await cache.match(event.request);
+          
           if (cachedResponse) {
-            console.log('[SW] Serving PDF from cache (Cache First):', url.pathname);
+            console.log('[SW] Serving PDF from cache (direct match):', url.pathname);
             return cachedResponse;
+          }
+          
+          // Try variations if direct match failed
+          for (const variationUrl of searchVariations) {
+            try {
+              const variationRequest = new Request(variationUrl);
+              cachedResponse = await cache.match(variationRequest);
+              if (cachedResponse) {
+                console.log('[SW] Serving PDF from cache (variation match):', url.pathname, '->', variationUrl);
+                return cachedResponse;
+              }
+            } catch (e) {
+              // Continue to next variation
+            }
           }
           
           // Not in cache, fetch from network
           console.log('[SW] PDF not in cache, fetching from network:', url.pathname);
-          return fetch(event.request)
-            .then(response => {
-              // Only cache successful responses
-            if (response && response.status === 200) {
-              const responseClone = response.clone();
-              caches.open(PDF_CACHE).then(cache => {
-                cache.put(event.request, responseClone);
-                console.log('[SW] Cached PDF:', url.pathname);
-                // Notify clients that cache was updated
-                // Use a small delay to batch notifications if multiple PDFs are being cached
-                setTimeout(() => {
-                  notifyClientsCacheUpdated({ source: 'fetch-handler' });
-                }, 100);
-              });
+          const response = await fetch(event.request);
+          
+          // Only cache successful responses
+          if (response && response.status === 200) {
+            const responseClone = response.clone();
+            // Store using normalized path for consistency
+            const normalizedRequestUrl = createUrlUtf8(`/${normalizedPath}`, self.location.origin);
+            const normalizedRequest = new Request(normalizedRequestUrl);
+            await cache.put(normalizedRequest, responseClone);
+            console.log('[SW] Cached PDF (normalized):', normalizedPath);
+            
+            // Notify clients that cache was updated
+            setTimeout(() => {
+              notifyClientsCacheUpdated({ source: 'fetch-handler' });
+            }, 100);
+          }
+          
+          return response;
+        } catch (err) {
+          console.error('[SW] Failed to fetch PDF:', url.pathname, err);
+          
+          // Try cache one more time in case it was added between checks
+          try {
+            const cache = await caches.open(PDF_CACHE);
+            const cached = await cache.match(event.request);
+            if (cached) {
+              console.log('[SW] Serving PDF from cache after network failure:', url.pathname);
+              return cached;
             }
-              return response;
-            })
-            .catch(err => {
-              console.error('[SW] Failed to fetch PDF:', url.pathname, err);
-              // Try cache one more time in case it was added between checks
-              return caches.match(event.request)
-                .then(cached => {
-                  if (cached) {
-                    console.log('[SW] Serving PDF from cache after network failure:', url.pathname);
-                    return cached;
-                  }
-                  throw err;
-                });
-            });
-        })
+          } catch (cacheErr) {
+            // Ignore cache errors
+          }
+          
+          throw err;
+        }
+      })()
     );
     return;
   }
