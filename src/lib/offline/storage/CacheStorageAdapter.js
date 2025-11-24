@@ -244,11 +244,9 @@ export class CacheStorageAdapter extends CacheRepository {
    * Uses original path (as encoded in base64) to preserve case and accents
    * @param {string} pdfPath - PDF path
    * @param {Blob|Response} pdfData - PDF data to store
-   * @param {Object} [options] - Storage options
-   * @param {boolean} [options.silent] - If true, skip notifications (for batch operations)
    * @returns {Promise<void>}
    */
-  async putPdf(pdfPath, pdfData, options = {}) {
+  async putPdf(pdfPath, pdfData) {
     if (!browser) {
       throw new Error('Cache Storage API not available');
     }
@@ -269,14 +267,7 @@ export class CacheStorageAdapter extends CacheRepository {
 
       await cache.put(request, response);
       
-      const silent = options.silent === true;
-      
-      // Logging: reduce to debug level in silent mode
-      if (silent) {
-        logger.debug('CacheStorageAdapter', `PDF stored in cache (silent): ${normalizedPath}`);
-      } else {
-        logger.info('CacheStorageAdapter', `PDF stored in cache: ${normalizedPath}`);
-      }
+      logger.info('CacheStorageAdapter', `PDF stored in cache: ${normalizedPath}`);
       
       // Invalidate variation cache for this path (new PDF may match)
       this._variationCache.delete(normalizedPath);
@@ -289,33 +280,30 @@ export class CacheStorageAdapter extends CacheRepository {
         timestamp: Date.now()
       });
       
-      // Skip notifications in silent mode (for batch operations)
-      if (!silent) {
-        // Emit event
-        offlineEvents.emit(EVENTS.PDF_DOWNLOADED, {
-          path: normalizedPath,
-          originalPath: pdfPath
-        });
-        
-        offlineEvents.emit(EVENTS.CACHE_UPDATED, {
-          type: 'pdf-added',
-          path: normalizedPath
-        });
-        
-        // Notify Service Worker about cache update (for synchronization)
-        if (typeof navigator !== 'undefined' && navigator.serviceWorker && navigator.serviceWorker.controller) {
-          try {
-            navigator.serviceWorker.controller.postMessage({
-              type: 'CACHE_UPDATED',
-              data: {
-                path: normalizedPath,
-                url: requestUrl,
-                type: 'pdf-added'
-              }
-            });
-          } catch (swError) {
-            logger.debug('CacheStorageAdapter', 'Could not notify Service Worker', swError);
-          }
+      // Emit event
+      offlineEvents.emit(EVENTS.PDF_DOWNLOADED, {
+        path: normalizedPath,
+        originalPath: pdfPath
+      });
+      
+      offlineEvents.emit(EVENTS.CACHE_UPDATED, {
+        type: 'pdf-added',
+        path: normalizedPath
+      });
+      
+      // Notify Service Worker about cache update (for synchronization)
+      if (typeof navigator !== 'undefined' && navigator.serviceWorker && navigator.serviceWorker.controller) {
+        try {
+          navigator.serviceWorker.controller.postMessage({
+            type: 'CACHE_UPDATED',
+            data: {
+              path: normalizedPath,
+              url: requestUrl,
+              type: 'pdf-added'
+            }
+          });
+        } catch (swError) {
+          logger.debug('CacheStorageAdapter', 'Could not notify Service Worker', swError);
         }
       }
     } catch (error) {

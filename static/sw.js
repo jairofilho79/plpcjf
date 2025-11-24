@@ -449,19 +449,8 @@ self.addEventListener('message', (event) => {
     
     case 'CACHE_UPDATED':
       // Client is notifying that cache was updated (e.g., from ZIP download)
-      // Check if this is a batch update (array of paths) or individual update
-      if (data && Array.isArray(data.paths)) {
-        // Batch mode - process all paths but notify clients only once
-        console.log(`[SW] Batch cache update received: ${data.paths.length} PDFs`);
-        notifyClientsCacheUpdated({ 
-          source: data?.source || 'client',
-          batch: true,
-          count: data.paths.length
-        });
-      } else {
-        // Individual mode - behavior unchanged
-        notifyClientsCacheUpdated({ source: data?.source || 'client' });
-      }
+      // Forward notification to all clients
+      notifyClientsCacheUpdated({ source: data?.source || 'client' });
       break;
     
     default:

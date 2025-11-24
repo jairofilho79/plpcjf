@@ -352,41 +352,6 @@
           });
         }
       });
-
-      // Listen for batch cache updates (more efficient than individual updates)
-      offlineEvents.on(OFFLINE_EVENTS.BATCH_CACHE_UPDATED, async (event) => {
-        const detail = event.detail || {};
-        const paths = detail.paths || [];
-        const count = detail.count || 0;
-        
-        if (count > 0) {
-          console.log('[Offline Page] Batch cache update received:', count, 'PDFs');
-          
-          // Reload cached PDFs list once (skip event to prevent loop)
-          await offline.loadCachedPdfsList(false, true);
-          
-          // Update downloaded categories
-          const updatedDownloaded = await offline.checkAndUpdateDownloadedCategories();
-          downloadedCategories = updatedDownloaded;
-          
-          // Ensure downloaded categories are selected
-          updatedDownloaded.forEach((cat) => {
-            if (!selectedCategories.includes(cat)) {
-              selectedCategories = [...selectedCategories, cat];
-            }
-          });
-          
-          // Invalidate stats cache and reload for affected categories
-          if (updatedDownloaded.length > 0) {
-            invalidateCategories(updatedDownloaded);
-            updatedDownloaded.forEach(cat => statsCache.delete(cat));
-            loadedCategories.clear();
-            
-            // Reload stats for updated categories
-            await loadCategoryStatsForCategories(updatedDownloaded, true);
-          }
-        }
-      });
       
       // Listen for cache sync events
       window.addEventListener('cache-sync-required', handleCacheSyncRequired);

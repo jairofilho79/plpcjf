@@ -388,14 +388,9 @@ export function setupServiceWorkerMessageListener() {
 
   const messageHandler = async (event) => {
     if (event.data && event.data.type === 'CACHE_UPDATED') {
-      // Check if this is a batch update
-      if (event.data.batch && event.data.count) {
-        console.log(`[SW Registration] Batch cache update received: ${event.data.count} PDFs`);
-      } else {
-        console.log('[SW Registration] Cache updated notification received from Service Worker');
-      }
+      console.log('[SW Registration] Cache updated notification received from Service Worker');
       
-      // Invalidate local cache when SW cache is updated (works for both batch and individual)
+      // Invalidate local cache when SW cache is updated
       invalidateCachedPDFsLocal();
       
       // Import and notify cache sync system
