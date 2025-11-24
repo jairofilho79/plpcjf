@@ -8,6 +8,7 @@ import PdfPathManager from '../utils/PdfPathManager.js';
 import cacheStorageAdapter from './CacheStorageAdapter.js';
 import { createLogger } from '../utils/OfflineLogger.js';
 import { browser } from '$app/environment';
+import { decodeUrlUtf8Multiple } from '$lib/utils/urlEncoding.js';
 
 const logger = createLogger('CacheMigrationV2');
 
@@ -139,7 +140,16 @@ export class CacheMigrationV2 {
           // Remove leading slash for comparison
           originalPath = originalPath.replace(/^\/+/, '');
           
-          // Normalize using PdfPathManager
+          // Decode URL encoding to get actual path
+          try {
+            if (originalPath.includes('%')) {
+              originalPath = decodeUrlUtf8Multiple(originalPath, 3);
+            }
+          } catch {
+            // Continue with original if decoding fails
+          }
+          
+          // Normalize using PdfPathManager (preserves case and accents)
           const normalizedPath = PdfPathManager.normalizeForStorage(originalPath);
           
           if (!normalizedPath) {
@@ -149,13 +159,20 @@ export class CacheMigrationV2 {
           }
 
           // Check if path needs migration
-          // Compare the stored URL pathname with what it should be after normalization
-          // If they differ, we need to migrate
+          // Migration is needed if:
+          // 1. Path was stored without accents (e.g., "cifra nivel i" instead of "Cifra nível I")
+          // 2. Path format doesn't match expected format (missing assets/ prefix, etc.)
           const storedPath = originalPath.replace(/^\/+/, '');
           const expectedPath = normalizedPath;
           
-          // Path needs migration if stored path doesn't match expected normalized path
-          const needsMigration = storedPath !== expectedPath;
+          // Check if path appears to be missing accents (heuristic: lowercase and no accents in category name)
+          // This is a common issue with "Cifra nível I/II" being stored as "cifra nivel i/ii"
+          const hasAccentIssues = storedPath.toLowerCase() !== expectedPath.toLowerCase() ||
+                                  (storedPath.includes('cifra') && storedPath.includes('nivel') && 
+                                   !storedPath.includes('nível') && !storedPath.includes('Nível'));
+          
+          // Path needs migration if format differs or has accent issues
+          const needsMigration = storedPath !== expectedPath || hasAccentIssues;
 
           if (!needsMigration) {
             // Path is already in correct format
@@ -171,13 +188,21 @@ export class CacheMigrationV2 {
             continue;
           }
 
-          // Re-store with normalized path
-          await cacheStorageAdapter.putPdf(normalizedPath, response);
+          // Clone response for re-storing (responses can only be read once)
+          const responseClone = response.clone();
+          
+          // Re-store with normalized path (preserves case and accents)
+          await cacheStorageAdapter.putPdf(normalizedPath, responseClone);
           
           // Remove old entry if path changed
-          if (originalPath !== `/${normalizedPath}`) {
+          // Only delete if the path actually changed (not just format normalization)
+          const storedPathClean = storedPath.replace(/^\/+/, '');
+          const expectedPathClean = expectedPath.replace(/^\/+/, '');
+          
+          if (storedPathClean !== expectedPathClean) {
             try {
               await cache.delete(request);
+              logger.debug('CacheMigrationV2', `Deleted old entry: ${originalPath} -> ${normalizedPath}`);
             } catch (deleteError) {
               logger.warn('CacheMigrationV2', `Could not delete old entry: ${originalPath}`, deleteError);
               // Non-critical, continue

@@ -102,11 +102,13 @@ export class PackageDownloader {
       logger.debug('PackageDownloader', `ZIP contains ${entryNames.length} entries`);
 
       // Normalize expected PDFs for comparison
+      // Use PdfPathManager to preserve case and accents (consistent with extraction)
       const expectedSet = new Set();
       const expectedSetOriginal = new Set(expectedPdfs);
       
       for (const pdf of expectedPdfs) {
-        const normalized = urlNormalizer.normalizePdfUrl(pdf);
+        // Normalize using PdfPathManager (preserves case and accents)
+        const normalized = PdfPathManager.normalizeForStorage(pdf);
         if (normalized) {
           expectedSet.add(`/${normalized}`);
           expectedSet.add(normalized);
@@ -114,6 +116,11 @@ export class PackageDownloader {
         // Also add original variations
         expectedSet.add(pdf);
         expectedSet.add(pdf.replace(/^\/+/, ''));
+        // Add normalized variations for comparison
+        const normalizedForComparison = PdfPathManager.normalizeForStorage(pdf);
+        if (normalizedForComparison) {
+          expectedSet.add(normalizedForComparison);
+        }
       }
 
       const extractedPdfs = [];
@@ -130,19 +137,25 @@ export class PackageDownloader {
         // Check if this PDF is expected (if expectedPdfs provided)
         if (expectedPdfs.length > 0) {
           const normalizedForComparison = `/${normalizedPath}`;
+          // Also normalize originalName for comparison (preserves case and accents)
+          const originalNormalized = PdfPathManager.normalizeForStorage(entryName);
           const isExpected = expectedSet.has(normalizedForComparison) ||
                             expectedSet.has(normalizedPath) ||
+                            expectedSet.has(originalNormalized) ||
                             expectedSetOriginal.has(normalizedPath) ||
                             expectedSetOriginal.has(normalizedPath.replace(/^\/+/, '')) ||
+                            expectedSetOriginal.has(entryName) ||
                             Array.from(expectedSetOriginal).some(url => {
-                              const urlNormalized = urlNormalizer.normalizePdfUrl(url);
+                              // Use PdfPathManager for consistent normalization
+                              const urlNormalized = PdfPathManager.normalizeForStorage(url);
                               return urlNormalized === normalizedPath ||
+                                     urlNormalized === originalNormalized ||
                                      urlNormalized.endsWith(normalizedPath) ||
                                      normalizedPath.endsWith(urlNormalized);
                             });
 
           if (!isExpected) {
-            logger.debug('PackageDownloader', `Skipping unexpected PDF: ${normalizedPath}`);
+            logger.debug('PackageDownloader', `Skipping unexpected PDF: ${normalizedPath} (original: ${entryName})`);
             continue;
           }
         }
@@ -194,6 +207,7 @@ export class PackageDownloader {
   /**
    * Store extracted PDFs in cache
    * Uses PdfPathManager to normalize paths consistently (preserves case and accents)
+   * Always uses originalName from ZIP to preserve exact path with accents and case
    * @param {ExtractedPdf[]} pdfs - Extracted PDFs
    * @returns {Promise<number>} Number of PDFs stored
    */
@@ -206,9 +220,13 @@ export class PackageDownloader {
 
     for (const pdf of pdfs) {
       try {
-        // Use original filename (preserves case and accents) and normalize via PdfPathManager
-        // PdfPathManager will handle normalization consistently (add assets/ prefix, etc)
+        // CRITICAL: Always use originalName first (preserves case and accents from ZIP)
+        // originalName comes directly from ZIP entry and has the correct path
+        // Only use normalizedPath as fallback if originalName is not available
         const originalPath = pdf.originalName || pdf.normalizedPath;
+        
+        // Apply PdfPathManager normalization only for format consistency (adds assets/ prefix, etc)
+        // This preserves case and accents while ensuring consistent format
         const normalizedPath = PdfPathManager.normalizeForStorage(originalPath);
         
         if (!normalizedPath) {
@@ -234,6 +252,7 @@ export class PackageDownloader {
 
   /**
    * Normalize ZIP entry name
+   * Uses PdfPathManager to preserve case and accents (consistent with validation)
    * @param {string} entryName - Entry name from ZIP
    * @returns {string} Normalized path
    * @private
@@ -243,8 +262,9 @@ export class PackageDownloader {
       return '';
     }
 
-    // Use unified normalization function
-    const normalized = urlNormalizer.normalizePdfUrl(entryName);
+    // Use PdfPathManager to preserve case and accents (consistent with how paths are validated)
+    // This ensures "Cifra nível I" stays as "Cifra nível I" instead of becoming "cifra nivel i"
+    const normalized = PdfPathManager.normalizeForStorage(entryName);
 
     if (!normalized || normalized.endsWith('/')) {
       return '';
