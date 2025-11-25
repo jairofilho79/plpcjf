@@ -78,7 +78,8 @@ export async function cacheAppPages(options = {}) {
             logger.debug('AppPagesCache', `Cached page: ${route}`);
             return { success: true, route };
           } else {
-            throw new Error(`HTTP ${response.status} for ${route}`);
+            const status = response?.status || 'unknown';
+            throw new Error(`HTTP ${status} for ${route}`);
           }
         } catch (error) {
           logger.warn('AppPagesCache', `Failed to cache page ${route}:`, error);
