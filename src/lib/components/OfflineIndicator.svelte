@@ -11,6 +11,8 @@
   $: progress = state.progress || 0;
   $: downloadPhase = state.downloadPhase || 'idle';
   $: phaseProgress = state.phaseProgress || 0;
+  $: currentPackage = state.currentPackage || 0;
+  $: totalPackages = state.totalPackages || 0;
   $: isOnline = typeof navigator !== 'undefined' ? navigator.onLine : true;
   
   // Check if offline requirements are met
@@ -131,6 +133,9 @@
              downloadPhase === 'complete' ? 'Finalizando...' :
              'Baixando PDFs...'}
           </p>
+          {#if currentPackage > 0 && totalPackages > 0}
+            <p class="tooltip-text">Package {currentPackage} de {totalPackages}</p>
+          {/if}
           <p class="tooltip-text">{progress}% concluído</p>
           {#if downloadPhase === 'storing' && phaseProgress > 0}
             <p class="tooltip-text">Fase: Salvamento ({phaseProgress}%)</p>

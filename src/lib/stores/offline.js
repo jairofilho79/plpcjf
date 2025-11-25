@@ -87,7 +87,9 @@ const initialState = {
   offlineManifest: null, // Offline manifest data
   categorySizes: {}, // Map of category -> total size in bytes
   downloadPhase: 'idle', // Current download phase: 'idle' | 'downloading' | 'storing' | 'complete'
-  phaseProgress: 0 // Progress of current phase (0-100)
+  phaseProgress: 0, // Progress of current phase (0-100)
+  currentPackage: 0, // Current package being processed (1-indexed)
+  totalPackages: 0 // Total number of packages to download
 };
 
 const offlineState = writable(initialState);

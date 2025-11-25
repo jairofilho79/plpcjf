@@ -374,8 +374,26 @@ export class DownloadManager {
     this.progress = new DownloadProgressTracker(pdfUrls.length);
     this.progress.start();
 
+    const totalPdfs = pdfUrls.length;
     let completed = 0;
     let failed = 0;
+
+    // Build packagesInfo array to track each package's information
+    const packagesInfo = [];
+    for (const category of categories) {
+      const parts = partsByCategory[category] || [];
+      for (const part of parts) {
+        packagesInfo.push({
+          category,
+          part,
+          estimatedPdfCount: 0, // Will be updated after extraction
+          completedPdfs: 0
+        });
+      }
+    }
+
+    const totalPackages = packagesInfo.length;
+    logger.debug('DownloadManager', `Prepared ${totalPackages} packages for download`);
 
     // Start batch mode to avoid individual events during storage
     cacheStorageAdapter.startBatchMode();
@@ -385,120 +403,120 @@ export class DownloadManager {
       onProgress({
         ...this.progress.getProgress(),
         downloadPhase: 'downloading',
-        phaseProgress: 0
+        phaseProgress: 0,
+        currentPackage: 0,
+        totalPackages: totalPackages
       });
     }
 
     try {
-      // Process each category
-      for (const category of categories) {
+      // Process each package using indexed loop to track package info
+      for (let packageIndex = 0; packageIndex < packagesInfo.length; packageIndex++) {
         if (this.abortController?.aborted) {
           throw new Error('DOWNLOAD_CANCELLED');
         }
 
-        const parts = partsByCategory[category] || [];
-        if (parts.length === 0) {
-          continue;
-        }
+        const packageInfo = packagesInfo[packageIndex];
+        const { category, part } = packageInfo;
 
-        logger.debug('DownloadManager', `Downloading ${parts.length} parts for category: ${category}`);
+        logger.debug('DownloadManager', `Downloading package ${packageIndex + 1}/${totalPackages} for category: ${category}`);
 
-        // Download each part
-        for (const part of parts) {
-          if (this.abortController?.aborted) {
-            throw new Error('DOWNLOAD_CANCELLED');
-          }
+        try {
+          // Download and extract package
+          const result = await packageDownloader.downloadAndExtract(
+            part.url || part.filename,
+            pdfUrls,
+            this.abortController?.signal
+          );
 
-          try {
-            // Download and extract package
-            const result = await packageDownloader.downloadAndExtract(
-              part.url || part.filename,
-              pdfUrls,
-              this.abortController?.signal
-            );
-
-            // FASE 2: Track where this package starts for correct progress calculation
-            const packageStartCompleted = completed; // Rastrear onde este package começa
-            
-            // FASE 5: Store PDFs in cache using batch mode with progress callback
-            const stored = await packageDownloader.storePdfsInCache(result.pdfs, { 
-              batch: true,  // Enable batch mode for performance
-              onProgress: (progressData) => {
-                // FASE 2: Aggregate progress correctly: packages anteriores + progresso deste package
-                if (progressData.phase === 'storing' || progressData.phase === 'complete') {
-                  // Calcular progresso acumulado: packages anteriores + progresso deste package
-                  const currentCompleted = packageStartCompleted + progressData.completed;
-                  
-                  // Atualizar progress tracker
-                  this.progress.completed = currentCompleted;
-                  
-                  // Calcular porcentagem global baseada no total de PDFs
-                  const globalPercentage = pdfUrls.length > 0 
-                    ? Math.min(99, Math.floor((currentCompleted / pdfUrls.length) * 100))
-                    : 0;
-                  
-                  // FASE 2: Detectar fase baseado em progressData.phase
-                  let downloadPhase = 'downloading';
-                  if (progressData.phase === 'storing') {
-                    downloadPhase = 'storing';
-                  } else if (progressData.phase === 'complete') {
-                    downloadPhase = 'storing'; // Mantém fase storing até terminar package
-                  }
-                  
-                  // Atualizar UI através do callback com informações de fase
-                  if (onProgress) {
-                    onProgress({
-                      completed: currentCompleted,
-                      total: pdfUrls.length,
-                      percentage: globalPercentage,
-                      failed: failed,
-                      storagePhase: progressData.phase,
-                      packageProgress: progressData.percentage,
-                      downloadPhase: downloadPhase,
-                      phaseProgress: progressData.percentage // Progresso da fase atual
-                    });
-                  }
-                } else if (progressData.phase === 'preparing') {
-                  // Durante preparação, considerar como fase de download
-                  if (onProgress) {
-                    onProgress({
-                      ...this.progress.getProgress(),
-                      downloadPhase: 'downloading',
-                      phaseProgress: progressData.percentage
-                    });
-                  }
-                }
+          // Update actual PDF count for this package
+          packageInfo.estimatedPdfCount = result.pdfs.length;
+          
+          // FASE 5: Store PDFs in cache using batch mode with progress callback
+          const stored = await packageDownloader.storePdfsInCache(result.pdfs, { 
+            batch: true,  // Enable batch mode for performance
+            onProgress: (progressData) => {
+              // Calculate PDFs from previous packages that are already complete
+              const pdfsInPreviousPackages = packagesInfo
+                .slice(0, packageIndex)
+                .reduce((sum, pkg) => sum + (pkg.completedPdfs || pkg.estimatedPdfCount || 0), 0);
+              
+              // Global progress = PDFs from previous packages + PDFs completed in current package
+              const globalCompleted = pdfsInPreviousPackages + progressData.completed;
+              
+              // Calculate global percentage based on total PDFs
+              const globalPercentage = totalPdfs > 0 
+                ? Math.min(99, Math.floor((globalCompleted / totalPdfs) * 100))
+                : 0;
+              
+              // Update progress tracker
+              this.progress.completed = globalCompleted;
+              
+              // Detect phase based on progressData.phase
+              let downloadPhase = 'downloading';
+              if (progressData.phase === 'storing') {
+                downloadPhase = 'storing';
+              } else if (progressData.phase === 'complete') {
+                downloadPhase = 'storing'; // Keep storing phase until package finishes
               }
+              
+              // Update UI through callback with phase information and package info
+              if (onProgress) {
+                onProgress({
+                  completed: globalCompleted,
+                  total: totalPdfs,
+                  percentage: globalPercentage,
+                  failed: failed,
+                  storagePhase: progressData.phase,
+                  packageProgress: progressData.percentage,
+                  downloadPhase: downloadPhase,
+                  phaseProgress: progressData.percentage, // Progress of current phase
+                  currentPackage: packageIndex + 1,
+                  totalPackages: totalPackages
+                });
+              }
+            }
+          });
+          
+          // Update package info with actual completed count
+          packageInfo.completedPdfs = stored;
+          completed += stored;
+          this.progress.incrementCompleted(stored, result.bytesDownloaded);
+
+          // Always update progress after package completes, even if callback didn't fire
+          // This ensures UI is updated even if the interval wasn't reached
+          if (onProgress) {
+            // Calculate final progress for this package
+            const pdfsInPreviousPackages = packagesInfo
+              .slice(0, packageIndex)
+              .reduce((sum, pkg) => sum + (pkg.completedPdfs || 0), 0);
+            
+            const finalGlobalCompleted = pdfsInPreviousPackages + stored;
+            const finalGlobalPercentage = totalPdfs > 0 
+              ? Math.min(99, Math.floor((finalGlobalCompleted / totalPdfs) * 100))
+              : 0;
+            
+            onProgress({
+              completed: finalGlobalCompleted,
+              total: totalPdfs,
+              percentage: finalGlobalPercentage,
+              failed: failed,
+              downloadPhase: 'storing', // After package completes, we're in storing phase
+              phaseProgress: 100, // Package is complete
+              currentPackage: packageIndex + 1,
+              totalPackages: totalPackages
             });
-            
-            // FASE 2: Always update progress after package completes, even if callback didn't fire
-            // This ensures UI is updated even if the interval wasn't reached
-            if (onProgress) {
-              const finalProgress = this.progress.getProgress();
-              onProgress({
-                ...finalProgress,
-                downloadPhase: 'storing', // After package completes, we're in storing phase
-                phaseProgress: 100 // Package is complete
-              });
-            }
-            
-            completed += stored;
-            this.progress.incrementCompleted(stored, result.bytesDownloaded);
-
-            if (onProgress) {
-              onProgress(this.progress.getProgress());
-            }
-
-            logger.debug('DownloadManager', `Stored ${stored} PDFs from package: ${part.filename}`);
-          } catch (error) {
-            if (error.message === 'DOWNLOAD_CANCELLED') {
-              throw error;
-            }
-
-            logger.error('DownloadManager', `Error downloading package: ${part.filename}`, error);
-            failed++;
-            this.progress.incrementFailed();
           }
+
+          logger.debug('DownloadManager', `Stored ${stored} PDFs from package ${packageIndex + 1}/${totalPackages}: ${part.filename}`);
+        } catch (error) {
+          if (error.message === 'DOWNLOAD_CANCELLED') {
+            throw error;
+          }
+
+          logger.error('DownloadManager', `Error downloading package ${packageIndex + 1}/${totalPackages}: ${part.filename}`, error);
+          failed++;
+          this.progress.incrementFailed();
         }
       }
 
@@ -519,15 +537,17 @@ export class DownloadManager {
       // FASE 2: Mark download as complete and update final progress
       if (onProgress) {
         const finalProgress = this.progress.getProgress();
-        const finalPercentage = pdfUrls.length > 0 
-          ? Math.floor((completed / pdfUrls.length) * 100)
+        const finalPercentage = totalPdfs > 0 
+          ? Math.floor((completed / totalPdfs) * 100)
           : 100;
         
         onProgress({
           ...finalProgress,
           percentage: finalPercentage,
           downloadPhase: 'complete',
-          phaseProgress: 100
+          phaseProgress: 100,
+          currentPackage: totalPackages,
+          totalPackages: totalPackages
         });
       }
 
