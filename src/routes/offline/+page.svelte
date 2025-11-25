@@ -1,5 +1,6 @@
 <script>
   import { onMount } from 'svelte';
+  import { goto } from '$app/navigation';
   import { Download, AlertCircle, CheckCircle, Info, Package, TrendingUp, RefreshCw } from 'lucide-svelte';
   import { offline, isDownloading } from '$lib/stores/offline';
   import { CATEGORY_OPTIONS } from '$lib/stores/filters';
@@ -1184,6 +1185,9 @@
       downloadedCategories = updatedDownloaded;
       
       console.log('[Offline Page] All cache cleared successfully');
+      
+      // Redirect to home page after clearing cache
+      await goto('/');
     } catch (error) {
       console.error('[Offline Page] Error clearing cache:', error);
       throw error;
