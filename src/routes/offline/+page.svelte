@@ -271,12 +271,15 @@
         // Inicializar store offline explicitamente (lazy initialization)
         await offline.lazyInitialize();
         
-        // Carregar louvores e categorias baixadas em paralelo (operações independentes)
-        const [_, downloadedCats] = await Promise.all([
-          loadLouvores(),
-          offline.checkAndUpdateDownloadedCategories()
-        ]);
+        // Carregar louvores primeiro
+        await loadLouvores();
         
+        // Garantir que cachedPdfs está atualizado antes de verificar categorias baixadas
+        await offline.loadCachedPdfsList(false, true);
+        await new Promise(resolve => setTimeout(resolve, 50)); // Pequeno delay para garantir atualização
+        
+        // Agora verificar categorias baixadas com dados atualizados
+        const downloadedCats = await offline.checkAndUpdateDownloadedCategories();
         downloadedCategories = downloadedCats;
         
         // Load saved categories for selection
@@ -809,6 +812,11 @@
     setTimeout(async () => {
       if (!hasCheckedAfterDownload) {
         hasCheckedAfterDownload = true;
+        
+        // Garantir que cachedPdfs está atualizado antes de verificar categorias baixadas
+        await offline.loadCachedPdfsList(false, true);
+        await new Promise(resolve => setTimeout(resolve, 100)); // Pequeno delay para garantir atualização
+        
         const cats = await offline.checkAndUpdateDownloadedCategories();
         downloadedCategories = cats;
         // Ensure downloaded categories are selected
@@ -829,9 +837,6 @@
           affectedCategories.forEach(cat => statsCalculator.invalidateCategory(cat));
         }
         loadedCategories.clear();
-        
-        // Force reload cached PDFs list to ensure we have latest data
-        await offline.loadCachedPdfsList(false, true);
         
         // FASE 4: Recalcular stats se houver flag de batch pendente
         // ou sempre recalcular após download completo
