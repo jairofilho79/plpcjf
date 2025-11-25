@@ -2367,6 +2367,7 @@ export const offline = {
   loadCachedPdfsList,
   checkForNewPDFs,
   getSavedCategories,
+  saveCategories,
   getDownloadedCategories,
   checkAndUpdateDownloadedCategories,
   fetchOfflineManifest,

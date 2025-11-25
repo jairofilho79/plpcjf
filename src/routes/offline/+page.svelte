@@ -37,6 +37,12 @@
      */
   let downloadedCategories = [];
   
+  // Track last saved categories to prevent unnecessary saves
+  /**
+     * @type {string[]}
+     */
+  let lastSavedCategories = [];
+  
   // Category availability stats
   /**
      * @type {Record<string, {total: number, available: number, missing: number, percentage: number}>}
@@ -283,6 +289,10 @@
         // Merge downloaded categories with saved categories, ensuring downloaded ones are included
         const allCategories = [...new Set([...selectedCategories, ...downloadedCategories])];
         selectedCategories = allCategories;
+        
+        // Initialize lastSavedCategories to prevent unnecessary saves during initialization
+        lastSavedCategories = [...selectedCategories];
+        hasInitializedCategories = true;
         
         // FIX: Invalidate stats for downloaded categories since validation just completed
         // This ensures UI shows fresh stats after validation
@@ -795,6 +805,22 @@
   // FASE 2: Removido trigger automático de stats por mudança de categoria
   // Stats são carregadas apenas quando necessário (após download ou manualmente)
 
+  // Track last saved categories to prevent unnecessary saves
+  let lastSavedCategories = [];
+  let hasInitializedCategories = false;
+  
+  // Save selected categories automatically when they change (after initialization)
+  // Only save if categories actually changed to prevent loops
+  $: if (!isInitializing && hasInitializedCategories) {
+    const categoriesStr = JSON.stringify([...selectedCategories].sort());
+    const lastSavedStr = JSON.stringify([...lastSavedCategories].sort());
+    
+    if (categoriesStr !== lastSavedStr) {
+      offline.saveCategories(selectedCategories);
+      lastSavedCategories = [...selectedCategories];
+    }
+  }
+
   // Get current offline state
   $: state = $offline;
   $: downloading = $isDownloading;
@@ -867,6 +893,8 @@
     } else {
       selectedCategories = [...selectedCategories, category];
     }
+    
+    // The reactive statement will automatically save the changes
   }
 
   /**
