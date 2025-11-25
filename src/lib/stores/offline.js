@@ -1053,14 +1053,24 @@ async function isCategoryCompletelyDownloaded(category, cachedPdfs, louvoresData
   const expectedCount = categoryLouvores.filter((/** @type {any} */ l) => getPdfUrl(l)).length;
   const foundCount = foundPdfs.size;
   
-  if (foundCount < expectedCount) {
-    console.warn(`[Offline Store] Category "${category}": Found ${foundCount}/${expectedCount} PDFs. Marking as incomplete.`);
+  // FIX: Tolerância de 99% - considerar completa se tiver 99% ou mais dos PDFs
+  // Isso evita marcar como incompleta categorias que estão praticamente completas
+  // (ex: 1631/1633 = 99.88% deve ser considerada completa)
+  const COMPLETION_THRESHOLD = 0.99; // 99%
+  const completionPercentage = foundCount / expectedCount;
+  
+  if (completionPercentage < COMPLETION_THRESHOLD) {
+    console.warn(`[Offline Store] Category "${category}": Found ${foundCount}/${expectedCount} PDFs (${(completionPercentage * 100).toFixed(2)}%). Marking as incomplete.`);
     return false;
   }
-
+  
   // Log success for debugging
-  if (strictMode && foundCount === expectedCount) {
-    console.log(`[Offline Store] Category "${normalizedCategory}": Strict validation passed - ${foundCount} PDFs verified.`);
+  if (completionPercentage >= COMPLETION_THRESHOLD) {
+    if (foundCount === expectedCount) {
+      console.log(`[Offline Store] Category "${normalizedCategory}": Strict validation passed - ${foundCount} PDFs verified.`);
+    } else {
+      console.log(`[Offline Store] Category "${normalizedCategory}": ${(completionPercentage * 100).toFixed(2)}% complete (${foundCount}/${expectedCount} PDFs). Marking as complete.`);
+    }
   }
 
   // Invalidate stats cache for the normalized category after validation completes

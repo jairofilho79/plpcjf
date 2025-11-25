@@ -959,10 +959,17 @@
   }
   
   /**
-   * Get total size of selected categories (excluding already downloaded)
+   * Get total size of selected categories (excluding already downloaded and complete ones)
    */
   $: totalSelectedSize = selectedCategories
-    .filter((/** @type {string} */ cat) => !downloadedCategories.includes(cat))
+    .filter((/** @type {string} */ cat) => {
+      // Don't include if already marked as downloaded
+      if (downloadedCategories.includes(cat)) return false;
+      // Don't include if actually complete (100% with no missing PDFs)
+      const stats = categoryStats[cat] || { total: 0, available: 0, missing: 0, percentage: 0 };
+      const isActuallyComplete = stats.percentage === 100 && stats.missing === 0;
+      return !isActuallyComplete;
+    })
     .reduce((/** @type {number} */ sum, /** @type {string} */ cat) => {
       return sum + ((/** @type {Record<string, number>} */ (categorySizes))[cat] || 0);
     }, 0);
@@ -1632,6 +1639,19 @@
   }
 
   .category-item.downloaded input[type="checkbox"] {
+    cursor: not-allowed;
+    opacity: 0.6;
+  }
+
+  /* Complete category styles (similar to downloaded) */
+  .category-item.complete {
+    background-color: var(--background-color);
+    border-color: #28a745;
+    opacity: 0.8;
+    cursor: not-allowed;
+  }
+
+  .category-item.complete input[type="checkbox"] {
     cursor: not-allowed;
     opacity: 0.6;
   }
