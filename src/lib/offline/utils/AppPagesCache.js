@@ -58,12 +58,16 @@ export async function cacheAppPages(options = {}) {
     
     const results = await Promise.allSettled(
       APP_ROUTES.map(async (route, index) => {
+        // Declare url outside try block so it's available in catch
+        let url;
+        let request;
+        
         try {
-          const url = new URL(route, window.location.origin);
+          url = new URL(route, window.location.origin);
           
           // Create a single request object that we'll use for both fetch and cache
           // This ensures the request matches exactly when we cache and retrieve
-          const request = new Request(url.href, {
+          request = new Request(url.href, {
             method: 'GET',
             mode: 'navigate',
             cache: 'no-cache',
