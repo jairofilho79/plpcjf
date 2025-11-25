@@ -1407,6 +1407,22 @@
         </div>
       {/if}
 
+      <!-- Info about category persistence and cache limitation -->
+      <div class="info-box">
+        <Info class="w-5 h-5 info-icon" />
+        <div class="info-text">
+          <p class="info-title">Sobre downloads automáticos e remoção</p>
+          <p class="info-description">
+            As categorias selecionadas serão salvas e usadas para downloads automáticos de novos PDFs.
+            Novos PDFs serão baixados automaticamente apenas das categorias que você escolher.
+          </p>
+          <p class="info-description">
+            <strong>Atenção:</strong> Ainda não há funcionalidade para remover downloads pré-baixados individualmente.
+            Para remover todos os PDFs baixados, é necessário limpar o cache do navegador completamente.
+          </p>
+        </div>
+      </div>
+
       <!-- Offline requirements alert -->
       <OfflineRequirementsAlert />
 
@@ -1526,39 +1542,20 @@
 
       <!-- Simplified action button -->
       <div class="action-buttons">
-        {#if offlineAvailable}
-          <!-- Clear All button -->
-          <button
-            class="btn btn-danger"
-            on:click={clearAllCache}
-            disabled={isClearingCache || downloading}
-            title="Limpar todo o cache storage"
-          >
-            {#if isClearingCache}
-              <RefreshCw class="w-5 h-5 spinning" />
-              <span>Limpando...</span>
-            {:else}
-              <AlertCircle class="w-5 h-5" />
-              <span>Limpar Tudo</span>
-            {/if}
-          </button>
-        {:else}
-          <!-- Download All button -->
-          <button
-            class="btn btn-primary"
-            on:click={downloadAllCategories}
-            disabled={downloading || !louvoresReady || isClearingCache}
-            title={!louvoresReady ? 'Aguardando carregamento dos louvores...' : 'Baixar todas as categorias para uso offline'}
-          >
-            {#if downloading}
-              <RefreshCw class="w-5 h-5 spinning" />
-              <span>Baixando...</span>
-            {:else}
-              <Download class="w-5 h-5" />
-              <span>Disponibilizar offline</span>
-            {/if}
-          </button>
-        {/if}
+        <button
+          class="btn btn-primary"
+          on:click={downloadAllCategories}
+          disabled={downloading || !louvoresReady || offlineAvailable}
+          title={!louvoresReady ? 'Aguardando carregamento dos louvores...' : offlineAvailable ? 'Conteúdo já disponível offline' : 'Baixar todas as categorias para uso offline'}
+        >
+          {#if downloading}
+            <RefreshCw class="w-5 h-5 spinning" />
+            <span>Baixando...</span>
+          {:else}
+            <Download class="w-5 h-5" />
+            <span>Disponibilizar offline</span>
+          {/if}
+        </button>
       </div>
     {:else if downloading}
       <!-- Download progress -->
