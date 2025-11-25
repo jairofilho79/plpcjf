@@ -102,9 +102,18 @@ export class DownloadManager {
         throw new Error('No louvores data available');
       }
 
-      // Filter louvores by categories
+      // Expand categories to include variants (e.g., "Cifra" includes "Cifra nível I" and "Cifra nível II")
+      const categoryVariantsMap = new Map();
+      categories.forEach(cat => {
+        const normalized = this._normalizeCategory(cat);
+        const variants = this._getCategoryVariants(normalized);
+        categoryVariantsMap.set(normalized, variants);
+      });
+      const allCategoryVariants = Array.from(categoryVariantsMap.values()).flat();
+
+      // Filter louvores by categories (using expanded variants)
       const filteredLouvores = louvoresData.filter(louvor =>
-        categories.includes(louvor.categoria)
+        allCategoryVariants.includes(louvor.categoria)
       );
 
       if (filteredLouvores.length === 0) {
@@ -519,6 +528,34 @@ export class DownloadManager {
     }
   }
 
+
+  /**
+   * Normalize category name - aggregates subcategories into main category
+   * Maps "Cifra nível I" and "Cifra nível II" to "Cifra"
+   * @param {string} category - Category name to normalize
+   * @returns {string} Normalized category name
+   * @private
+   */
+  _normalizeCategory(category) {
+    if (!category) return category;
+    if (category === 'Cifra nível I' || category === 'Cifra nível II') {
+      return 'Cifra';
+    }
+    return category;
+  }
+
+  /**
+   * Get all categories that should be aggregated into a normalized category
+   * @param {string} normalizedCategory - Normalized category name
+   * @returns {string[]} Array of category names that map to this normalized category
+   * @private
+   */
+  _getCategoryVariants(normalizedCategory) {
+    if (normalizedCategory === 'Cifra') {
+      return ['Cifra', 'Cifra nível I', 'Cifra nível II'];
+    }
+    return [normalizedCategory];
+  }
 
   /**
    * Get PDF URL from louvor
