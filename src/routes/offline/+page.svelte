@@ -1132,15 +1132,31 @@
       // Clear offline manager cache (PDFs)
       await offlineManager.clearCache();
       
-      // Clear app pages cache
+      // Clear all caches including plpc-pdfs and plpc-v3-dev-app
       if (typeof caches !== 'undefined') {
         try {
+          // Clear plpc-pdfs cache (PDFs)
+          const pdfCache = await caches.open('plpc-pdfs');
+          const pdfKeys = await pdfCache.keys();
+          await Promise.all(pdfKeys.map(key => pdfCache.delete(key)));
+          console.log('[Offline Page] Cleared plpc-pdfs cache');
+          
+          // Clear app pages cache
           const appCache = await caches.open('plpc-v3-dev-app');
-          const keys = await appCache.keys();
-          await Promise.all(keys.map(key => appCache.delete(key)));
+          const appKeys = await appCache.keys();
+          await Promise.all(appKeys.map(key => appCache.delete(key)));
           console.log('[Offline Page] Cleared app pages cache');
+          
+          // Also try to delete the entire cache if possible
+          try {
+            await caches.delete('plpc-pdfs');
+            console.log('[Offline Page] Deleted plpc-pdfs cache entirely');
+          } catch (e) {
+            // Ignore if cache doesn't exist or can't be deleted
+            console.debug('[Offline Page] Could not delete plpc-pdfs cache entirely:', e);
+          }
         } catch (error) {
-          console.warn('[Offline Page] Error clearing app pages cache:', error);
+          console.warn('[Offline Page] Error clearing caches:', error);
         }
       }
       
@@ -1378,22 +1394,6 @@
           </div>
         </div>
       {/if}
-
-      <!-- Info about category persistence and cache limitation -->
-      <div class="info-box">
-        <Info class="w-5 h-5 info-icon" />
-        <div class="info-text">
-          <p class="info-title">Sobre downloads automáticos e remoção</p>
-          <p class="info-description">
-            As categorias selecionadas serão salvas e usadas para downloads automáticos de novos PDFs.
-            Novos PDFs serão baixados automaticamente apenas das categorias que você escolher.
-          </p>
-          <p class="info-description">
-            <strong>Atenção:</strong> Ainda não há funcionalidade para remover downloads pré-baixados individualmente.
-            Para remover todos os PDFs baixados, é necessário limpar o cache do navegador completamente.
-          </p>
-        </div>
-      </div>
 
       <!-- Offline requirements alert -->
       <OfflineRequirementsAlert />
