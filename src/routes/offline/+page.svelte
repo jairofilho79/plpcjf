@@ -24,6 +24,12 @@
   import offlineEvents, { EVENTS as OFFLINE_EVENTS } from '$lib/offline/core/OfflineEvents.js';
   import offlineManager from '$lib/offline/core/OfflineManager.js';
   import cacheMigrationV2 from '$lib/offline/storage/CacheMigrationV2.js';
+  import { browser } from '$app/environment';
+
+  // Offline available flag from localStorage
+  const OFFLINE_AVAILABLE_KEY = 'OFFLINE_AVAILABLE';
+  let offlineAvailable = false;
+  let isClearingCache = false;
 
   // Selected categories for download
   /**
@@ -254,8 +260,39 @@
     }
   }
 
+  // Check offline available status from localStorage
+  function checkOfflineAvailable() {
+    if (!browser) return false;
+    try {
+      const value = localStorage.getItem(OFFLINE_AVAILABLE_KEY);
+      return value === 'TRUE';
+    } catch (e) {
+      console.warn('[Offline Page] Error reading OFFLINE_AVAILABLE:', e);
+      return false;
+    }
+  }
+
+  // Set offline available status
+  function setOfflineAvailable(value) {
+    if (!browser) return;
+    try {
+      if (value) {
+        localStorage.setItem(OFFLINE_AVAILABLE_KEY, 'TRUE');
+        offlineAvailable = true;
+      } else {
+        localStorage.removeItem(OFFLINE_AVAILABLE_KEY);
+        offlineAvailable = false;
+      }
+    } catch (e) {
+      console.warn('[Offline Page] Error setting OFFLINE_AVAILABLE:', e);
+    }
+  }
+
   // Load saved categories and check downloaded categories on mount
   onMount(() => {
+    // Check offline available status
+    offlineAvailable = checkOfflineAvailable();
+    
     // FASE 3: Inicializar sistema de cache
     initStatsCache();
     
@@ -848,6 +885,13 @@
         // Reload stats after download (force to bypass rate limiting)
         // This ensures UI updates with fresh stats after validation
         await loadCategoryStats(true);
+        
+        // Set offline available flag after download completes
+        // Check if all categories are downloaded
+        const allCategoriesDownloaded = CATEGORY_OPTIONS.every(cat => cats.includes(cat));
+        if (allCategoriesDownloaded) {
+          setOfflineAvailable(true);
+        }
       }
     }, 1000);
   }
@@ -1028,6 +1072,108 @@
   async function cancelDownload() {
     console.log('[Offline Page] Cancelling download');
     await offlineManager.cancelDownload();
+  }
+
+  /**
+   * Download all categories automatically
+   */
+  async function downloadAllCategories() {
+    if (downloading || !louvoresReady) return;
+
+    console.log('[Offline Page] Starting download for all categories');
+    
+    // Select all categories
+    const allCategories = [...CATEGORY_OPTIONS];
+    selectedCategories = allCategories;
+    
+    // Filter out already downloaded categories
+    const categoriesToDownload = allCategories.filter(cat => !downloadedCategories.includes(cat));
+    
+    if (categoriesToDownload.length === 0) {
+      console.log('[Offline Page] All categories are already downloaded');
+      setOfflineAvailable(true);
+      return;
+    }
+    
+    // Download all categories
+    try {
+      const result = await offlineManager.downloadCategories(categoriesToDownload, {
+        louvoresData: $louvores
+      });
+      
+      // Set offline available flag after successful download
+      // Wait a bit for the reactive statement to update downloadedCategories
+      await new Promise(resolve => setTimeout(resolve, 1500));
+      
+      // Check if all categories are now downloaded
+      await offline.loadCachedPdfsList(false, true);
+      const updatedDownloaded = await offline.checkAndUpdateDownloadedCategories();
+      const allDownloaded = CATEGORY_OPTIONS.every(cat => updatedDownloaded.includes(cat));
+      
+      if (allDownloaded || result.success) {
+        setOfflineAvailable(true);
+      }
+    } catch (error) {
+      console.error('[Offline Page] Error downloading all categories:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Clear all cache storage
+   */
+  async function clearAllCache() {
+    if (isClearingCache) return;
+    
+    isClearingCache = true;
+    console.log('[Offline Page] Clearing all cache...');
+    
+    try {
+      // Clear offline manager cache (PDFs)
+      await offlineManager.clearCache();
+      
+      // Clear app pages cache
+      if (typeof caches !== 'undefined') {
+        try {
+          const appCache = await caches.open('plpc-v3-dev-app');
+          const keys = await appCache.keys();
+          await Promise.all(keys.map(key => appCache.delete(key)));
+          console.log('[Offline Page] Cleared app pages cache');
+        } catch (error) {
+          console.warn('[Offline Page] Error clearing app pages cache:', error);
+        }
+      }
+      
+      // Clear stats cache
+      clearStatsCache();
+      
+      // Clear PDF index
+      clearPdfIndex();
+      
+      // Remove offline available flag
+      setOfflineAvailable(false);
+      
+      // Reset state variables
+      selectedCategories = [];
+      downloadedCategories = [];
+      lastSavedCategories = [];
+      categoryStats = {};
+      requiredPackagesInfo = null;
+      
+      // Reload cached PDFs list
+      await offline.loadCachedPdfsList(false, true);
+      
+      // Update downloaded categories
+      const updatedDownloaded = await offline.checkAndUpdateDownloadedCategories();
+      downloadedCategories = updatedDownloaded;
+      
+      console.log('[Offline Page] All cache cleared successfully');
+    } catch (error) {
+      console.error('[Offline Page] Error clearing cache:', error);
+      throw error;
+    } finally {
+      isClearingCache = false;
+    }
   }
 </script>
 
@@ -1271,8 +1417,8 @@
         </div>
       {/if}
 
-      <!-- Category selection -->
-      <div class="category-section">
+      <!-- Category selection (hidden) -->
+      <div class="category-section" style="display: none;">
         <h2 class="section-title">Selecione as categorias para baixar:</h2>
         <div class="category-list">
           {#each CATEGORY_OPTIONS as category}
@@ -1366,17 +1512,41 @@
         {/if}
       </div>
 
-      <!-- Action buttons -->
+      <!-- Simplified action button -->
       <div class="action-buttons">
-        <button
-          class="btn btn-primary"
-          on:click={startDownload}
-          disabled={!canDownload}
-          title={!louvoresReady ? 'Aguardando carregamento dos louvores...' : categoriesToDownload.length === 0 ? 'Selecione categorias que precisam ser baixadas' : ''}
-        >
-          <Download class="w-5 h-5" />
-          <span>Baixar PDFs</span>
-        </button>
+        {#if offlineAvailable}
+          <!-- Clear All button -->
+          <button
+            class="btn btn-danger"
+            on:click={clearAllCache}
+            disabled={isClearingCache || downloading}
+            title="Limpar todo o cache storage"
+          >
+            {#if isClearingCache}
+              <RefreshCw class="w-5 h-5 spinning" />
+              <span>Limpando...</span>
+            {:else}
+              <AlertCircle class="w-5 h-5" />
+              <span>Limpar Tudo</span>
+            {/if}
+          </button>
+        {:else}
+          <!-- Download All button -->
+          <button
+            class="btn btn-primary"
+            on:click={downloadAllCategories}
+            disabled={downloading || !louvoresReady || isClearingCache}
+            title={!louvoresReady ? 'Aguardando carregamento dos louvores...' : 'Baixar todas as categorias para uso offline'}
+          >
+            {#if downloading}
+              <RefreshCw class="w-5 h-5 spinning" />
+              <span>Baixando...</span>
+            {:else}
+              <Download class="w-5 h-5" />
+              <span>Disponibilizar offline</span>
+            {/if}
+          </button>
+        {/if}
       </div>
     {:else if downloading}
       <!-- Download progress -->
@@ -2077,6 +2247,10 @@
     border-color: #c82333;
     transform: translateY(-2px);
     box-shadow: 0 4px 8px rgba(220, 53, 69, 0.3);
+  }
+
+  .btn .spinning {
+    animation: spin 1s linear infinite;
   }
 
   /* Skeleton Screen Styles */
