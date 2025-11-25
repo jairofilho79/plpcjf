@@ -805,8 +805,6 @@
   // FASE 2: Removido trigger automático de stats por mudança de categoria
   // Stats são carregadas apenas quando necessário (após download ou manualmente)
 
-  // Track last saved categories to prevent unnecessary saves
-  let lastSavedCategories = [];
   let hasInitializedCategories = false;
   
   // Save selected categories automatically when they change (after initialization)
