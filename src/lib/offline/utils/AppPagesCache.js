@@ -66,10 +66,11 @@ export async function cacheAppPages(options = {}) {
           url = new URL(route, window.location.origin);
           
           // Create a single request object that we'll use for both fetch and cache
-          // This ensures the request matches exactly when we cache and retrieve
+          // Note: Cannot use mode: 'navigate' in manual Request construction
+          // Use 'same-origin' instead, which works for same-origin requests
           request = new Request(url.href, {
             method: 'GET',
-            mode: 'navigate',
+            mode: 'same-origin',
             cache: 'no-cache',
             credentials: 'same-origin',
             redirect: 'follow'
@@ -174,7 +175,7 @@ export async function cacheAppPages(options = {}) {
               }
               
               // Try matching with a new request with same URL
-              const altRequest = new Request(url.href, { mode: 'navigate' });
+              const altRequest = new Request(url.href, { mode: 'same-origin' });
               const cachedAlt = await cache.match(altRequest);
               if (cachedAlt) {
                 logger.info('AppPagesCache', `Successfully cached page (alt request match): ${route}`);
@@ -299,7 +300,7 @@ export async function isRouteCached(route) {
   try {
     const cache = await caches.open(APP_CACHE_NAME);
     const url = new URL(route, window.location.origin);
-    const request = new Request(url, { mode: 'navigate' });
+    const request = new Request(url.href, { mode: 'same-origin' });
     const cached = await cache.match(request);
     return !!cached;
   } catch (error) {
@@ -327,7 +328,7 @@ export async function getCachedRoutes() {
     for (const route of APP_ROUTES) {
       try {
         const url = new URL(route, origin);
-        const request = new Request(url, { mode: 'navigate' });
+        const request = new Request(url.href, { mode: 'same-origin' });
         const cached = await cache.match(request);
         if (cached) {
           cachedRoutes.push(route);
