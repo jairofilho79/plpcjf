@@ -105,21 +105,52 @@ self.addEventListener('install', (event) => {
   );
 });
 
+// Clean up package ZIP files from cache
+// Packages are temporary and should not remain in cache storage
+async function cleanupPackageZips() {
+  try {
+    const cache = await caches.open(APP_CACHE);
+    const requests = await cache.keys();
+    
+    const zipRequests = requests.filter(req => {
+      try {
+        const url = new URL(req.url);
+        return url.pathname.startsWith('/packages/') && url.pathname.endsWith('.zip');
+      } catch {
+        return false;
+      }
+    });
+    
+    if (zipRequests.length > 0) {
+      console.log(`[SW] Cleaning up ${zipRequests.length} package ZIP files from cache`);
+      await Promise.all(zipRequests.map(req => cache.delete(req)));
+      console.log('[SW] Package ZIP files cleaned up');
+    }
+  } catch (err) {
+    console.error('[SW] Error cleaning up package ZIPs:', err);
+  }
+}
+
 // Activate event - clean up old caches
 self.addEventListener('activate', (event) => {
   console.log('[SW] Activating service worker...');
   event.waitUntil(
-    caches.keys()
-      .then(cacheNames => {
-        return Promise.all(
-          cacheNames
-            .filter(name => name.startsWith('plpc-') && name !== APP_CACHE && name !== PDF_CACHE && name !== PDFJS_CACHE)
-            .map(name => {
-              console.log('[SW] Deleting old cache:', name);
-              return caches.delete(name);
-            })
-        );
-      })
+    Promise.all([
+      // Clean up old caches
+      caches.keys()
+        .then(cacheNames => {
+          return Promise.all(
+            cacheNames
+              .filter(name => name.startsWith('plpc-') && name !== APP_CACHE && name !== PDF_CACHE && name !== PDFJS_CACHE)
+              .map(name => {
+                console.log('[SW] Deleting old cache:', name);
+                return caches.delete(name);
+              })
+          );
+        }),
+      // Clean up package ZIPs from APP_CACHE
+      cleanupPackageZips()
+    ])
       .then(() => self.clients.claim())
   );
 });
@@ -353,6 +384,28 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
+  // Handle package ZIP files - do NOT cache these (they are temporary downloads)
+  // Packages are downloaded, extracted, and then should be removed from cache
+  const isPackageZip = !isNavigationRequest && 
+    url.pathname.startsWith('/packages/') && 
+    url.pathname.endsWith('.zip');
+  
+  if (isPackageZip) {
+    // Network only - never cache package ZIPs
+    event.respondWith(
+      fetch(event.request, { cache: 'no-store' })
+        .then(response => {
+          // Return response without caching
+          return response;
+        })
+        .catch(err => {
+          console.error('[SW] Failed to fetch package ZIP:', url.pathname, err);
+          throw err;
+        })
+    );
+    return;
+  }
+
   // Check if this is a development asset (JS/CSS from Vite/SvelteKit)
   const isDevAsset = isDevelopmentAsset(url);
 
@@ -400,11 +453,15 @@ self.addEventListener('fetch', (event) => {
           return fetch(event.request)
             .then(response => {
               // Cache successful responses for future offline use
+              // BUT exclude package ZIPs (they should not be cached)
               if (response && response.status === 200) {
-                const responseClone = response.clone();
-                caches.open(APP_CACHE).then(cache => {
-                  cache.put(event.request, responseClone);
-                });
+                const shouldCache = !(url.pathname.startsWith('/packages/') && url.pathname.endsWith('.zip'));
+                if (shouldCache) {
+                  const responseClone = response.clone();
+                  caches.open(APP_CACHE).then(cache => {
+                    cache.put(event.request, responseClone);
+                  });
+                }
               }
               return response;
             })

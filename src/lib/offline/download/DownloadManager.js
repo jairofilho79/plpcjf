@@ -529,6 +529,28 @@ export class DownloadManager {
           }
 
           logger.debug('DownloadManager', `Stored ${stored} PDFs from package ${packageIndex + 1}/${totalPackages}: ${part.filename}`);
+          
+          // Clean up package ZIP from cache after extraction
+          // Packages are temporary and should not remain in cache storage
+          try {
+            const packageUrl = part.url || part.filename;
+            const fullPackageUrl = packageUrl.startsWith('/') 
+              ? packageUrl 
+              : `${packageDownloader.basePath}/${packageUrl}`;
+            
+            // Remove from APP_CACHE (plpc-v3-dev-app) where Service Worker might have cached it
+            if (typeof caches !== 'undefined') {
+              const cache = await caches.open('plpc-v3-dev-app');
+              const packageRequest = new Request(fullPackageUrl);
+              const deleted = await cache.delete(packageRequest);
+              if (deleted) {
+                logger.debug('DownloadManager', `Removed package ZIP from cache: ${part.filename}`);
+              }
+            }
+          } catch (error) {
+            // Non-critical error - package might not be in cache or cache API might not be available
+            logger.debug('DownloadManager', `Could not remove package ZIP from cache (non-critical): ${part.filename}`, error);
+          }
         } catch (error) {
           if (error.message === 'DOWNLOAD_CANCELLED') {
             throw error;
