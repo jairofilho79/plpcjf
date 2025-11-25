@@ -297,8 +297,11 @@
         // FIX: Invalidate stats for downloaded categories since validation just completed
         // This ensures UI shows fresh stats after validation
         if (downloadedCats.length > 0) {
+          // Invalidate all caches: persistent, memory, and StatsCalculator
           invalidateCategories(downloadedCats);
           downloadedCats.forEach(cat => statsCache.delete(cat));
+          // Also invalidate StatsCalculator's internal cache
+          downloadedCats.forEach(cat => statsCalculator.invalidateCategory(cat));
         }
         
         // FASE 3: Carregar stats do cache para renderização inicial rápida
@@ -309,6 +312,12 @@
           Object.entries(cachedStats).forEach(([cat, stats]) => {
             statsCache.set(cat, stats);
           });
+        }
+        
+        // Initialize lastCachedPdfsCount after loading cached PDFs
+        const initialState = $offline;
+        if (initialState.cachedPdfs) {
+          lastCachedPdfsCount = initialState.cachedPdfs.length;
         }
         
         // Marcar inicialização básica como completa - permite renderização
@@ -351,12 +360,18 @@
         if (categories.length > 0) {
           console.log('[Offline Page] FASE 4: Stats invalidated for categories after download:', categories);
           
-          // Remove from loaded categories to force reload
+          // Invalidate all caches for affected categories
+          invalidateCategories(categories);
           categories.forEach(cat => {
+            statsCache.delete(cat);
+            statsCalculator.invalidateCategory(cat);
             loadedCategories.delete(cat);
           });
           
-          // Reload stats for affected categories
+          // Force reload cached PDFs list to ensure we have latest data
+          await offline.loadCachedPdfsList(false, true);
+          
+          // Reload stats for affected categories (force recalculation)
           await loadCategoryStatsForCategories(categories, true).catch(err => {
             console.error('[Offline Page] Error reloading stats after download:', err);
           });
@@ -502,11 +517,17 @@
         
         // Invalidate stats cache and reload for affected categories
         if (updatedDownloaded.length > 0) {
+          // Invalidate all caches: persistent, memory, and StatsCalculator
           invalidateCategories(updatedDownloaded);
           updatedDownloaded.forEach(cat => statsCache.delete(cat));
+          // Also invalidate StatsCalculator's internal cache
+          updatedDownloaded.forEach(cat => statsCalculator.invalidateCategory(cat));
           loadedCategories.clear();
           
-          // Reload stats for updated categories
+          // Force reload cached PDFs list to ensure we have latest data
+          await offline.loadCachedPdfsList(false, true);
+          
+          // Reload stats for updated categories (force recalculation)
           await loadCategoryStatsForCategories(updatedDownloaded, true);
         }
       } finally {
@@ -534,7 +555,13 @@
       // FASE 3: Invalidar cache após sync (mas manter se possível)
       clearStatsCache();
       statsCache.clear();
+      // Also invalidate StatsCalculator's internal cache
+      statsCalculator.invalidateAll();
       loadedCategories.clear();
+      
+      // Force reload cached PDFs list to ensure we have latest data
+      await offline.loadCachedPdfsList(false, true);
+      
       // Reload category stats to reflect any fixes (force to bypass rate limiting)
       await loadCategoryStats(true);
       
@@ -634,19 +661,29 @@
     try {
       // Always reload cached PDFs list before calculating stats
       // This ensures we have the latest cache state, especially important with lazy loading
-      await offline.loadCachedPdfsList();
+      // Force reload to bypass cache and get fresh data
+      await offline.loadCachedPdfsList(false, true);
+      
+      // Wait a bit for state to update
+      await new Promise(resolve => setTimeout(resolve, 50));
       
       const state = $offline;
       /** @type {string[]} */
       let cachedPdfs = state.cachedPdfs || [];
       
-      // If still empty after reload, try one more time
+      // If still empty after reload, try one more time with delay
       if (!cachedPdfs || cachedPdfs.length === 0) {
         // Small delay to allow Service Worker to process
-        await new Promise(resolve => setTimeout(resolve, 100));
-        await offline.loadCachedPdfsList();
+        await new Promise(resolve => setTimeout(resolve, 200));
+        await offline.loadCachedPdfsList(false, true);
+        await new Promise(resolve => setTimeout(resolve, 50));
         const updatedState = $offline;
         cachedPdfs = updatedState.cachedPdfs || [];
+      }
+      
+      // Log for debugging
+      if (force) {
+        console.log('[Offline Page] Loading stats with', cachedPdfs.length, 'cached PDFs');
       }
       
       // FASE 3: Load category stats only for specified categories (usando cache otimizado)
@@ -681,12 +718,14 @@
         const calculationPromises = statsToCalculate.map(async (category) => {
           const startTime = calculationStartTimes.get(category);
           // FASE 4: Use StatsCalculator directly for better performance
+          // When force=true, ensure we force recalculation and don't use cache
           const stats = await statsCalculator.getCategoryStats(
             category,
             {
               louvoresData: $louvores,
               cachedPdfs,
-              useCache: !force
+              useCache: !force,
+              forceRecalculate: force
             }
           );
           const calcTime = performance.now() - startTime;
@@ -782,11 +821,17 @@
         // Identificar categorias que foram baixadas (normalizadas)
         const affectedCategories = cats.length > 0 ? cats : selectedCategories;
         if (affectedCategories.length > 0) {
+          // Invalidate all caches: persistent, memory, and StatsCalculator
           invalidateCategories(affectedCategories);
           // Remover do cache em memória também
           affectedCategories.forEach(cat => statsCache.delete(cat));
+          // Also invalidate StatsCalculator's internal cache
+          affectedCategories.forEach(cat => statsCalculator.invalidateCategory(cat));
         }
         loadedCategories.clear();
+        
+        // Force reload cached PDFs list to ensure we have latest data
+        await offline.loadCachedPdfsList(false, true);
         
         // FASE 4: Recalcular stats se houver flag de batch pendente
         // ou sempre recalcular após download completo
@@ -823,6 +868,46 @@
   $: state = $offline;
   $: downloading = $isDownloading;
   $: louvoresReady = $louvores.length > 0;
+  
+  // Track cached PDFs count to detect changes
+  let lastCachedPdfsCount = 0;
+  let isProcessingCacheChange = false;
+  
+  // React to cached PDFs changes - invalidate and reload stats when cache changes
+  $: if (!isInitializing && !isProcessingCacheChange && state.cachedPdfs) {
+    const currentCount = state.cachedPdfs.length;
+    // Only react if count actually changed (not just on initial load)
+    if (lastCachedPdfsCount > 0 && currentCount !== lastCachedPdfsCount) {
+      console.log('[Offline Page] Cached PDFs count changed:', lastCachedPdfsCount, '->', currentCount);
+      
+      // Prevent recursive updates
+      isProcessingCacheChange = true;
+      
+      // Invalidate all stats to force recalculation with new cache state
+      const allCategories = Object.keys(categoryStats);
+      if (allCategories.length > 0) {
+        invalidateCategories(allCategories);
+        allCategories.forEach(cat => {
+          statsCache.delete(cat);
+          statsCalculator.invalidateCategory(cat);
+        });
+        loadedCategories.clear();
+        
+        // Reload stats for all categories that have been loaded
+        loadCategoryStatsForCategories(allCategories, true)
+          .then(() => {
+            isProcessingCacheChange = false;
+          })
+          .catch(err => {
+            console.error('[Offline Page] Error reloading stats after cache change:', err);
+            isProcessingCacheChange = false;
+          });
+      } else {
+        isProcessingCacheChange = false;
+      }
+    }
+    lastCachedPdfsCount = currentCount;
+  }
   // Filter out already downloaded categories from selection for download button
   // Also check if category is actually complete (100% with no missing PDFs)
   $: categoriesToDownload = selectedCategories.filter(cat => {
