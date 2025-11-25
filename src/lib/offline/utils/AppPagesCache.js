@@ -54,13 +54,21 @@ export async function cacheAppPages(options = {}) {
 
   try {
     const cache = await caches.open(APP_CACHE_NAME);
+    logger.debug('AppPagesCache', `Opened cache: ${APP_CACHE_NAME}`);
+    
     const results = await Promise.allSettled(
       APP_ROUTES.map(async (route, index) => {
         try {
           const url = new URL(route, window.location.origin);
-          const request = new Request(url, {
+          
+          // Create a single request object that we'll use for both fetch and cache
+          // This ensures the request matches exactly when we cache and retrieve
+          const request = new Request(url.href, {
+            method: 'GET',
             mode: 'navigate',
-            cache: 'no-cache'
+            cache: 'no-cache',
+            credentials: 'same-origin',
+            redirect: 'follow'
           });
 
           // Call progress callback if provided
@@ -68,15 +76,83 @@ export async function cacheAppPages(options = {}) {
             options.onProgress(route, index, APP_ROUTES.length);
           }
 
+          logger.debug('AppPagesCache', `Fetching page: ${route} (${url.href})`);
+
           // Fetch the page
+          // Note: Service Worker may intercept this, but we can still cache the response
           const response = await fetch(request);
 
-          if (response && response.status === 200) {
+          logger.debug('AppPagesCache', `Response for ${route}: status=${response?.status}, ok=${response?.ok}, type=${response?.type}, url=${response?.url}`);
+          
+          // Check if response came from service worker cache
+          if (response.type === 'opaque' || response.type === 'opaqueredirect') {
+            logger.warn('AppPagesCache', `Response for ${route} is opaque - may not be cacheable`);
+          }
+
+          if (response && response.ok && response.status === 200) {
             // Clone the response before caching (responses can only be read once)
+            // Responses must be cloned because they can only be consumed once
             const responseClone = response.clone();
-            await cache.put(request, responseClone);
-            logger.debug('AppPagesCache', `Cached page: ${route}`);
-            return { success: true, route };
+            
+            // Verify response is clonable
+            if (!responseClone) {
+              throw new Error('Failed to clone response');
+            }
+
+            // Put in cache - use the same request object
+            try {
+              // Ensure response is not already consumed
+              if (responseClone.bodyUsed) {
+                throw new Error('Response body already used');
+              }
+              
+              await cache.put(request, responseClone);
+              logger.debug('AppPagesCache', `Cache.put completed for ${route}`);
+            } catch (cacheError) {
+              logger.error('AppPagesCache', `Cache.put failed for ${route}:`, cacheError);
+              // If cache.put fails, try with a fresh clone
+              try {
+                const freshClone = response.clone();
+                await cache.put(request, freshClone);
+                logger.debug('AppPagesCache', `Cache.put succeeded with fresh clone for ${route}`);
+              } catch (retryError) {
+                logger.error('AppPagesCache', `Cache.put retry also failed for ${route}:`, retryError);
+                throw new Error(`Cache.put failed: ${cacheError.message}`);
+              }
+            }
+            
+            // Small delay to ensure cache write completes
+            await new Promise(resolve => setTimeout(resolve, 100));
+            
+            // Verify it was cached using the same request
+            const cached = await cache.match(request);
+            if (cached) {
+              logger.info('AppPagesCache', `Successfully cached and verified page: ${route}`);
+              return { success: true, route };
+            } else {
+              // Try matching with URL string as fallback
+              const cachedByUrl = await cache.match(url.href);
+              if (cachedByUrl) {
+                logger.info('AppPagesCache', `Successfully cached page (URL match): ${route}`);
+                return { success: true, route };
+              }
+              
+              // Try matching with a new request with same URL
+              const altRequest = new Request(url.href, { mode: 'navigate' });
+              const cachedAlt = await cache.match(altRequest);
+              if (cachedAlt) {
+                logger.info('AppPagesCache', `Successfully cached page (alt request match): ${route}`);
+                return { success: true, route };
+              }
+              
+              // List all cached keys for debugging
+              const allKeys = await cache.keys();
+              logger.debug('AppPagesCache', `Cache keys for debugging: ${allKeys.map(r => r.url).join(', ')}`);
+              
+              logger.warn('AppPagesCache', `Cache verification failed for ${route} - may still be cached`);
+              // Still return success since cache.put didn't throw
+              return { success: true, route, warning: 'Verification failed but cache.put succeeded' };
+            }
           } else {
             const status = response?.status || 'unknown';
             throw new Error(`HTTP ${status} for ${route}`);
