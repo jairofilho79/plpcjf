@@ -216,6 +216,12 @@ export class DownloadManager {
           if (progress.phaseProgress !== undefined) {
             stateUpdate.phaseProgress = progress.phaseProgress;
           }
+          if (progress.currentPackage !== undefined) {
+            stateUpdate.currentPackage = progress.currentPackage;
+          }
+          if (progress.totalPackages !== undefined) {
+            stateUpdate.totalPackages = progress.totalPackages;
+          }
           
           this._updateOfflineState(stateUpdate);
         }
@@ -449,8 +455,8 @@ export class DownloadManager {
                 ? Math.min(99, Math.floor((globalCompleted / totalPdfs) * 100))
                 : 0;
               
-              // Update progress tracker
-              this.progress.completed = globalCompleted;
+              // Note: Don't update this.progress.completed here - it will be updated when storage completes
+// to avoid double counting. Use globalCompleted only for UI callback.
               
               // Detect phase based on progressData.phase
               let downloadPhase = 'downloading';
@@ -481,7 +487,19 @@ export class DownloadManager {
           // Update package info with actual completed count
           packageInfo.completedPdfs = stored;
           completed += stored;
-          this.progress.incrementCompleted(stored, result.bytesDownloaded);
+          // Update progress tracker with correct total (not increment, to avoid double counting)
+          // Calculate total completed: sum of all previous packages + current package
+          const totalCompletedPdfs = packagesInfo
+          .slice(0, packageIndex + 1)
+          .reduce((sum, pkg) => sum + (pkg.completedPdfs || 0), 0);
+
+          // Update progress tracker - use update() instead of incrementCompleted() to set correct value
+          // This avoids double counting since storage callbacks no longer update this.progress.completed
+          // For bytesDownloaded, we increment since it wasn't being updated in storage callbacks
+          this.progress.update({
+          completed: totalCompletedPdfs,
+          bytesDownloaded: this.progress.bytesDownloaded + result.bytesDownloaded
+          });
 
           // Always update progress after package completes, even if callback didn't fire
           // This ensures UI is updated even if the interval wasn't reached
@@ -715,4 +733,3 @@ export class DownloadManager {
 const downloadManager = new DownloadManager();
 
 export default downloadManager;
-
