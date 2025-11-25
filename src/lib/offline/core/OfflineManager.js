@@ -17,6 +17,7 @@ import { createLogger } from '../utils/OfflineLogger.js';
 import { browser } from '$app/environment';
 import { louvores } from '$lib/stores/louvores.js';
 import { get } from 'svelte/store';
+import { cacheAppPages } from '../utils/AppPagesCache.js';
 
 const logger = createLogger('OfflineManager');
 
@@ -154,6 +155,25 @@ class OfflineManager {
     }
 
     logger.info('OfflineManager', `Downloading ${categories.length} categories`);
+
+    // Cache all application pages before starting PDF download
+    // This ensures all routes are available offline
+    // Run in background - don't block download if it fails
+    cacheAppPages({
+      onProgress: (route, index, total) => {
+        logger.debug('OfflineManager', `Caching page ${index + 1}/${total}: ${route}`);
+      }
+    }).then(result => {
+      if (result.success > 0) {
+        logger.info('OfflineManager', `Cached ${result.success} application pages for offline access`);
+      }
+      if (result.failed > 0) {
+        logger.warn('OfflineManager', `Failed to cache ${result.failed} application pages:`, result.errors);
+      }
+    }).catch(error => {
+      // Non-blocking error - log but don't fail the download
+      logger.warn('OfflineManager', 'Error caching application pages (non-blocking):', error);
+    });
 
     try {
       const result = await downloadManager.downloadCategories(categories, options);
