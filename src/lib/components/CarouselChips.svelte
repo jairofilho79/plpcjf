@@ -112,137 +112,6 @@
     }
   }
   
-  // Função para construir URL do leitor
-  function buildLeitorUrl(pdfPath, louvor, validated = true) {
-    const fileParam = encodeURIComponent(`/${pdfPath}`);
-    const tituloParam = encodeURIComponent(louvor.nome || '');
-    const subtituloText = `${louvor.categoria || ''} | ${louvor.classificacao || ''}`.trim();
-    const subtituloParam = encodeURIComponent(subtituloText);
-    const validatedParam = validated ? '&validated=true' : '';
-    return `/leitor?file=${fileParam}&titulo=${tituloParam}&subtitulo=${subtituloParam}${validatedParam}`;
-  }
-  
-  // Função auxiliar para validar PDF e decidir se deve prosseguir
-  async function validateAndProceed(louvor) {
-    const pdfPath = getPdfRelPath(louvor);
-    checkingPdfId = louvor.pdfId;
-    pdfError = null;
-    
-    try {
-      // Verificar cache de validação primeiro
-      const cached = getCachedValidation(louvor.pdfId);
-      if (cached && cached.available) {
-        checkingPdfId = null;
-        return { shouldProceed: true, useCache: true, validationFailed: false };
-      }
-      
-      // Quick check via index
-      const indexCheck = isPdfAvailableInIndex(louvor.pdfId);
-      let result = { shouldProceed: false, useCache: false, validationFailed: false };
-      
-      if (indexCheck === true) {
-        // Index diz que está disponível - fazer validação rápida
-        try {
-          const { validatePdfAvailability } = await import('$lib/utils/pdfValidation');
-          const quickValidation = await validatePdfAvailability(pdfPath, louvor.pdfId);
-          if (quickValidation.available) {
-            result.shouldProceed = true;
-          } else if (quickValidation.needsDownload && navigator.onLine) {
-            result.shouldProceed = true;
-          }
-        } catch (err) {
-          console.warn('[CarouselChips] Quick validation failed, proceeding anyway:', err);
-          result.shouldProceed = true;
-        }
-      } else {
-        // Index é false ou null - fazer validação completa
-        const isAvailable = await ensurePdfAvailable(pdfPath);
-        
-        if (isAvailable) {
-          result.shouldProceed = true;
-        } else {
-          // Verificar se pode ser baixado online
-          const { validatePdfAvailability } = await import('$lib/utils/pdfValidation');
-          const validation = await validatePdfAvailability(pdfPath, louvor.pdfId);
-          if (validation.needsDownload && navigator.onLine) {
-            result.shouldProceed = true;
-          } else if (!navigator.onLine && validation.available === false) {
-            pdfError = 'PDF não está disponível offline. Por favor, baixe primeiro na página de configuração offline.';
-            checkingPdfId = null;
-            return { shouldProceed: false, useCache: false, validationFailed: false };
-          } else {
-            console.warn('[CarouselChips] Validation uncertain, allowing navigation - leitor will handle errors');
-            result.shouldProceed = true;
-          }
-        }
-      }
-      
-      checkingPdfId = null;
-      return result;
-    } catch (err) {
-      console.error('Erro ao validar PDF:', err);
-      checkingPdfId = null;
-      // Em caso de erro, permitir abertura
-      return { shouldProceed: true, useCache: false, validationFailed: true };
-    }
-  }
-  
-  // Navegar na mesma aba (tap simples)
-  async function openPdfFromChipSameTab(louvor) {
-    const pdfPath = getPdfRelPath(louvor);
-    const mode = $pdfViewer;
-    
-    if (mode === 'leitor') {
-      const result = await validateAndProceed(louvor);
-      if (!result.shouldProceed) return;
-      
-      const url = buildLeitorUrl(pdfPath, louvor, result.useCache || !result.validationFailed);
-      await goto(url);
-      return;
-    }
-    
-    if (mode === 'newtab') {
-      await openPdfNewTabOfflineFirst(`/${pdfPath}`, louvor.pdf);
-      return;
-    }
-    
-    if (mode === 'online') {
-      const readerUrl = buildOnlineReaderUrl(pdfPath);
-      await goto(readerUrl);
-      return;
-    }
-    
-    if (mode === 'share') {
-      try {
-        const blob = await fetchPdfAsBlob(pdfPath);
-        await sharePdf(blob, louvor.pdf, louvor.nome);
-      } catch (_) {
-        // @ts-ignore
-        window.open(pdfPath, '_blank');
-      }
-      return;
-    }
-    
-    if (mode === 'save') {
-      try {
-        const blob = await fetchPdfAsBlob(pdfPath);
-        await savePdf(blob, louvor.pdf);
-      } catch (_) {
-        const a = document.createElement('a');
-        // @ts-ignore
-        a.href = pdfPath;
-        // @ts-ignore
-        a.download = louvor.pdf;
-        a.click();
-      }
-      return;
-    }
-    
-    // default: mesma aba
-    // @ts-ignore
-    await goto(pdfPath);
-  }
-  
   /**
      * @param {{ nome: any; categoria: any; classificacao: any; pdf: string | undefined; }} louvor
      */
@@ -381,6 +250,16 @@
     // default: mesma aba
     // @ts-ignore
     window.location.href = pdfPath;
+  }
+  
+  // @ts-ignore
+  function handleChipClick(event, louvor) {
+    if (event.target.closest('button')) return;
+    if (hasDragged) {
+      hasDragged = false;
+      return;
+    }
+    openPdfFromChip(louvor);
   }
   
   // @ts-ignore
@@ -570,58 +449,49 @@
     <div class="flex gap-2 overflow-x-auto carousel-chips-list">
       {#each $carousel as louvor, index}
         {@const categoryIcon = getCategoryIcon(louvor.categoria)}
-        <GestureButton
-          on:click={() => openPdfFromChipSameTab(louvor)}
-          on:longpress={() => openPdfFromChip(louvor)}
-          longPressDuration={1000}
-          maxMovement={15}
-          visualFeedback={true}
-          hapticFeedback={true}
-          preventDefault={true}
+        <div
+          draggable="true"
+          on:dragstart={(e) => handleDragStart(e, index)}
+          on:drag={(e) => handleDrag(e)}
+          on:dragend={(e) => handleDragEnd(e)}
+          on:dragover={(e) => handleDragOver(e, index)}
+          on:dragleave={(e) => handleDragLeave(e)}
+          on:drop={(e) => handleDrop(e, index)}
+          on:click={(e) => handleChipClick(e, louvor)}
+          class="carousel-chip"
+          class:dragging={draggedIndex === index}
+          class:drag-over={dragOverIndex === index}
+          class:checking={checkingPdfId === louvor.pdfId}
         >
-          <div
-            draggable="true"
-            on:dragstart={(e) => handleDragStart(e, index)}
-            on:drag={(e) => handleDrag(e)}
-            on:dragend={(e) => handleDragEnd(e)}
-            on:dragover={(e) => handleDragOver(e, index)}
-            on:dragleave={(e) => handleDragLeave(e)}
-            on:drop={(e) => handleDrop(e, index)}
-            class="carousel-chip"
-            class:dragging={draggedIndex === index}
-            class:drag-over={dragOverIndex === index}
-            class:checking={checkingPdfId === louvor.pdfId}
-          >
-            <div class="drag-handle" on:mousedown|stopPropagation>
-              <GripVertical class="w-4 h-4" />
-            </div>
-            <div class="chip-content">
-              <div class="chip-title">
-                <strong>#{louvor.numero || 'N/A'}</strong> - {louvor.nome || 'Sem título'}
-              </div>
-              <div class="chip-subtitles">
-                <div class="chip-classification">
-                  {louvor.classificacao || 'Sem classificação'}
-                </div>
-                <div class="chip-category">
-                  {#if categoryIcon}
-                    <svg class="category-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d={categoryIcon} />
-                    </svg>
-                  {/if}
-                  <span>{louvor.categoria || 'Sem categoria'}</span>
-                </div>
-              </div>
-            </div>
-            <button
-              on:click|stopPropagation={() => carousel.removeLouvor(louvor.pdfId)}
-              class="chip-remove-button"
-              title="Remover"
-            >
-              <X class="w-3 h-3" />
-            </button>
+          <div class="drag-handle" on:mousedown|stopPropagation>
+            <GripVertical class="w-4 h-4" />
           </div>
-        </GestureButton>
+          <div class="chip-content">
+            <div class="chip-title">
+              <strong>#{louvor.numero || 'N/A'}</strong> - {louvor.nome || 'Sem título'}
+            </div>
+            <div class="chip-subtitles">
+              <div class="chip-classification">
+                {louvor.classificacao || 'Sem classificação'}
+              </div>
+              <div class="chip-category">
+                {#if categoryIcon}
+                  <svg class="category-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d={categoryIcon} />
+                  </svg>
+                {/if}
+                <span>{louvor.categoria || 'Sem categoria'}</span>
+              </div>
+            </div>
+          </div>
+          <button
+            on:click|stopPropagation={() => carousel.removeLouvor(louvor.pdfId)}
+            class="chip-remove-button"
+            title="Remover"
+          >
+            <X class="w-3 h-3" />
+          </button>
+        </div>
       {/each}
     </div>
   </div>
@@ -759,11 +629,6 @@
     padding: 5px 0;
     scrollbar-width: thin;
     scrollbar-color: var(--gold-color) transparent;
-  }
-  
-  :global(.carousel-chips-list .gesture-button-wrapper) {
-    display: inline-block;
-    flex-shrink: 0;
   }
   
   .carousel-chip {

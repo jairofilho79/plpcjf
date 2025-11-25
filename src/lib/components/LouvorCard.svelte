@@ -15,8 +15,6 @@
   import { isPdfAvailableInIndex } from '$lib/utils/pdfIndex';
   import { ensurePdfAvailable, validatePdfWithStrategies, validatePdfAvailability, getCachedValidation } from '$lib/utils/pdfValidation';
   import { setupCardPrefetch } from '$lib/utils/pdfjsLoader';
-  import { goto } from '$app/navigation';
-  import GestureButton from '$lib/components/GestureButton.svelte';
   
   export let louvor;
   
@@ -44,141 +42,114 @@
     return null;
   }
   
-  // Função para construir URL do leitor
-  function buildLeitorUrl(pdfPath, louvor, validated = true) {
-    const fileParam = encodeURIComponent(`/${pdfPath}`);
-    const tituloParam = encodeURIComponent(louvor.nome || '');
-    const subtituloText = `${louvor.categoria || ''} | ${louvor.classificacao || ''}`.trim();
-    const subtituloParam = encodeURIComponent(subtituloText);
-    const validatedParam = validated ? '&validated=true' : '';
-    return `/leitor?file=${fileParam}&titulo=${tituloParam}&subtitulo=${subtituloParam}${validatedParam}`;
-  }
-  
-  // Função auxiliar para validar PDF e decidir se deve prosseguir
-  async function validateAndProceed() {
-    isCheckingAvailability = true;
-    availabilityError = null;
+  async function handleCardClick() {
+    const mode = $pdfViewer;
     
-    try {
-      // Verificar cache de validação primeiro
-      const cached = getCachedValidation(louvor.pdfId);
-      if (cached && cached.available) {
-        return { shouldProceed: true, useCache: true, validationFailed: false };
-      }
-      
-      // Quick check via index
-      const indexCheck = isPdfAvailableInIndex(louvor.pdfId);
-      let result = { shouldProceed: false, useCache: false, validationFailed: false };
-      
-      if (indexCheck === true) {
-        // Index diz que está disponível - fazer validação rápida
-        try {
-          const quickValidation = await validatePdfAvailability(pdfPath, louvor.pdfId);
-          if (quickValidation.available) {
-            result.shouldProceed = true;
-          } else if (quickValidation.needsDownload && navigator.onLine) {
-            result.shouldProceed = true;
-          }
-        } catch (err) {
-          console.warn('[LouvorCard] Quick validation failed, proceeding anyway:', err);
-          result.shouldProceed = true;
+    if (mode === 'share' || mode === 'save') {
+      try {
+        const blob = await fetchPdfAsBlob(pdfPath);
+        if (mode === 'share') {
+          await sharePdf(blob, louvor.pdf, louvor.nome);
+        } else {
+          await savePdf(blob, louvor.pdf);
         }
-      } else {
-        // Index é false ou null - fazer validação completa
-        const isAvailable = await ensurePdfAvailable(pdfPath);
+      } catch (err) {
+        console.error('Erro ao processar PDF:', err);
+        window.open(pdfPath, '_blank');
+      }
+      return;
+    }
+    
+    if (mode === 'leitor') {
+      // FASE 2: Cache de Validação - verificar cache primeiro
+      isCheckingAvailability = true;
+      availabilityError = null;
+      
+      try {
+        // Verificar cache de validação primeiro (Fase 2)
+        const cached = getCachedValidation(louvor.pdfId);
+        if (cached && cached.available) {
+          // Cache diz que está disponível - usar caminho original do pdfId (NÃO usar cached.url que pode estar normalizado)
+          const fileParam = encodeURIComponent(`/${pdfPath}`);
+          const tituloParam = encodeURIComponent(louvor.nome || '');
+          const subtituloText = `${louvor.categoria || ''} | ${louvor.classificacao || ''}`.trim();
+          const subtituloParam = encodeURIComponent(subtituloText);
+          const url = `/leitor?file=${fileParam}&titulo=${tituloParam}&subtitulo=${subtituloParam}&validated=true`;
+          window.open(url, '_blank', 'noopener');
+          isCheckingAvailability = false;
+          return;
+        }
         
-        if (isAvailable) {
-          result.shouldProceed = true;
+        // Se não estiver no cache ou cache diz que não está disponível, fazer validação
+        // Quick check via index first (mas não bloqueia se index for null ou desatualizado)
+        const indexCheck = isPdfAvailableInIndex(louvor.pdfId);
+        
+        let shouldProceed = false;
+        
+        if (indexCheck === true) {
+          // Index diz que está disponível - confiar mas fazer validação rápida
+          try {
+            const quickValidation = await validatePdfAvailability(pdfPath, louvor.pdfId);
+            if (quickValidation.available) {
+              shouldProceed = true;
+            } else if (quickValidation.needsDownload && navigator.onLine) {
+              // PDF não está offline mas pode ser baixado - permitir abertura (leitor tentará baixar)
+              shouldProceed = true;
+            }
+          } catch (err) {
+            console.warn('[LouvorCard] Quick validation failed, proceeding anyway:', err);
+            // Se validação falhar por erro técnico, permitir abertura
+            shouldProceed = true;
+          }
         } else {
-          // Verificar se pode ser baixado online
-          const validation = await validatePdfAvailability(pdfPath, louvor.pdfId);
-          if (validation.needsDownload && navigator.onLine) {
-            result.shouldProceed = true;
-          } else if (!navigator.onLine && validation.available === false) {
-            availabilityError = 'PDF não está disponível offline. Por favor, baixe primeiro na página de configuração offline.';
-            return { shouldProceed: false, useCache: false, validationFailed: false };
+          // Index é false ou null - fazer validação completa
+          const isAvailable = await ensurePdfAvailable(pdfPath);
+          
+          if (isAvailable) {
+            shouldProceed = true;
           } else {
-            console.warn('[LouvorCard] Validation uncertain, allowing navigation - leitor will handle errors');
-            result.shouldProceed = true;
+            // Verificar se pode ser baixado online
+            const validation = await validatePdfAvailability(pdfPath, louvor.pdfId);
+            if (validation.needsDownload && navigator.onLine) {
+              // PDF não está offline mas pode ser baixado - permitir abertura
+              shouldProceed = true;
+            } else if (!navigator.onLine && validation.available === false) {
+              // Realmente não disponível e offline - mostrar erro
+              availabilityError = 'PDF não está disponível offline. Por favor, baixe primeiro na página de configuração offline.';
+              isCheckingAvailability = false;
+              return;
+            } else {
+              // Se houver dúvida (SW não pronto, erro temporário), permitir abertura
+              // O leitor tentará carregar e mostrará erro apropriado se realmente não estiver disponível
+              console.warn('[LouvorCard] Validation uncertain, allowing navigation - leitor will handle errors');
+              shouldProceed = true;
+            }
           }
         }
-      }
-      
-      return result;
-    } catch (err) {
-      console.error('Erro ao validar PDF:', err);
-      // Em caso de erro, permitir abertura
-      return { shouldProceed: true, useCache: false, validationFailed: true };
-    } finally {
-      isCheckingAvailability = false;
-    }
-  }
-  
-  // Navegar na mesma aba (tap simples)
-  async function handleCardTap() {
-    const mode = $pdfViewer;
-    
-    if (mode === 'share' || mode === 'save') {
-      try {
-        const blob = await fetchPdfAsBlob(pdfPath);
-        if (mode === 'share') {
-          await sharePdf(blob, louvor.pdf, louvor.nome);
-        } else {
-          await savePdf(blob, louvor.pdf);
+        
+        if (shouldProceed) {
+          // PDF está disponível ou pode ser baixado, proceder com navegação
+          // Adicionar flag validated=true para evitar validação dupla no leitor
+          const fileParam = encodeURIComponent(`/${pdfPath}`);
+          const tituloParam = encodeURIComponent(louvor.nome || '');
+          const subtituloText = `${louvor.categoria || ''} | ${louvor.classificacao || ''}`.trim();
+          const subtituloParam = encodeURIComponent(subtituloText);
+          const url = `/leitor?file=${fileParam}&titulo=${tituloParam}&subtitulo=${subtituloParam}&validated=true`;
+          window.open(url, '_blank', 'noopener');
         }
       } catch (err) {
-        console.error('Erro ao processar PDF:', err);
-        window.open(pdfPath, '_blank');
+        console.error('Erro ao validar PDF:', err);
+        // Em caso de erro, permitir abertura - leitor tentará carregar
+        // Não adicionar validated=true aqui pois validação falhou
+        const fileParam = encodeURIComponent(`/${pdfPath}`);
+        const tituloParam = encodeURIComponent(louvor.nome || '');
+        const subtituloText = `${louvor.categoria || ''} | ${louvor.classificacao || ''}`.trim();
+        const subtituloParam = encodeURIComponent(subtituloText);
+        const url = `/leitor?file=${fileParam}&titulo=${tituloParam}&subtitulo=${subtituloParam}`;
+        window.open(url, '_blank', 'noopener');
+      } finally {
+        isCheckingAvailability = false;
       }
-      return;
-    }
-    
-    if (mode === 'leitor') {
-      const result = await validateAndProceed();
-      if (!result.shouldProceed) return;
-      
-      const url = buildLeitorUrl(pdfPath, louvor, result.useCache || !result.validationFailed);
-      await goto(url);
-      return;
-    }
-    
-    if (mode === 'online') {
-      const readerUrl = buildOnlineReaderUrl(pdfPath);
-      await goto(readerUrl);
-      return;
-    }
-    
-    if (mode === 'newtab') {
-      await openPdfNewTabOfflineFirst(`/${pdfPath}`, louvor.pdf);
-      return;
-    }
-  }
-  
-  // Abrir em nova aba (long press) - comportamento original
-  async function handleCardLongPress() {
-    const mode = $pdfViewer;
-    
-    if (mode === 'share' || mode === 'save') {
-      try {
-        const blob = await fetchPdfAsBlob(pdfPath);
-        if (mode === 'share') {
-          await sharePdf(blob, louvor.pdf, louvor.nome);
-        } else {
-          await savePdf(blob, louvor.pdf);
-        }
-      } catch (err) {
-        console.error('Erro ao processar PDF:', err);
-        window.open(pdfPath, '_blank');
-      }
-      return;
-    }
-    
-    if (mode === 'leitor') {
-      const result = await validateAndProceed();
-      if (!result.shouldProceed) return;
-      
-      const url = buildLeitorUrl(pdfPath, louvor, result.useCache || !result.validationFailed);
-      window.open(url, '_blank', 'noopener');
       return;
     }
     
@@ -192,11 +163,6 @@
       await openPdfNewTabOfflineFirst(`/${pdfPath}`, louvor.pdf);
       return;
     }
-  }
-  
-  // Manter handleCardClick para compatibilidade (chama handleCardLongPress)
-  async function handleCardClick() {
-    await handleCardLongPress();
   }
   
   function handleAddToCarousel() {
@@ -228,37 +194,29 @@
       {availabilityError}
     </div>
   {/if}
-  <GestureButton
-    on:click={handleCardTap}
-    on:longpress={handleCardLongPress}
-    longPressDuration={1000}
-    visualFeedback={true}
-    hapticFeedback={true}
-    preventDefault={true}
+  <a
+    href={pdfPath}
+    on:click|preventDefault={handleCardClick}
+    class="louvor-info"
+    class:checking={isCheckingAvailability}
   >
-    <a
-      href={pdfPath}
-      class="louvor-info"
-      class:checking={isCheckingAvailability}
-    >
-      <div class="louvor-title">
-        <strong>#{louvor.numero || 'N/A'}</strong> - {louvor.nome || 'Sem título'}
+    <div class="louvor-title">
+      <strong>#{louvor.numero || 'N/A'}</strong> - {louvor.nome || 'Sem título'}
+    </div>
+    <div class="louvor-subtitles">
+      <div class="louvor-classification">
+        {louvor.classificacao || 'Sem classificação'}
       </div>
-      <div class="louvor-subtitles">
-        <div class="louvor-classification">
-          {louvor.classificacao || 'Sem classificação'}
-        </div>
-        <div class="louvor-category">
-          {#if categoryIcon}
-            <svg class="category-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d={categoryIcon} />
-            </svg>
-          {/if}
-          <span>{louvor.categoria || 'Sem categoria'}</span>
-        </div>
+      <div class="louvor-category">
+        {#if categoryIcon}
+          <svg class="category-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d={categoryIcon} />
+          </svg>
+        {/if}
+        <span>{louvor.categoria || 'Sem categoria'}</span>
       </div>
-    </a>
-  </GestureButton>
+    </div>
+  </a>
   
   <button
     on:click={handleAddToCarousel}
@@ -291,10 +249,6 @@
   .louvor-card:hover {
     box-shadow: var(--shadow-lg);
     transform: translateY(-1px);
-  }
-  
-  :global(.gesture-button-wrapper) {
-    display: contents;
   }
   
   .louvor-info {
