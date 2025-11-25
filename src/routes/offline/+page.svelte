@@ -1268,52 +1268,6 @@
     
     {#if !isInitializing}
 
-      <!-- Sync banner -->
-      {#if needsSync}
-        <div class="sync-banner">
-          <div class="sync-banner-content">
-            <AlertCircle class="w-4 h-4 sync-icon" />
-            <span class="sync-text">Os dados podem estar desatualizados</span>
-            <button 
-              class="sync-button" 
-              on:click={forceSync} 
-              disabled={isSyncing}
-            >
-              {#if isSyncing}
-                <RefreshCw class="w-4 h-4 spinning" />
-                <span>Sincronizando...</span>
-              {:else}
-                <RefreshCw class="w-4 h-4" />
-                <span>Sincronizar Agora</span>
-              {/if}
-            </button>
-          </div>
-        </div>
-      {/if}
-
-      <!-- Migration V2 banner -->
-      {#if migrationNeeded}
-        <div class="sync-banner migration-banner">
-          <div class="sync-banner-content">
-            <Info class="w-4 h-4 sync-icon" />
-            <span class="sync-text">Migração de cache necessária para melhorar compatibilidade</span>
-            <button 
-              class="sync-button" 
-              on:click={runMigration} 
-              disabled={isMigrating}
-            >
-              {#if isMigrating}
-                <RefreshCw class="w-4 h-4 spinning" />
-                <span>Migrando...</span>
-              {:else}
-                <Package class="w-4 h-4" />
-                <span>Executar Migração</span>
-              {/if}
-            </button>
-          </div>
-        </div>
-      {/if}
-
       <!-- Migration progress -->
       {#if isMigrating && migrationProgress}
         <div class="migration-progress">
