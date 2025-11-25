@@ -443,9 +443,11 @@ export class DownloadManager {
             batch: true,  // Enable batch mode for performance
             onProgress: (progressData) => {
               // Calculate PDFs from previous packages that are already complete
+              // Use only completedPdfs (not estimatedPdfCount) to avoid inflating progress
+              // when a package legitimately stored 0 PDFs
               const pdfsInPreviousPackages = packagesInfo
                 .slice(0, packageIndex)
-                .reduce((sum, pkg) => sum + (pkg.completedPdfs || pkg.estimatedPdfCount || 0), 0);
+                .reduce((sum, pkg) => sum + (pkg.completedPdfs || 0), 0);
               
               // Global progress = PDFs from previous packages + PDFs completed in current package
               const globalCompleted = pdfsInPreviousPackages + progressData.completed;
