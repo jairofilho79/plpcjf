@@ -38,6 +38,33 @@ export class CacheStorageAdapter extends CacheRepository {
     this._variationCacheTTL = 5 * 60 * 1000; // 5 minutos
     this._missCache = new Set(); // Cache de "misses" para evitar tentativas repetidas
     this._missCacheTTL = 1 * 60 * 1000; // 1 minuto
+    
+    // Batch mode control
+    this._inBatchMode = false;
+  }
+  
+  /**
+   * Start batch mode - disables events during batch operations
+   */
+  startBatchMode() {
+    this._inBatchMode = true;
+    logger.debug('CacheStorageAdapter', 'Batch mode started');
+  }
+  
+  /**
+   * End batch mode - re-enables events
+   */
+  endBatchMode() {
+    this._inBatchMode = false;
+    logger.debug('CacheStorageAdapter', 'Batch mode ended');
+  }
+  
+  /**
+   * Check if currently in batch mode
+   * @returns {boolean} True if in batch mode
+   */
+  isInBatchMode() {
+    return this._inBatchMode;
   }
   
   /**
@@ -240,47 +267,53 @@ export class CacheStorageAdapter extends CacheRepository {
   }
 
   /**
-   * Store PDF in cache
+   * Store PDF in cache (internal method without events)
    * Uses original path (as encoded in base64) to preserve case and accents
    * @param {string} pdfPath - PDF path
    * @param {Blob|Response} pdfData - PDF data to store
-   * @returns {Promise<void>}
+   * @param {Object} [options] - Storage options
+   * @param {boolean} [options.emitEvents=true] - Whether to emit events
+   * @param {boolean} [options.notifyServiceWorker=true] - Whether to notify service worker
+   * @returns {Promise<{normalizedPath: string, requestUrl: string}>} Storage result
+   * @private
    */
-  async putPdf(pdfPath, pdfData) {
+  async _putPdfInternal(pdfPath, pdfData, options = {}) {
+    const { emitEvents = true, notifyServiceWorker = true } = options;
+    
     if (!browser) {
       throw new Error('Cache Storage API not available');
     }
 
-    try {
-      // Normalize path using PdfPathManager (preserves case and accents)
-      const normalizedPath = PdfPathManager.normalizeForStorage(pdfPath);
-      if (!normalizedPath) {
-        throw new Error('Invalid PDF path');
-      }
+    // Normalize path using PdfPathManager (preserves case and accents)
+    const normalizedPath = PdfPathManager.normalizeForStorage(pdfPath);
+    if (!normalizedPath) {
+      throw new Error('Invalid PDF path');
+    }
 
-      const cache = await this._openCache();
-      const response = this._toResponse(pdfData);
-      
-      // Create request URL using PdfPathManager (preserves encoding)
-      const requestUrl = PdfPathManager.createRequestUrl(pdfPath, window.location.origin);
-      const request = new Request(requestUrl);
+    const cache = await this._openCache();
+    const response = this._toResponse(pdfData);
+    
+    // Create request URL using PdfPathManager (preserves encoding)
+    const requestUrl = PdfPathManager.createRequestUrl(pdfPath, window.location.origin);
+    const request = new Request(requestUrl);
 
-      await cache.put(request, response);
-      
-      logger.info('CacheStorageAdapter', `PDF stored in cache: ${normalizedPath}`);
-      
-      // Invalidate variation cache for this path (new PDF may match)
-      this._variationCache.delete(normalizedPath);
-      this._missCache.delete(normalizedPath);
-      
-      // Cache the successful storage for future lookups
-      this._variationCache.set(normalizedPath, {
-        found: true,
-        url: requestUrl,
-        timestamp: Date.now()
-      });
-      
-      // Emit event
+    await cache.put(request, response);
+    
+    logger.info('CacheStorageAdapter', `PDF stored in cache: ${normalizedPath}`);
+    
+    // Invalidate variation cache for this path (new PDF may match)
+    this._variationCache.delete(normalizedPath);
+    this._missCache.delete(normalizedPath);
+    
+    // Cache the successful storage for future lookups
+    this._variationCache.set(normalizedPath, {
+      found: true,
+      url: requestUrl,
+      timestamp: Date.now()
+    });
+    
+    // Emit events only if requested
+    if (emitEvents) {
       offlineEvents.emit(EVENTS.PDF_DOWNLOADED, {
         path: normalizedPath,
         originalPath: pdfPath
@@ -290,8 +323,10 @@ export class CacheStorageAdapter extends CacheRepository {
         type: 'pdf-added',
         path: normalizedPath
       });
-      
-      // Notify Service Worker about cache update (for synchronization)
+    }
+    
+    // Notify Service Worker only if requested and not in batch mode
+    if (notifyServiceWorker && !this._inBatchMode) {
       if (typeof navigator !== 'undefined' && navigator.serviceWorker && navigator.serviceWorker.controller) {
         try {
           navigator.serviceWorker.controller.postMessage({
@@ -306,8 +341,110 @@ export class CacheStorageAdapter extends CacheRepository {
           logger.debug('CacheStorageAdapter', 'Could not notify Service Worker', swError);
         }
       }
+    }
+    
+    return { normalizedPath, requestUrl };
+  }
+
+  /**
+   * Store PDF in cache
+   * Uses original path (as encoded in base64) to preserve case and accents
+   * @param {string} pdfPath - PDF path
+   * @param {Blob|Response} pdfData - PDF data to store
+   * @param {Object} [options] - Storage options
+   * @param {boolean} [options.emitEvents=true] - Whether to emit events
+   * @param {boolean} [options.notifyServiceWorker=true] - Whether to notify service worker
+   * @param {boolean} [options.batch=false] - Whether this is part of a batch operation
+   * @returns {Promise<void>}
+   */
+  async putPdf(pdfPath, pdfData, options = {}) {
+    const { emitEvents = true, notifyServiceWorker = true, batch = false } = options;
+    
+    try {
+      await this._putPdfInternal(pdfPath, pdfData, { 
+        emitEvents: batch ? false : emitEvents, 
+        notifyServiceWorker: batch ? false : notifyServiceWorker 
+      });
     } catch (error) {
       logger.error('CacheStorageAdapter', `Error storing PDF: ${pdfPath}`, error);
+      throw error;
+    }
+  }
+  
+  /**
+   * Store multiple PDFs in cache (batch operation)
+   * Optimized for bulk operations - emits events only once at the end
+   * @param {Array<{path: string, blob: Blob}>} pdfs - Array of PDFs to store
+   * @param {Object} [options] - Batch options
+   * @param {boolean} [options.emitEvents=true] - Whether to emit events at the end
+   * @param {boolean} [options.notifyServiceWorker=true] - Whether to notify service worker at the end
+   * @returns {Promise<number>} Number of PDFs stored successfully
+   */
+  async putPdfsBatch(pdfs, options = {}) {
+    const { emitEvents = true, notifyServiceWorker = true } = options;
+    
+    if (!browser) {
+      throw new Error('Cache Storage API not available');
+    }
+    
+    if (!pdfs || pdfs.length === 0) {
+      return 0;
+    }
+    
+    logger.info('CacheStorageAdapter', `Starting batch storage of ${pdfs.length} PDFs`);
+    
+    let stored = 0;
+    const storedPaths = [];
+    
+    try {
+      // Store all PDFs without emitting individual events
+      for (const { path, blob } of pdfs) {
+        try {
+          const result = await this._putPdfInternal(path, blob, { 
+            emitEvents: false, 
+            notifyServiceWorker: false 
+          });
+          stored++;
+          storedPaths.push(result.normalizedPath);
+        } catch (error) {
+          logger.error('CacheStorageAdapter', `Error storing PDF in batch: ${path}`, error);
+          // Continue with other PDFs
+        }
+      }
+      
+      logger.info('CacheStorageAdapter', `Batch storage completed: ${stored}/${pdfs.length} PDFs stored`);
+      
+      // Emit events once at the end if requested
+      if (emitEvents && stored > 0) {
+        offlineEvents.emit(EVENTS.CACHE_UPDATED, {
+          type: 'batch-pdfs-added',
+          batch: true,
+          count: stored,
+          paths: storedPaths
+        });
+      }
+      
+      // Notify Service Worker once at the end if requested
+      if (notifyServiceWorker && stored > 0 && !this._inBatchMode) {
+        if (typeof navigator !== 'undefined' && navigator.serviceWorker && navigator.serviceWorker.controller) {
+          try {
+            navigator.serviceWorker.controller.postMessage({
+              type: 'CACHE_UPDATED',
+              data: {
+                type: 'batch-added',
+                count: stored,
+                source: 'batch'
+              }
+            });
+          } catch (swError) {
+            logger.debug('CacheStorageAdapter', 'Could not notify Service Worker', swError);
+          }
+        }
+      }
+      
+      return stored;
+    } catch (error) {
+      logger.error('CacheStorageAdapter', 'Error during batch storage', error);
       throw error;
     }
   }

@@ -75,10 +75,30 @@ class CacheSync {
    * Ensures consistency between memory, localStorage, and Service Worker cache
    * @param {Object} [options] - Sync options
    * @param {boolean} [options.force=false] - Force sync even if recently synced
+   * @param {boolean} [options.batch=false] - Whether this is during a batch operation
    * @returns {Promise<void>}
    */
   async sync(options = {}) {
-    const { force = false } = options;
+    const { force = false, batch = false } = options;
+
+    // Skip sync during batch mode (unless forced)
+    if (!force && batch) {
+      logger.debug('CacheSync', 'Sync skipped - batch mode active');
+      return;
+    }
+
+    // Check if CacheStorageAdapter is in batch mode
+    if (!force) {
+      try {
+        const cacheStorageAdapter = await import('./CacheStorageAdapter.js');
+        if (cacheStorageAdapter.default && cacheStorageAdapter.default.isInBatchMode()) {
+          logger.debug('CacheSync', 'Sync skipped - CacheStorageAdapter in batch mode');
+          return;
+        }
+      } catch (error) {
+        // Ignore import errors - proceed with sync
+      }
+    }
 
     // Prevent concurrent syncs
     if (this.isSyncing && !force) {

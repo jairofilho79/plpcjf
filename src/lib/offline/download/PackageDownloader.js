@@ -209,9 +209,112 @@ export class PackageDownloader {
    * Uses PdfPathManager to normalize paths consistently (preserves case and accents)
    * Always uses originalName from ZIP to preserve exact path with accents and case
    * @param {ExtractedPdf[]} pdfs - Extracted PDFs
+   * @param {Object} [options] - Storage options
+   * @param {boolean} [options.batch=false] - Use batch mode for better performance
+   * @param {Function} [options.onProgress] - Progress callback (completed, total, percentage)
    * @returns {Promise<number>} Number of PDFs stored
    */
-  async storePdfsInCache(pdfs) {
+  async storePdfsInCache(pdfs, options = {}) {
+    const { batch = false, onProgress = null } = options;
+    
+    // Use batch mode for better performance when storing multiple PDFs
+    if (batch && pdfs.length > 1) {
+      logger.info('PackageDownloader', `Using batch mode to store ${pdfs.length} PDFs`);
+      
+      // Prepare PDFs for batch storage
+      const pdfsToBatch = [];
+      let preparedCount = 0;
+      
+      for (const pdf of pdfs) {
+        // CRITICAL: Always use originalName first (preserves case and accents from ZIP)
+        // originalName comes directly from ZIP entry and has the correct path
+        // Only use normalizedPath as fallback if originalName is not available
+        const originalPath = pdf.originalName || pdf.normalizedPath;
+        
+        // Apply PdfPathManager normalization only for format consistency (adds assets/ prefix, etc)
+        // This preserves case and accents while ensuring consistent format
+        const normalizedPath = PdfPathManager.normalizeForStorage(originalPath);
+        
+        if (!normalizedPath) {
+          logger.warn('PackageDownloader', `Skipping PDF with invalid path: ${originalPath}`);
+          continue;
+        }
+        
+        pdfsToBatch.push({
+          path: normalizedPath,
+          blob: pdf.blob
+        });
+        
+        preparedCount++;
+        
+        // FASE 5: Report progress during preparation (lightweight operation)
+        if (onProgress && preparedCount % 100 === 0) {
+          onProgress({
+            phase: 'preparing',
+            completed: preparedCount,
+            total: pdfs.length,
+            percentage: Math.floor((preparedCount / pdfs.length) * 100)
+          });
+        }
+      }
+      
+      // Store all PDFs in batch (no events during storage)
+      // FASE 5: Progress callback will be called by internal batch storage
+      let storedCount = 0;
+      const progressUpdateInterval = 50; // Update every 50 PDFs
+      let lastProgressUpdate = 0;
+      
+      for (let i = 0; i < pdfsToBatch.length; i++) {
+        const { path, blob } = pdfsToBatch[i];
+        
+        try {
+          await cacheStorageAdapter._putPdfInternal(path, blob, {
+            emitEvents: false,
+            notifyServiceWorker: false
+          });
+          storedCount++;
+          
+          // FASE 5: Update progress periodically without triggering sync
+          // Always update on intervals or if we're near the end
+          const shouldUpdate = storedCount % progressUpdateInterval === 0 || 
+                              storedCount === pdfsToBatch.length ||
+                              (pdfsToBatch.length - storedCount < progressUpdateInterval && 
+                               storedCount - lastProgressUpdate >= 10); // Update every 10 PDFs near the end
+          
+          if (onProgress && shouldUpdate) {
+            lastProgressUpdate = storedCount;
+            onProgress({
+              phase: 'storing',
+              completed: storedCount,
+              total: pdfsToBatch.length,
+              percentage: Math.floor((storedCount / pdfsToBatch.length) * 100)
+            });
+          }
+        } catch (error) {
+          logger.error('PackageDownloader', `Error storing PDF: ${path}`, error);
+          // Continue with other PDFs
+        }
+      }
+      
+      // Final progress callback - ALWAYS called, even if loop completed without hitting interval
+      if (onProgress) {
+        // Only call final callback if we haven't already reported 100%
+        if (storedCount > 0 && lastProgressUpdate < storedCount) {
+          onProgress({
+            phase: 'complete',
+            completed: storedCount,
+            total: pdfsToBatch.length,
+            percentage: 100
+          });
+        }
+      }
+      
+      logger.info('PackageDownloader', `Batch storage completed: ${storedCount}/${pdfs.length} PDFs stored`);
+      
+      return storedCount;
+    }
+    
+    // Fallback to individual storage (for compatibility or when batch is disabled)
     let stored = 0;
     const isDev = typeof window !== 'undefined' && 
                   (window.location.hostname === 'localhost' || 
@@ -239,6 +342,15 @@ export class PackageDownloader {
         }
         await cacheStorageAdapter.putPdf(normalizedPath, pdf.blob);
         stored++;
+        
+        // Call progress callback if provided
+        if (onProgress && stored % 50 === 0) {
+          onProgress({
+            completed: stored,
+            total: pdfs.length,
+            percentage: Math.floor((stored / pdfs.length) * 100)
+          });
+        }
       } catch (error) {
         logger.error('PackageDownloader', `Error storing PDF: ${pdf.originalName || pdf.normalizedPath}`, error);
         // Continue with other PDFs

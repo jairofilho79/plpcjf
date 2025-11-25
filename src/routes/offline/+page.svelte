@@ -430,6 +430,9 @@
     }
   }
 
+  // Flag to track if stats need recalculation after batch
+  let needsStatsRecalculation = false;
+
   /**
    * Handle offline cache updated event
    * This is fired when PDFs are downloaded and cached
@@ -453,6 +456,18 @@
       if (eventSource === 'cache-reload') {
         console.log('[Offline Page] Cache update ignored - recursive cache-reload event');
         return;
+      }
+      
+      // FASE 4: Detect batch operations and defer stats recalculation
+      const isBatchOperation = eventDetail.type === 'batch-pdfs-added' || 
+                               eventDetail.batch === true ||
+                               eventSource === 'zip-download-batch' ||
+                               eventSource.includes('batch');
+      
+      if (isBatchOperation) {
+        console.log('[Offline Page] Batch operation detected - deferring stats recalculation');
+        needsStatsRecalculation = true;
+        return; // Skip immediate processing for batch operations
       }
       
       isProcessingCacheUpdate = true;
@@ -762,6 +777,14 @@
           affectedCategories.forEach(cat => statsCache.delete(cat));
         }
         loadedCategories.clear();
+        
+        // FASE 4: Recalcular stats se houver flag de batch pendente
+        // ou sempre recalcular após download completo
+        if (needsStatsRecalculation) {
+          console.log('[Offline Page] Recalculating stats after batch operation');
+          needsStatsRecalculation = false; // Reset flag
+        }
+        
         // Reload stats after download (force to bypass rate limiting)
         // This ensures UI updates with fresh stats after validation
         await loadCategoryStats(true);

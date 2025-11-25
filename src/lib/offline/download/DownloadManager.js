@@ -93,7 +93,9 @@ export class DownloadManager {
         failed: 0,
         total: 0,
         selectedCategories: categories,
-        error: null
+        error: null,
+        downloadPhase: 'downloading', // FASE 6: Reset phase to downloading
+        phaseProgress: 0 // FASE 6: Reset phase progress
       });
 
       // Get louvores data
@@ -200,12 +202,22 @@ export class DownloadManager {
             options.onProgress(progress);
           }
           
-          // Update offline store state for UI
-          this._updateOfflineState({
+          // Update offline store state for UI with phase information
+          const stateUpdate = {
             progress: progress.percentage || 0,
             completed: progress.completed || 0,
             failed: progress.failed || 0
-          });
+          };
+          
+          // FASE 2: Include phase information if available
+          if (progress.downloadPhase) {
+            stateUpdate.downloadPhase = progress.downloadPhase;
+          }
+          if (progress.phaseProgress !== undefined) {
+            stateUpdate.phaseProgress = progress.phaseProgress;
+          }
+          
+          this._updateOfflineState(stateUpdate);
         }
       );
 
@@ -365,6 +377,18 @@ export class DownloadManager {
     let completed = 0;
     let failed = 0;
 
+    // Start batch mode to avoid individual events during storage
+    cacheStorageAdapter.startBatchMode();
+    
+    // FASE 6: Reset phase fields at start of batch operation
+    if (onProgress) {
+      onProgress({
+        ...this.progress.getProgress(),
+        downloadPhase: 'downloading',
+        phaseProgress: 0
+      });
+    }
+
     try {
       // Process each category
       for (const category of categories) {
@@ -393,8 +417,70 @@ export class DownloadManager {
               this.abortController?.signal
             );
 
-            // Store PDFs in cache
-            const stored = await packageDownloader.storePdfsInCache(result.pdfs);
+            // FASE 2: Track where this package starts for correct progress calculation
+            const packageStartCompleted = completed; // Rastrear onde este package começa
+            
+            // FASE 5: Store PDFs in cache using batch mode with progress callback
+            const stored = await packageDownloader.storePdfsInCache(result.pdfs, { 
+              batch: true,  // Enable batch mode for performance
+              onProgress: (progressData) => {
+                // FASE 2: Aggregate progress correctly: packages anteriores + progresso deste package
+                if (progressData.phase === 'storing' || progressData.phase === 'complete') {
+                  // Calcular progresso acumulado: packages anteriores + progresso deste package
+                  const currentCompleted = packageStartCompleted + progressData.completed;
+                  
+                  // Atualizar progress tracker
+                  this.progress.completed = currentCompleted;
+                  
+                  // Calcular porcentagem global baseada no total de PDFs
+                  const globalPercentage = pdfUrls.length > 0 
+                    ? Math.min(99, Math.floor((currentCompleted / pdfUrls.length) * 100))
+                    : 0;
+                  
+                  // FASE 2: Detectar fase baseado em progressData.phase
+                  let downloadPhase = 'downloading';
+                  if (progressData.phase === 'storing') {
+                    downloadPhase = 'storing';
+                  } else if (progressData.phase === 'complete') {
+                    downloadPhase = 'storing'; // Mantém fase storing até terminar package
+                  }
+                  
+                  // Atualizar UI através do callback com informações de fase
+                  if (onProgress) {
+                    onProgress({
+                      completed: currentCompleted,
+                      total: pdfUrls.length,
+                      percentage: globalPercentage,
+                      failed: failed,
+                      storagePhase: progressData.phase,
+                      packageProgress: progressData.percentage,
+                      downloadPhase: downloadPhase,
+                      phaseProgress: progressData.percentage // Progresso da fase atual
+                    });
+                  }
+                } else if (progressData.phase === 'preparing') {
+                  // Durante preparação, considerar como fase de download
+                  if (onProgress) {
+                    onProgress({
+                      ...this.progress.getProgress(),
+                      downloadPhase: 'downloading',
+                      phaseProgress: progressData.percentage
+                    });
+                  }
+                }
+              }
+            });
+            
+            // FASE 2: Always update progress after package completes, even if callback didn't fire
+            // This ensures UI is updated even if the interval wasn't reached
+            if (onProgress) {
+              const finalProgress = this.progress.getProgress();
+              onProgress({
+                ...finalProgress,
+                downloadPhase: 'storing', // After package completes, we're in storing phase
+                phaseProgress: 100 // Package is complete
+              });
+            }
             
             completed += stored;
             this.progress.incrementCompleted(stored, result.bytesDownloaded);
@@ -427,15 +513,31 @@ export class DownloadManager {
         });
       }
 
-      // Sync cache after download
+      // Sync cache after download (batch mode prevents intermediate syncs)
       await cacheSync.sync();
 
-      // Emit complete event with categories info
+      // FASE 2: Mark download as complete and update final progress
+      if (onProgress) {
+        const finalProgress = this.progress.getProgress();
+        const finalPercentage = pdfUrls.length > 0 
+          ? Math.floor((completed / pdfUrls.length) * 100)
+          : 100;
+        
+        onProgress({
+          ...finalProgress,
+          percentage: finalPercentage,
+          downloadPhase: 'complete',
+          phaseProgress: 100
+        });
+      }
+
+      // Emit complete event with categories info and batch flag
       offlineEvents.emit(EVENTS.DOWNLOAD_COMPLETE, {
         completed,
         failed,
         total: pdfUrls.length,
-        categories: categories || []
+        categories: categories || [],
+        batch: true  // Indicate this was a batch operation
       });
 
       return { completed, failed };
@@ -446,6 +548,9 @@ export class DownloadManager {
         offlineEvents.emit(EVENTS.DOWNLOAD_ERROR, { error: error.message });
       }
       throw error;
+    } finally {
+      // Always end batch mode, even if there was an error
+      cacheStorageAdapter.endBatchMode();
     }
   }
 

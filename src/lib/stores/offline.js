@@ -85,7 +85,9 @@ const initialState = {
   error: null, // Error message
   autoDownloading: false, // Auto-downloading new PDFs
   offlineManifest: null, // Offline manifest data
-  categorySizes: {} // Map of category -> total size in bytes
+  categorySizes: {}, // Map of category -> total size in bytes
+  downloadPhase: 'idle', // Current download phase: 'idle' | 'downloading' | 'storing' | 'complete'
+  phaseProgress: 0 // Progress of current phase (0-100)
 };
 
 const offlineState = writable(initialState);
@@ -685,20 +687,6 @@ async function startZipDownloadWithSpecificParts(categories, pdfUrls, partsByCat
             progress
           }));
 
-          // Notify Service Worker about cache update every 10 PDFs or at the end
-          if (completed % 10 === 0 || completed === total) {
-            try {
-              if (navigator.serviceWorker && navigator.serviceWorker.controller) {
-                navigator.serviceWorker.controller.postMessage({
-                  type: 'CACHE_UPDATED',
-                  timestamp: Date.now(),
-                  source: 'zip-download'
-                });
-              }
-            } catch (err) {
-              console.warn('[Offline Store] Failed to notify Service Worker:', err);
-            }
-          }
         }
 
         // Remove o arquivo ZIP do cache após processar todos os PDFs
@@ -756,6 +744,20 @@ async function startZipDownloadWithSpecificParts(categories, pdfUrls, partsByCat
 
       // Sync all information after download
       await syncAfterDownload();
+      
+      // Notify Service Worker once at the end of batch download
+      try {
+        if (navigator.serviceWorker && navigator.serviceWorker.controller) {
+          navigator.serviceWorker.controller.postMessage({
+            type: 'CACHE_UPDATED',
+            timestamp: Date.now(),
+            source: 'zip-download-batch',
+            count: finalCompleted
+          });
+        }
+      } catch (err) {
+        console.warn('[Offline Store] Failed to notify Service Worker:', err);
+      }
       
       // Dispatch event to notify UI of cache update
       if (typeof window !== 'undefined') {
@@ -1621,20 +1623,6 @@ async function startZipDownload(categories, pdfUrls, alreadyDownloadedCategories
             progress
           }));
 
-          // Notify Service Worker about cache update every 10 PDFs or at the end
-          if (completed % 10 === 0 || completed === total) {
-            try {
-              if (navigator.serviceWorker && navigator.serviceWorker.controller) {
-                navigator.serviceWorker.controller.postMessage({
-                  type: 'CACHE_UPDATED',
-                  timestamp: Date.now(),
-                  source: 'zip-download'
-                });
-              }
-            } catch (err) {
-              console.warn('[Offline Store] Failed to notify Service Worker:', err);
-            }
-          }
         }
 
         // Remove o arquivo ZIP do cache após processar todos os PDFs
@@ -1694,6 +1682,20 @@ async function startZipDownload(categories, pdfUrls, alreadyDownloadedCategories
         saveDownloadedCategories(allDownloaded);
         
         console.log('[Offline Store] Updated downloaded categories:', allDownloaded);
+      }
+      
+      // Notify Service Worker once at the end of batch download
+      try {
+        if (navigator.serviceWorker && navigator.serviceWorker.controller) {
+          navigator.serviceWorker.controller.postMessage({
+            type: 'CACHE_UPDATED',
+            timestamp: Date.now(),
+            source: 'zip-download-batch',
+            count: finalCompleted
+          });
+        }
+      } catch (err) {
+        console.warn('[Offline Store] Failed to notify Service Worker:', err);
       }
       
       // Dispatch event to notify UI of cache update
