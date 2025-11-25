@@ -84,13 +84,20 @@
     
     <!-- Progress ring for download with two phases -->
     {#if downloading && progress > 0}
+      <!-- Phase 1: Download (first half of ring, 0-180 degrees) -->
+      {@const phase1Completed = downloadPhase === 'storing' || downloadPhase === 'complete'}
+      {@const phase1Progress = phase1Completed ? 100 : (downloadPhase === 'downloading' ? phaseProgress : 0)}
+      {@const phase1Circumference = 44} <!-- Half circle: PI * 14 -->
+      {@const phase1Offset = phase1Circumference - (phase1Circumference * phase1Progress) / 100}
+      {@const phase1Opacity = downloadPhase === 'downloading' ? 1 : 0.6}
+      
+      <!-- Phase 2: Storing (second half of ring, 180-360 degrees) -->
+      {@const phase2Progress = (downloadPhase === 'storing' || downloadPhase === 'complete') ? phaseProgress : 0}
+      {@const phase2Circumference = 44} <!-- Half circle: PI * 14 -->
+      {@const phase2Offset = phase2Circumference - (phase2Circumference * phase2Progress) / 100}
+      {@const phase2Opacity = (downloadPhase === 'storing' || downloadPhase === 'complete') ? 1 : 0.3}
+      
       <svg class="progress-ring" width="32" height="32" viewBox="0 0 32 32">
-        <!-- Phase 1: Download (first half of ring, 0-180 degrees) -->
-        {@const phase1Completed = downloadPhase === 'storing' || downloadPhase === 'complete'}
-        {@const phase1Progress = phase1Completed ? 100 : (downloadPhase === 'downloading' ? phaseProgress : 0)}
-        {@const phase1Circumference = 44} <!-- Half circle: PI * 14 -->
-        {@const phase1Offset = phase1Circumference - (phase1Circumference * phase1Progress) / 100}
-        {@const phase1Opacity = downloadPhase === 'downloading' ? 1 : 0.6}
         <circle
           class="progress-ring-circle phase-1"
           stroke="currentColor"
@@ -101,12 +108,6 @@
           cy="16"
           style="stroke-dasharray: {phase1Circumference}; stroke-dashoffset: {phase1Offset}; opacity: {phase1Opacity};"
         />
-        
-        <!-- Phase 2: Storing (second half of ring, 180-360 degrees) -->
-        {@const phase2Progress = (downloadPhase === 'storing' || downloadPhase === 'complete') ? phaseProgress : 0}
-        {@const phase2Circumference = 44} <!-- Half circle: PI * 14 -->
-        {@const phase2Offset = phase2Circumference - (phase2Circumference * phase2Progress) / 100}
-        {@const phase2Opacity = (downloadPhase === 'storing' || downloadPhase === 'complete') ? 1 : 0.3}
         <circle
           class="progress-ring-circle phase-2"
           stroke="currentColor"
