@@ -1083,6 +1083,10 @@
 
     console.log('[Offline Page] Starting download for all categories');
     
+    // Open offline-setup.pdf in new tab
+    const pdfUrl = '/leitor?file=/offline-setup.pdf';
+    window.open(pdfUrl);
+    
     // Select all categories
     const allCategories = [...CATEGORY_OPTIONS];
     selectedCategories = allCategories;
