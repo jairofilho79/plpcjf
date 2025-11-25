@@ -1084,7 +1084,7 @@
     console.log('[Offline Page] Starting download for all categories');
     
     // Open offline-setup.pdf in new tab
-    const pdfUrl = '/leitor?file=/offline-setup.pdf';
+    const pdfUrl = '/leitor?file=%2Fassets%2FColCIAs%2F001.pdf&titulo=Meu%20Deus%2C%20meu%20pai&subtitulo=Partitura%20%7C%20Coletânea%20CIAs&validated=true';
     window.open(pdfUrl);
     
     // Select all categories
