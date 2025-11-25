@@ -973,8 +973,13 @@
      */
   function toggleCategory(category) {
     if (downloading) return; // Can't change selection while downloading
-    // Can't remove already downloaded categories
-    if (downloadedCategories.includes(category)) return;
+    
+    // Get stats for this category
+    const stats = categoryStats[category] || { total: 0, available: 0, missing: 0, percentage: 0 };
+    const isActuallyComplete = stats.percentage === 100 && stats.missing === 0;
+    
+    // Can't remove already downloaded categories or complete categories
+    if (downloadedCategories.includes(category) || isActuallyComplete) return;
 
     if (selectedCategories.includes(category)) {
       selectedCategories = selectedCategories.filter(c => c !== category);
@@ -1281,7 +1286,7 @@
                 type="checkbox"
                 checked={isSelected}
                 on:change={() => toggleCategory(category)}
-                disabled={downloading || isDownloaded}
+                disabled={downloading || isDownloaded || isActuallyComplete}
               />
               <div class="category-info">
                 <div class="category-header">
