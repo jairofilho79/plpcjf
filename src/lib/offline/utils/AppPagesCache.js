@@ -77,16 +77,39 @@ export async function cacheAppPages(options = {}) {
           }
 
           logger.debug('AppPagesCache', `Fetching page: ${route} (${url.href})`);
+          logger.debug('AppPagesCache', `Request details for ${route}:`, {
+            url: url.href,
+            method: request.method,
+            mode: request.mode,
+            credentials: request.credentials,
+            cache: request.cache
+          });
 
           // Fetch the page
           // Note: Service Worker may intercept this, but we can still cache the response
-          const response = await fetch(request);
+          let response;
+          try {
+            response = await fetch(request);
+            logger.debug('AppPagesCache', `Fetch completed for ${route}`);
+          } catch (fetchError) {
+            logger.error('AppPagesCache', `Fetch failed for ${route}:`, {
+              error: fetchError.message,
+              name: fetchError.name,
+              stack: fetchError.stack
+            });
+            throw new Error(`Fetch failed: ${fetchError.message}`);
+          }
 
           logger.debug('AppPagesCache', `Response for ${route}: status=${response?.status}, ok=${response?.ok}, type=${response?.type}, url=${response?.url}`);
           
           // Check if response came from service worker cache
           if (response.type === 'opaque' || response.type === 'opaqueredirect') {
             logger.warn('AppPagesCache', `Response for ${route} is opaque - may not be cacheable`);
+          }
+          
+          // Log response details
+          if (!response) {
+            throw new Error('Response is null or undefined');
           }
 
           if (response && response.ok && response.status === 200) {
@@ -155,11 +178,32 @@ export async function cacheAppPages(options = {}) {
             }
           } else {
             const status = response?.status || 'unknown';
-            throw new Error(`HTTP ${status} for ${route}`);
+            const statusText = response?.statusText || 'unknown';
+            logger.error('AppPagesCache', `Invalid response for ${route}:`, {
+              status,
+              statusText,
+              ok: response?.ok,
+              type: response?.type,
+              url: response?.url
+            });
+            throw new Error(`HTTP ${status} ${statusText} for ${route}`);
           }
         } catch (error) {
-          logger.warn('AppPagesCache', `Failed to cache page ${route}:`, error);
-          return { success: false, route, error: error.message };
+          // Log detailed error information
+          const errorDetails = {
+            message: error.message,
+            stack: error.stack,
+            name: error.name,
+            route: route,
+            url: url.href
+          };
+          logger.error('AppPagesCache', `Failed to cache page ${route}:`, errorDetails);
+          logger.error('AppPagesCache', `Error details for ${route}:`, {
+            message: error.message,
+            name: error.name,
+            stack: error.stack?.split('\n').slice(0, 5).join('\n') // First 5 lines of stack
+          });
+          return { success: false, route, error: error.message || 'Unknown error', errorDetails };
         }
       })
     );
