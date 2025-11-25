@@ -1148,13 +1148,21 @@
           await Promise.all(appKeys.map(key => appCache.delete(key)));
           console.log('[Offline Page] Cleared app pages cache');
           
-          // Also try to delete the entire cache if possible
+          // Also try to delete the entire caches if possible
           try {
             await caches.delete('plpc-pdfs');
             console.log('[Offline Page] Deleted plpc-pdfs cache entirely');
           } catch (e) {
             // Ignore if cache doesn't exist or can't be deleted
             console.debug('[Offline Page] Could not delete plpc-pdfs cache entirely:', e);
+          }
+          
+          try {
+            await caches.delete('plpc-v3-dev-app');
+            console.log('[Offline Page] Deleted plpc-v3-dev-app cache entirely');
+          } catch (e) {
+            // Ignore if cache doesn't exist or can't be deleted
+            console.debug('[Offline Page] Could not delete plpc-v3-dev-app cache entirely:', e);
           }
         } catch (error) {
           console.warn('[Offline Page] Error clearing caches:', error);
