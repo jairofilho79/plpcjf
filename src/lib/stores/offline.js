@@ -46,6 +46,46 @@ let isZipDownloadActive = false;
 let zipDownloadCancelled = false;
 
 /**
+ * Normalize package URL - converts absolute URLs to relative paths
+ * Handles cases where manifest contains absolute URLs with old domains (e.g., plpcjf.org)
+ * @param {string} url - Package URL (can be absolute, relative, or filename)
+ * @param {string} filename - Fallback filename if url is not available
+ * @returns {string} Normalized relative URL
+ */
+function normalizePackageUrl(url, filename) {
+  // If no URL provided, use filename with base path
+  if (!url) {
+    return `${PACKAGES_BASE_PATH}/${filename}`;
+  }
+  
+  // If URL is absolute (http:// or https://), extract the pathname
+  if (url.startsWith('http://') || url.startsWith('https://')) {
+    try {
+      const urlObj = new URL(url);
+      const pathname = urlObj.pathname; // Extract only the pathname (e.g., /packages/file.zip)
+      // If pathname is valid, use it; otherwise fall back to filename
+      return pathname.startsWith('/') ? pathname : `${PACKAGES_BASE_PATH}/${filename}`;
+    } catch (error) {
+      // If URL parsing fails, try to extract path manually
+      const match = url.match(/https?:\/\/[^\/]+(\/.*)/);
+      if (match && match[1]) {
+        return match[1];
+      }
+      // Fall back to filename if extraction fails
+      return `${PACKAGES_BASE_PATH}/${filename}`;
+    }
+  }
+  
+  // If URL is relative (starts with /), use as-is
+  if (url.startsWith('/')) {
+    return url;
+  }
+  
+  // Otherwise, treat as filename and add base path
+  return `${PACKAGES_BASE_PATH}/${url}`;
+}
+
+/**
  * Normalize category name - aggregates subcategories into main category
  * Maps "Cifra nível I" and "Cifra nível II" to "Cifra"
  * @param {string} category - Category name to normalize
@@ -601,7 +641,7 @@ async function startZipDownloadWithSpecificParts(categories, pdfUrls, partsByCat
           throw new Error('DOWNLOAD_CANCELLED');
         }
 
-        const packageUrl = part.url.startsWith('/') ? part.url : `${PACKAGES_BASE_PATH}/${part.filename}`;
+        const packageUrl = normalizePackageUrl(part.url, part.filename);
         let response;
 
         try {
@@ -1547,7 +1587,7 @@ async function startZipDownload(categories, pdfUrls, alreadyDownloadedCategories
           throw new Error('DOWNLOAD_CANCELLED');
         }
 
-        const packageUrl = part.url.startsWith('/') ? part.url : `${PACKAGES_BASE_PATH}/${part.filename}`;
+        const packageUrl = normalizePackageUrl(part.url, part.filename);
         let response;
 
         try {

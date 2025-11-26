@@ -47,9 +47,26 @@ export class PackageDownloader {
    * @returns {Promise<PackageDownloadResult>} Download result
    */
   async downloadPackage(packageUrl, abortSignal = null) {
-    const fullUrl = packageUrl.startsWith('/') 
-      ? packageUrl 
-      : `${this.basePath}/${packageUrl}`;
+    // Normalize URL: if it's an absolute URL (http:// or https://), extract the pathname
+    let normalizedUrl = packageUrl;
+    if (packageUrl.startsWith('http://') || packageUrl.startsWith('https://')) {
+      try {
+        const url = new URL(packageUrl);
+        normalizedUrl = url.pathname; // Extract only the pathname (e.g., /packages/file.zip)
+        logger.debug('PackageDownloader', `Normalized absolute URL: ${packageUrl} -> ${normalizedUrl}`);
+      } catch (error) {
+        logger.warn('PackageDownloader', `Failed to parse URL: ${packageUrl}, using as-is`, error);
+        // If URL parsing fails, try to extract path manually
+        const match = packageUrl.match(/https?:\/\/[^\/]+(\/.*)/);
+        if (match && match[1]) {
+          normalizedUrl = match[1];
+        }
+      }
+    }
+    
+    const fullUrl = normalizedUrl.startsWith('/') 
+      ? normalizedUrl 
+      : `${this.basePath}/${normalizedUrl}`;
 
     logger.info('PackageDownloader', `Downloading package: ${fullUrl}`);
 
