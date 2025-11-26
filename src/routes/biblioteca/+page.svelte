@@ -14,8 +14,6 @@
   import LouvorCard from '$lib/components/LouvorCard.svelte';
   import GestureButton from '$lib/components/GestureButton.svelte';
   import { ChevronLeft, ChevronRight } from 'lucide-svelte';
-  import { prefetchPdf } from '$lib/utils/pdfjsLoader';
-  import { getPdfRelPath } from '$lib/utils/pathUtils';
   
   // Normalize classification by removing content in parentheses
   /**
@@ -155,21 +153,6 @@
     (currentPage - 1) * itemsPerPage,
     currentPage * itemsPerPage
   );
-  
-  // Prefetch PDFs da página atual quando mudar de página (apenas se modo for leitor)
-  $: if (browser && paginatedLouvores.length > 0 && $pdfViewer === 'leitor') {
-    // Limitar prefetch automático aos primeiros 5 itens;
-    // demais itens usam setupCardPrefetch em `LouvorCard.svelte`
-    const louvoresToPrefetch = paginatedLouvores.slice(0, 5);
-    if (louvoresToPrefetch.length > 0) {
-      louvoresToPrefetch.forEach((louvor) => {
-        const pdfPath = getPdfRelPath(louvor);
-        if (pdfPath) {
-          prefetchPdf(pdfPath);
-        }
-      });
-    }
-  }
   
   // Reset to page 1 when items per page changes
   $: {

@@ -5,7 +5,6 @@
  * - Pré-carregamento com prioridades baseado em rota
  * - Carregamento progressivo (core → worker → viewer)
  * - Verificação de conexão (não pré-carregar em modo economia)
- * - Prefetch de PDFs
  * - Gerenciamento de estado global
  */
 
@@ -219,122 +218,6 @@ export async function loadPdfJsViewer() {
   preloadState.partial = false;
   
   return viewerNS;
-}
-
-/**
- * Prefetch de PDF usando link rel=prefetch
- * @param {string} pdfPath - Caminho do PDF (relativo ou absoluto)
- */
-export function prefetchPdf(pdfPath) {
-  // Só realizar prefetch se o modo offline estiver disponível
-  try {
-    if (typeof window === 'undefined' || typeof localStorage === 'undefined') {
-      return;
-    }
-    const offlineAvailable = localStorage.getItem('OFFLINE_AVAILABLE');
-    if (offlineAvailable !== 'true') {
-      // Não fazer prefetch quando o modo offline ainda não está disponível
-      return;
-    }
-  } catch {
-    // Em caso de qualquer erro de acesso ao localStorage, ser conservador e não prefetchar
-    return;
-  }
-
-  if (typeof document === 'undefined') return;
-
-  // Normalizar caminho fora do callback para evitar trabalho repetido
-  const normalizedPath = pdfPath.startsWith('/') ? pdfPath : `/${pdfPath}`;
-
-  const schedulePrefetch = () => {
-    // Verificar se já existe link de prefetch
-    const existing = document.querySelector(`link[rel="prefetch"][href="${normalizedPath}"]`);
-    if (existing) return;
-
-    // Verificar limite de prefetches simultâneos (máximo 10)
-    const existingPrefetches = document.querySelectorAll('link[rel="prefetch"]').length;
-    if (existingPrefetches >= 10) {
-      console.warn('[PDF.js Loader] Limite de prefetches atingido');
-      return;
-    }
-
-    const link = document.createElement('link');
-    link.rel = 'prefetch';
-    link.as = 'document';
-    link.href = normalizedPath;
-    document.head.appendChild(link);
-
-    console.log('[PDF.js Loader] Prefetch de PDF:', normalizedPath);
-  };
-
-  // Agendar prefetch para rodar em idle / baixa prioridade, sem bloquear UI
-  try {
-    requestIdleCallback(schedulePrefetch, { timeout: 3000 });
-  } catch (err) {
-    // Fallback defensivo caso algo falhe: executar logo após o tick atual
-    setTimeout(schedulePrefetch, 0);
-  }
-}
-
-/**
- * Setup prefetch inteligente para cards
- * @param {HTMLElement} cardElement - Elemento do card
- * @param {string} pdfPath - Caminho do PDF
- */
-export function setupCardPrefetch(cardElement, pdfPath) {
-  if (typeof window === 'undefined' || !cardElement) return;
-  
-  // Prefetch no hover
-  let hoverTimeout;
-  const handleMouseEnter = () => {
-    hoverTimeout = setTimeout(() => {
-      // Prefetch PDF.js se ainda não carregado
-      if (!window.__pdfjsPreloaded) {
-        preloadPdfJs({ priority: PRELOAD_PRIORITIES.LOW });
-      }
-      // Prefetch PDF
-      prefetchPdf(pdfPath);
-    }, 100);
-  };
-  
-  const handleMouseLeave = () => {
-    clearTimeout(hoverTimeout);
-  };
-  
-  cardElement.addEventListener('mouseenter', handleMouseEnter, { once: true });
-  cardElement.addEventListener('mouseleave', handleMouseLeave);
-  
-  // Prefetch quando entra no viewport
-  if (typeof IntersectionObserver !== 'undefined') {
-    const observer = new IntersectionObserver((entries) => {
-      entries.forEach(entry => {
-        if (entry.isIntersecting) {
-          // Prefetch PDF.js se ainda não carregado
-          if (!window.__pdfjsPreloaded) {
-            preloadPdfJs({ priority: PRELOAD_PRIORITIES.LOW });
-          }
-          // Prefetch PDF
-          prefetchPdf(pdfPath);
-          observer.unobserve(entry.target);
-        }
-      });
-    }, { rootMargin: '200px' });
-    
-    observer.observe(cardElement);
-    
-    // Cleanup quando elemento for removido
-    return () => {
-      observer.disconnect();
-      cardElement.removeEventListener('mouseenter', handleMouseEnter);
-      cardElement.removeEventListener('mouseleave', handleMouseLeave);
-    };
-  }
-  
-  return () => {
-    clearTimeout(hoverTimeout);
-    cardElement.removeEventListener('mouseenter', handleMouseEnter);
-    cardElement.removeEventListener('mouseleave', handleMouseLeave);
-  };
 }
 
 /**

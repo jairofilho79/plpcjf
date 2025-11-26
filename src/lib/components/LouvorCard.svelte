@@ -14,7 +14,6 @@
   import { pdfViewer } from '$lib/stores/pdfViewer';
   import { isPdfAvailableInIndex } from '$lib/utils/pdfIndex';
   import { ensurePdfAvailable, validatePdfWithStrategies, validatePdfAvailability, getCachedValidation } from '$lib/utils/pdfValidation';
-  import { setupCardPrefetch } from '$lib/utils/pdfjsLoader';
   
   export let louvor;
   
@@ -26,7 +25,6 @@
   let isCheckingAvailability = false;
   let availabilityError = null;
   let cardElement;
-  let prefetchCleanup;
   
   function getCategoryIcon(category) {
     if (!category) return null;
@@ -171,21 +169,7 @@
   
   $: categoryIcon = getCategoryIcon(louvor.categoria);
   
-  // Setup prefetch quando card estiver montado e pdfPath disponível
-  onMount(() => {
-    if (browser && cardElement && pdfPath) {
-      // Apenas prefetch se modo for leitor (não faz sentido para outros modos)
-      if ($pdfViewer === 'leitor') {
-        prefetchCleanup = setupCardPrefetch(cardElement, pdfPath);
-      }
-    }
-  });
-  
-  onDestroy(() => {
-    if (prefetchCleanup) {
-      prefetchCleanup();
-    }
-  });
+  // Nenhum prefetch automático de PDF aqui: o carregamento é feito sob demanda pelo leitor
 </script>
 
 <div class="louvor-card" bind:this={cardElement}>
