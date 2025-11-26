@@ -227,28 +227,38 @@ export async function loadPdfJsViewer() {
  */
 export function prefetchPdf(pdfPath) {
   if (typeof document === 'undefined') return;
-  
-  // Normalizar caminho
+
+  // Normalizar caminho fora do callback para evitar trabalho repetido
   const normalizedPath = pdfPath.startsWith('/') ? pdfPath : `/${pdfPath}`;
-  
-  // Verificar se já existe link de prefetch
-  const existing = document.querySelector(`link[rel="prefetch"][href="${normalizedPath}"]`);
-  if (existing) return;
-  
-  // Verificar limite de prefetches simultâneos (máximo 10)
-  const existingPrefetches = document.querySelectorAll('link[rel="prefetch"]').length;
-  if (existingPrefetches >= 10) {
-    console.warn('[PDF.js Loader] Limite de prefetches atingido');
-    return;
+
+  const schedulePrefetch = () => {
+    // Verificar se já existe link de prefetch
+    const existing = document.querySelector(`link[rel="prefetch"][href="${normalizedPath}"]`);
+    if (existing) return;
+
+    // Verificar limite de prefetches simultâneos (máximo 10)
+    const existingPrefetches = document.querySelectorAll('link[rel="prefetch"]').length;
+    if (existingPrefetches >= 10) {
+      console.warn('[PDF.js Loader] Limite de prefetches atingido');
+      return;
+    }
+
+    const link = document.createElement('link');
+    link.rel = 'prefetch';
+    link.as = 'document';
+    link.href = normalizedPath;
+    document.head.appendChild(link);
+
+    console.log('[PDF.js Loader] Prefetch de PDF:', normalizedPath);
+  };
+
+  // Agendar prefetch para rodar em idle / baixa prioridade, sem bloquear UI
+  try {
+    requestIdleCallback(schedulePrefetch, { timeout: 3000 });
+  } catch (err) {
+    // Fallback defensivo caso algo falhe: executar logo após o tick atual
+    setTimeout(schedulePrefetch, 0);
   }
-  
-  const link = document.createElement('link');
-  link.rel = 'prefetch';
-  link.as = 'document';
-  link.href = normalizedPath;
-  document.head.appendChild(link);
-  
-  console.log('[PDF.js Loader] Prefetch de PDF:', normalizedPath);
 }
 
 /**
