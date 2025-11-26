@@ -1382,7 +1382,7 @@
       </div>
 
       <!-- Offline requirements alert -->
-      <OfflineRequirementsAlert />
+      <!-- <OfflineRequirementsAlert /> -->
 
       {#if !$louvoresLoaded}
         <p class="loading-text">Carregando lista de louvores...</p>
