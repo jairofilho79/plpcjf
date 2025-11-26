@@ -757,22 +757,23 @@
   }
   
   // Função para navegar para a tela inicial
-  // Usa history.go(-1) se houver histórico, senão usa goto('/')
-  // history.go(-1) é mais confiável que history.back() no Safari iOS
+  // Tenta usar history.go(-1) primeiro, se não houver histórico usa goto('/')
+  // No Safari iOS, verificações de histórico não são confiáveis, então usamos uma abordagem simples
   function goToHome() {
-    // Verificar se há histórico para voltar
-    // history.length > 1 significa que há pelo menos uma entrada anterior
-    // document.referrer verifica se há uma página de referência
-    const hasHistory = window.history.length > 1 || document.referrer !== '';
+    // Salvar a URL atual antes de tentar voltar
+    const currentUrl = window.location.href;
     
-    if (hasHistory) {
-      // Voltar no histórico (remove da lista, não adiciona)
-      // Usar history.go(-1) que é mais confiável no Safari iOS
-      window.history.go(-1);
-    } else {
-      // Não há histórico, navegar para home normalmente
-      goto('/');
-    }
+    // Tentar voltar no histórico
+    window.history.go(-1);
+    
+    // Se após um pequeno delay ainda estamos na mesma URL, não havia histórico
+    // Nesse caso, navegar para home
+    setTimeout(() => {
+      // Se a URL não mudou, significa que history.go(-1) não funcionou (não havia histórico)
+      if (window.location.href === currentUrl) {
+        goto('/');
+      }
+    }, 100);
   }
   
   // Função para navegar para PDF do carousel
