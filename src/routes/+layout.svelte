@@ -61,6 +61,32 @@
   // Register service worker and setup sync on mount
   onMount(() => {
     if (browser) {
+      // CORREÇÃO PARA STANDALONE: Garantir que o SvelteKit router processe a URL correta
+      // Quando o Service Worker serve o shell root ('/'), o SvelteKit pode não ter
+      // processado a URL real da barra de endereços ainda. Verificamos e corrigimos.
+      const checkAndFixUrl = () => {
+        const windowUrl = window.location.pathname + window.location.search;
+        const sveltekitUrl = $page.url.pathname + $page.url.search;
+        
+        // Se a URL na barra não corresponde à rota do SvelteKit, forçar navegação
+        // Isso é especialmente importante em standalone quando o SW serve o shell root
+        if (windowUrl !== sveltekitUrl && windowUrl !== '/') {
+          console.log('[Layout] URL mismatch detected - fixing:', {
+            windowLocation: windowUrl,
+            sveltekitPage: sveltekitUrl
+          });
+          // Usar setTimeout para garantir que o SvelteKit já inicializou
+          setTimeout(() => {
+            goto(windowUrl, { replaceState: true, noScroll: true });
+          }, 0);
+        }
+      };
+      
+      // Verificar imediatamente e também após um pequeno delay
+      // para garantir que o SvelteKit router já inicializou
+      checkAndFixUrl();
+      setTimeout(checkAndFixUrl, 100);
+      
       registerServiceWorker().then(() => {
         // Setup Service Worker message listener
         setupServiceWorkerMessageListener();

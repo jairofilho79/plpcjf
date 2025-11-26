@@ -295,18 +295,30 @@ self.addEventListener('fetch', (event) => {
 
   // Handle navigation requests (page loads) - SvelteKit SPA routing
   if (isNavigationRequest) {
+    // Log navigation request for debugging
+    console.log('[SW] Navigation request:', url.pathname + url.search, 'mode:', event.request.mode);
+    
     // In development mode, always fetch from network to get latest changes
     if (IS_DEV) {
       event.respondWith(
         fetch(event.request)
           .then(response => {
             // Don't cache navigation in development
+            console.log('[SW] Dev: Fetched from network:', url.pathname, 'status:', response.status);
             return response;
           })
-          .catch(() => {
+          .catch((err) => {
             // Fallback to cache only when offline in dev
+            console.log('[SW] Dev: Network failed, trying cache:', url.pathname, err);
             return caches.match(event.request)
-              .then(cached => cached || caches.match('/'));
+              .then(cached => {
+                if (cached) {
+                  console.log('[SW] Dev: Serving cached route:', url.pathname);
+                  return cached;
+                }
+                console.log('[SW] Dev: Serving root shell for:', url.pathname);
+                return caches.match('/');
+              });
           })
       );
     } else {
@@ -319,29 +331,45 @@ self.addEventListener('fetch', (event) => {
               const responseClone = response.clone();
               caches.open(APP_CACHE).then(cache => {
                 cache.put(event.request, responseClone);
-                console.log('[SW] Cached navigation response for:', url.pathname);
+                console.log('[SW] Cached navigation response for:', url.pathname + url.search);
               });
             }
+            console.log('[SW] Production: Fetched from network:', url.pathname, 'status:', response.status);
             return response;
           })
-          .catch(() => {
+          .catch((err) => {
             // When offline, serve the cached HTML shell for SvelteKit SPA routing
             // SvelteKit's client-side router will handle the actual route based on the URL
-            console.log('[SW] Navigation request offline for:', url.pathname);
+            console.log('[SW] Production: Navigation request offline for:', url.pathname + url.search, err);
             
             // Try to serve the specific route from cache first (if previously visited)
             return caches.match(event.request)
               .then(cached => {
                 if (cached) {
-                  console.log('[SW] Serving cached route:', url.pathname);
+                  console.log('[SW] Production: Serving cached route:', url.pathname + url.search);
                   return cached;
                 }
                 
                 // If specific route not cached, serve the root '/' HTML shell
                 // This is the correct approach for SvelteKit SPA - the same HTML is served
                 // for all routes, and the client-side router handles the actual routing
-                console.log('[SW] Route not cached, serving / shell for SvelteKit routing:', url.pathname);
-                return caches.match('/');
+                // IMPORTANT: The URL in the address bar is preserved, so SvelteKit router will read it
+                console.log('[SW] Production: Route not cached, serving / shell for SvelteKit routing:', url.pathname + url.search);
+                return caches.match('/')
+                  .then(shell => {
+                    if (shell) {
+                      // Ensure the response preserves the original URL information
+                      // SvelteKit router reads from window.location, which is set by the browser
+                      // based on the navigation request URL, not the response URL
+                      // So we can safely return the shell root HTML
+                      return shell;
+                    }
+                    // If even root is not cached, return a basic HTML that will load SvelteKit
+                    console.warn('[SW] Production: Root shell not cached, returning basic response');
+                    return new Response('<!DOCTYPE html><html><head><meta charset="utf-8"><title>Loading...</title></head><body>Loading...</body></html>', {
+                      headers: { 'Content-Type': 'text/html' }
+                    });
+                  });
               });
           })
       );
