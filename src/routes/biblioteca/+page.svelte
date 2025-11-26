@@ -28,14 +28,14 @@
   // Extract special arrangement text from parentheses, or return "Padrão"
   /**
    * @param {string} classification
-   * @param {string} baseNormalized
+   * @param {string[]} baseNormalizedList
    */
-  function extractSpecialArrangement(classification, baseNormalized) {
-    if (!classification) return 'Padrão';
+  function extractSpecialArrangement(classification, baseNormalizedList) {
+    if (!classification) return null;
     
-    // Check if this classification matches the base normalized classification
+    // Check if this classification matches any of the base normalized classifications
     const normalized = normalizeClassification(classification);
-    if (normalized !== baseNormalized) return null;
+    if (!baseNormalizedList.includes(normalized)) return null;
     
     // Extract text from parentheses
     const match = classification.match(/\(([^)]+)\)/);
@@ -69,11 +69,10 @@
 
   // Selected classifications (Arranjo)
   $: selectedClassifications = $classificationFilters;
-  $: activeClassification = selectedClassifications.length === 1 ? selectedClassifications[0] : null;
 
-  // Calculate available special arrangements based on active classification
+  // Calculate available special arrangements based on selected classifications
   $: availableSpecialArrangements = (() => {
-    if (!activeClassification || !classificationFilteredLouvores || classificationFilteredLouvores.length === 0) {
+    if (selectedClassifications.length === 0 || !classificationFilteredLouvores || classificationFilteredLouvores.length === 0) {
       return [];
     }
 
@@ -82,13 +81,24 @@
     for (const louvor of classificationFilteredLouvores) {
       if (!louvor.classificacao) continue;
       
-      const special = extractSpecialArrangement(louvor.classificacao, activeClassification);
+      const special = extractSpecialArrangement(louvor.classificacao, selectedClassifications);
       if (special !== null) {
         specialArrangements.add(special);
       }
     }
     
-    return Array.from(specialArrangements).sort();
+    // Sort and ensure "Padrão" is always first
+    const sorted = Array.from(specialArrangements).sort();
+    const padraoIndex = sorted.indexOf('Padrão');
+    if (padraoIndex > 0) {
+      // Remove "Padrão" from its current position and add it at the beginning
+      sorted.splice(padraoIndex, 1);
+      sorted.unshift('Padrão');
+    }
+    // If padraoIndex === 0, it's already first, no action needed
+    // If padraoIndex === -1, "Padrão" is not in the list (all items have parentheses), no action needed
+    
+    return sorted;
   })();
 
   // Filter louvores based on selected categories (inclusive filter for Cifra)
@@ -152,20 +162,21 @@
    */
   let selectedSpecialArrangements = [];
 
-  // Reset special arrangements when active classification changes
-  /**
-   * @type {string | null}
-   */
-  let previousActiveClassification = null;
+  // Reset special arrangements when selected classifications change significantly
+  let previousSelectedClassifications = [];
   $: {
-    if (activeClassification !== previousActiveClassification) {
-      // Reset selections when switching to a different classification
-      selectedSpecialArrangements = [];
-      previousActiveClassification = activeClassification;
-    } else if (!activeClassification) {
-      // No active classification, reset
-      selectedSpecialArrangements = [];
-      previousActiveClassification = null;
+    // Reset if classifications changed significantly (different set of items)
+    const currentSet = new Set(selectedClassifications);
+    const previousSet = new Set(previousSelectedClassifications);
+    
+    // Check if sets are different (not just reordered)
+    if (currentSet.size !== previousSet.size || 
+        !Array.from(currentSet).every(c => previousSet.has(c))) {
+      // Keep only valid selections
+      selectedSpecialArrangements = selectedSpecialArrangements.filter(sa => 
+        availableSpecialArrangements.includes(sa)
+      );
+      previousSelectedClassifications = [...selectedClassifications];
     }
   }
 
@@ -182,9 +193,9 @@
 
     // Filter by selected special arrangements
     return classificationFilteredLouvores.filter(louvor => {
-      if (!louvor.classificacao || !activeClassification) return false;
+      if (!louvor.classificacao || selectedClassifications.length === 0) return false;
       
-      const special = extractSpecialArrangement(louvor.classificacao, activeClassification);
+      const special = extractSpecialArrangement(louvor.classificacao, selectedClassifications);
       if (special === null) return false;
       
       return selectedSpecialArrangements.includes(special);
@@ -421,7 +432,7 @@
     
     <ClassificationFilters availableClassifications={$louvores.map(l => l.classificacao).filter(c => c)} />
     
-    {#if activeClassification && availableSpecialArrangements.length > 0}
+    {#if availableSpecialArrangements.length > 0}
       <SpecialArrangementFilters
         available={availableSpecialArrangements}
         selected={selectedSpecialArrangements}
