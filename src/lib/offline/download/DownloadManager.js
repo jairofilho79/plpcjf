@@ -426,6 +426,14 @@ export class DownloadManager {
         const { category, part } = packageInfo;
 
         logger.debug('DownloadManager', `Downloading package ${packageIndex + 1}/${totalPackages} for category: ${category}`);
+        console.log('[DownloadManager] Downloading package:', {
+          packageIndex: packageIndex + 1,
+          totalPackages,
+          category,
+          partUrl: part.url,
+          partFilename: part.filename,
+          urlToUse: part.url || part.filename
+        });
 
         try {
           // Download and extract package

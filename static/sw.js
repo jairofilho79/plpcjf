@@ -159,6 +159,19 @@ self.addEventListener('activate', (event) => {
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
   
+  // Log all package ZIP requests for debugging
+  if (url.pathname.startsWith('/packages/') && url.pathname.endsWith('.zip')) {
+    console.log('[SW] Fetch event for package ZIP:', {
+      pathname: url.pathname,
+      fullUrl: url.href,
+      origin: url.origin,
+      swOrigin: self.location.origin,
+      sameOrigin: url.origin === self.location.origin,
+      requestMode: event.request.mode,
+      requestMethod: event.request.method
+    });
+  }
+  
   // Only handle same-origin requests
   if (url.origin !== self.location.origin) {
     // Log cross-origin requests for debugging (but don't handle them)

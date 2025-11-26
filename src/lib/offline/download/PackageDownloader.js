@@ -69,6 +69,7 @@ export class PackageDownloader {
       : `${this.basePath}/${normalizedUrl}`;
 
     logger.info('PackageDownloader', `Downloading package: ${fullUrl} (original: ${packageUrl})`);
+    console.log('[PackageDownloader] Starting download:', { packageUrl, fullUrl });
 
     try {
       // Use absolute URL to ensure proper routing through Service Worker
@@ -80,6 +81,9 @@ export class PackageDownloader {
           : fullUrl;
 
       logger.debug('PackageDownloader', `Fetching package from: ${absoluteUrl}`);
+      console.log('[PackageDownloader] Fetching package from:', absoluteUrl);
+      console.log('[PackageDownloader] Window location:', typeof window !== 'undefined' ? window.location.href : 'N/A');
+      console.log('[PackageDownloader] Service Worker available:', 'serviceWorker' in navigator);
 
       // For same-origin requests, don't set mode: 'cors' as it can cause issues
       // The browser will automatically use the correct mode
@@ -88,9 +92,19 @@ export class PackageDownloader {
         cache: 'no-store'
       };
 
+      console.log('[PackageDownloader] Fetch options:', fetchOptions);
+      console.log('[PackageDownloader] About to call fetch...');
+
       const response = await fetch(absoluteUrl, fetchOptions);
 
       logger.debug('PackageDownloader', `Package fetch response: ${response.status} ${response.statusText}`);
+      console.log('[PackageDownloader] Fetch response:', {
+        status: response.status,
+        statusText: response.statusText,
+        ok: response.ok,
+        url: response.url,
+        type: response.type
+      });
 
       if (!response.ok) {
         const errorText = await response.text().catch(() => '');
