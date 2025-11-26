@@ -226,6 +226,21 @@ export async function loadPdfJsViewer() {
  * @param {string} pdfPath - Caminho do PDF (relativo ou absoluto)
  */
 export function prefetchPdf(pdfPath) {
+  // Só realizar prefetch se o modo offline estiver disponível
+  try {
+    if (typeof window === 'undefined' || typeof localStorage === 'undefined') {
+      return;
+    }
+    const offlineAvailable = localStorage.getItem('OFFLINE_AVAILABLE');
+    if (offlineAvailable !== 'true') {
+      // Não fazer prefetch quando o modo offline ainda não está disponível
+      return;
+    }
+  } catch {
+    // Em caso de qualquer erro de acesso ao localStorage, ser conservador e não prefetchar
+    return;
+  }
+
   if (typeof document === 'undefined') return;
 
   // Normalizar caminho fora do callback para evitar trabalho repetido
