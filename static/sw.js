@@ -161,6 +161,10 @@ self.addEventListener('fetch', (event) => {
   
   // Only handle same-origin requests
   if (url.origin !== self.location.origin) {
+    // Log cross-origin requests for debugging (but don't handle them)
+    if (url.pathname.startsWith('/packages/') && url.pathname.endsWith('.zip')) {
+      console.log('[SW] Cross-origin package request ignored:', url.href, 'SW origin:', self.location.origin);
+    }
     return;
   }
 
@@ -419,29 +423,33 @@ self.addEventListener('fetch', (event) => {
     url.pathname.endsWith('.zip');
   
   if (isPackageZip) {
-    // Network only - never cache package ZIPs
-    // Ensure we use absolute URL for proper routing
-    const requestUrl = event.request.url.startsWith('http://') || event.request.url.startsWith('https://')
-      ? event.request.url
-      : new URL(event.request.url, self.location.origin).href;
+    console.log('[SW] Package ZIP detected:', url.pathname, 'Request URL:', event.request.url, 'Mode:', event.request.mode);
     
-    console.log('[SW] Fetching package ZIP:', url.pathname, '->', requestUrl);
+    // Network only - never cache package ZIPs
+    // Use the original request URL (it should already be absolute)
+    const requestUrl = event.request.url;
+    
+    console.log('[SW] Fetching package ZIP:', url.pathname, 'Full URL:', requestUrl, 'Origin match:', url.origin === self.location.origin);
     
     event.respondWith(
-      fetch(requestUrl, { 
-        cache: 'no-store',
-        mode: 'cors'
+      fetch(event.request.clone(), { 
+        cache: 'no-store'
+        // Don't set mode: 'cors' for same-origin requests - it can cause issues
       })
         .then(response => {
-          console.log('[SW] Package ZIP response:', url.pathname, 'status:', response.status);
+          console.log('[SW] Package ZIP response:', url.pathname, 'status:', response.status, response.statusText);
           if (!response.ok) {
             console.error('[SW] Package ZIP failed:', url.pathname, response.status, response.statusText);
+            // Try to get error body for debugging
+            response.clone().text().then(text => {
+              console.error('[SW] Package ZIP error body:', text.substring(0, 200));
+            }).catch(() => {});
           }
           // Return response without caching
           return response;
         })
         .catch(err => {
-          console.error('[SW] Failed to fetch package ZIP:', url.pathname, 'URL:', requestUrl, 'Error:', err);
+          console.error('[SW] Failed to fetch package ZIP:', url.pathname, 'URL:', requestUrl, 'Error:', err, 'Error name:', err.name, 'Error message:', err.message);
           throw err;
         })
     );

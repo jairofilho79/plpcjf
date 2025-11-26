@@ -81,11 +81,14 @@ export class PackageDownloader {
 
       logger.debug('PackageDownloader', `Fetching package from: ${absoluteUrl}`);
 
-      const response = await fetch(absoluteUrl, {
+      // For same-origin requests, don't set mode: 'cors' as it can cause issues
+      // The browser will automatically use the correct mode
+      const fetchOptions = {
         signal: abortSignal,
-        cache: 'no-store',
-        mode: 'cors'
-      });
+        cache: 'no-store'
+      };
+
+      const response = await fetch(absoluteUrl, fetchOptions);
 
       logger.debug('PackageDownloader', `Package fetch response: ${response.status} ${response.statusText}`);
 
