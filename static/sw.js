@@ -420,14 +420,28 @@ self.addEventListener('fetch', (event) => {
   
   if (isPackageZip) {
     // Network only - never cache package ZIPs
+    // Ensure we use absolute URL for proper routing
+    const requestUrl = event.request.url.startsWith('http://') || event.request.url.startsWith('https://')
+      ? event.request.url
+      : new URL(event.request.url, self.location.origin).href;
+    
+    console.log('[SW] Fetching package ZIP:', url.pathname, '->', requestUrl);
+    
     event.respondWith(
-      fetch(event.request, { cache: 'no-store' })
+      fetch(requestUrl, { 
+        cache: 'no-store',
+        mode: 'cors'
+      })
         .then(response => {
+          console.log('[SW] Package ZIP response:', url.pathname, 'status:', response.status);
+          if (!response.ok) {
+            console.error('[SW] Package ZIP failed:', url.pathname, response.status, response.statusText);
+          }
           // Return response without caching
           return response;
         })
         .catch(err => {
-          console.error('[SW] Failed to fetch package ZIP:', url.pathname, err);
+          console.error('[SW] Failed to fetch package ZIP:', url.pathname, 'URL:', requestUrl, 'Error:', err);
           throw err;
         })
     );

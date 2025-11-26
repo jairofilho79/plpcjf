@@ -68,15 +68,30 @@ export class PackageDownloader {
       ? normalizedUrl 
       : `${this.basePath}/${normalizedUrl}`;
 
-    logger.info('PackageDownloader', `Downloading package: ${fullUrl}`);
+    logger.info('PackageDownloader', `Downloading package: ${fullUrl} (original: ${packageUrl})`);
 
     try {
-      const response = await fetch(fullUrl, {
+      // Use absolute URL to ensure proper routing through Service Worker
+      // If fullUrl is relative, make it absolute using current origin
+      const absoluteUrl = fullUrl.startsWith('http://') || fullUrl.startsWith('https://')
+        ? fullUrl
+        : typeof window !== 'undefined' && window.location
+          ? `${window.location.origin}${fullUrl}`
+          : fullUrl;
+
+      logger.debug('PackageDownloader', `Fetching package from: ${absoluteUrl}`);
+
+      const response = await fetch(absoluteUrl, {
         signal: abortSignal,
-        cache: 'no-store'
+        cache: 'no-store',
+        mode: 'cors'
       });
 
+      logger.debug('PackageDownloader', `Package fetch response: ${response.status} ${response.statusText}`);
+
       if (!response.ok) {
+        const errorText = await response.text().catch(() => '');
+        logger.error('PackageDownloader', `Failed to download package: ${response.status} ${response.statusText}. Response: ${errorText.substring(0, 200)}`);
         throw new Error(`Failed to download package: ${response.status} ${response.statusText}`);
       }
 
