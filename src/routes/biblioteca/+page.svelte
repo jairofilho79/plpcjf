@@ -304,14 +304,8 @@
       <div id="louvores" class="louvores-container w-full max-w-4xl" bind:this={louvoresContainer}>
         <span class="container-tag">Louvores</span>
         
-        <div class="louvores-list">
-          {#each paginatedLouvores as louvor (getLouvorKey(louvor))}
-            <LouvorCard {louvor} />
-          {/each}
-        </div>
-        
-        <!-- Pagination Controls -->
-        <div class="pagination-controls">
+        <!-- Pagination Controls (Top) -->
+        <div class="pagination-controls pagination-controls-top">
           <div class="pagination-info">
             Página <strong>{currentPage}</strong> de <strong>{totalPages}</strong>
           </div>
@@ -407,6 +401,18 @@
             </div>
           </div>
         </div>
+        
+        <div class="louvores-list">
+          {#each paginatedLouvores as louvor (getLouvorKey(louvor))}
+            <LouvorCard {louvor} />
+          {/each}
+        </div>
+        
+        <!-- Pagination Controls (Bottom) -->
+        <div class="pagination-controls">
+          <div class="pagination-info">
+            Página <strong>{currentPage}</strong> de <strong>{totalPages}</strong>
+          </div>
       </div>
     {:else if $louvores.length > 0}
       <p class="text-center mt-8 no-results-message">Nenhum louvor encontrado com os filtros selecionados.</p>
@@ -453,6 +459,13 @@
     border-top: 2px solid var(--gold-color);
     gap: 1rem;
     flex-wrap: wrap;
+  }
+  
+  .pagination-controls-top {
+    padding-top: 0;
+    border-top: none;
+    padding-bottom: 1rem;
+    border-bottom: 2px solid var(--gold-color);
   }
   
   .pagination-info {
