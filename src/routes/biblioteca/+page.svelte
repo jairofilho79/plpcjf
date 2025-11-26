@@ -285,7 +285,7 @@
 </script>
 
 <svelte:head>
-  <title>Biblioteca - PLPC</title>
+  <title>Biblioteca</title>
 </svelte:head>
 
 <div class="max-w-6xl mx-auto">

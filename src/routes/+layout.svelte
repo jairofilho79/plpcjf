@@ -130,7 +130,7 @@
               aria-label="Ir para página principal"
             >
               <h1 class="text-center py-4 text-3xl font-garamond font-bold text-placeholder-color tracking-wide" style="text-shadow: 1px 1px 2px rgba(0,0,0,0.3);">
-                PLPC
+                PLPCG
               </h1>
             </button>
           </div>

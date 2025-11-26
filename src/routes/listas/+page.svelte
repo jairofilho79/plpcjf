@@ -221,7 +221,7 @@
 </script>
 
 <svelte:head>
-  <title>Listas - PLPC</title>
+  <title>Listas</title>
 </svelte:head>
 
   <div class="max-w-4xl mx-auto">

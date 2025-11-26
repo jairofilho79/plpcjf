@@ -1271,7 +1271,7 @@
     preventDefault={true}
     preventClickOnLongPress={true}
   >
-    <div class="brand">PLPC</div>
+    <div class="brand">PLPCG</div>
   </GestureButton>
 
   <div class="title-wrap">

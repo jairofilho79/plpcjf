@@ -1210,7 +1210,7 @@
 </script>
 
 <svelte:head>
-  <title>Modo Offline - PLPC</title>
+  <title>Modo Offline</title>
 </svelte:head>
 
 <div class="max-w-4xl mx-auto">

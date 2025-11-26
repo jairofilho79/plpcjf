@@ -2,7 +2,7 @@
 </script>
 
 <svelte:head>
-  <title>Sobre - PLPC</title>
+  <title>Sobre</title>
 </svelte:head>
 
 <div class="max-w-4xl mx-auto">
