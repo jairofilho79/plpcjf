@@ -562,6 +562,97 @@
           <div class="pagination-info">
             Página <strong>{currentPage}</strong> de <strong>{totalPages}</strong>
           </div>
+          
+          <div class="pagination-controls-right">
+            <div class="items-per-page-selector">
+              <span class="items-per-page-label">Itens por página:</span>
+              <div class="items-per-page-wrapper" bind:this={itemsPerPageButtonElement}>
+                <button
+                  type="button"
+                  class="items-per-page-button"
+                  on:click={(e) => {
+                    e.stopPropagation();
+                    itemsPerPageMenuOpen = !itemsPerPageMenuOpen;
+                  }}
+                  aria-label="Alterar itens por página"
+                >
+                  {$bibliotecaItemsPerPage}
+                </button>
+                {#if itemsPerPageMenuOpen}
+                  <div class="items-per-page-menu">
+                    {#each VALID_OPTIONS as option}
+                      <button
+                        type="button"
+                        class="items-per-page-option"
+                        class:active={$bibliotecaItemsPerPage === option}
+                        on:click={(e) => {
+                          e.stopPropagation();
+                          bibliotecaItemsPerPage.set(option);
+                          itemsPerPageMenuOpen = false;
+                          scrollToLouvores();
+                        }}
+                      >
+                        {option}
+                      </button>
+                    {/each}
+                  </div>
+                {/if}
+              </div>
+            </div>
+            
+            <div class="pagination-input-group">
+              <GestureButton
+                on:click={previousPage}
+                on:longpress={goToFirstPage}
+                longPressDuration={500}
+                hapticFeedback={true}
+                preventDefault={true}
+              >
+                <button
+                  type="button"
+                  class="pagination-button"
+                  disabled={currentPage === 1}
+                  title="Página anterior (long press para primeira página)"
+                >
+                  <ChevronLeft class="w-5 h-5" />
+                </button>
+              </GestureButton>
+              
+              <input
+                type="number"
+                class="pagination-input"
+                bind:value={pageInput}
+                on:input={handlePageInput}
+                on:keydown={handlePageInputKeydown}
+                on:blur={() => {
+                  const pageNum = parseInt(pageInput, 10);
+                  if (isNaN(pageNum) || pageNum < 1 || pageNum > totalPages) {
+                    pageInput = currentPage.toString();
+                  }
+                }}
+                min="1"
+                max={totalPages}
+                aria-label="Número da página"
+              />
+              
+              <GestureButton
+                on:click={nextPage}
+                on:longpress={goToLastPage}
+                longPressDuration={500}
+                hapticFeedback={true}
+                preventDefault={true}
+              >
+                <button
+                  type="button"
+                  class="pagination-button"
+                  disabled={currentPage === totalPages}
+                  title="Próxima página (long press para última página)"
+                >
+                  <ChevronRight class="w-5 h-5" />
+                </button>
+              </GestureButton>
+            </div>
+          </div>
         </div>
 
         <!-- End louvores container -->
@@ -600,6 +691,7 @@
     display: flex;
     flex-direction: column;
     gap: 0.5rem;
+    margin-top: 1.5rem;
     margin-bottom: 1.5rem;
   }
   
