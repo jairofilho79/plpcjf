@@ -413,6 +413,9 @@
           <div class="pagination-info">
             Página <strong>{currentPage}</strong> de <strong>{totalPages}</strong>
           </div>
+        </div>
+
+        <!-- End louvores container -->
       </div>
     {:else if $louvores.length > 0}
       <p class="text-center mt-8 no-results-message">Nenhum louvor encontrado com os filtros selecionados.</p>
