@@ -180,6 +180,25 @@
     }
   }
 
+  // Track previous available arrangements length to detect appearance/disappearance
+  let previousAvailableLength = 0;
+
+  // Clear special arrangements when they become unavailable
+  // Auto-select all when they become available
+  $: {
+    const currentLength = availableSpecialArrangements.length;
+    
+    if (currentLength === 0) {
+      // Clear selections when component disappears
+      selectedSpecialArrangements = [];
+    } else if (previousAvailableLength === 0 && currentLength > 0) {
+      // Auto-select all when component appears/reappears
+      selectedSpecialArrangements = [...availableSpecialArrangements];
+    }
+    
+    previousAvailableLength = currentLength;
+  }
+
   // Final filtered list (refined by Arranjo Especial if applicable)
   $: filteredLouvores = (() => {
     if (!classificationFilteredLouvores || classificationFilteredLouvores.length === 0) {
