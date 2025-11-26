@@ -8,6 +8,7 @@
   import { bibliotecaItemsPerPage, VALID_OPTIONS } from '$lib/stores/bibliotecaItemsPerPage';
   import { pdfViewer } from '$lib/stores/pdfViewer';
   import ClassificationFilters from '$lib/components/ClassificationFilters.svelte';
+  import SpecialArrangementFilters from '$lib/components/SpecialArrangementFilters.svelte';
   import CategoryFilters from '$lib/components/CategoryFilters.svelte';
   import SortSelector from '$lib/components/SortSelector.svelte';
   import PdfViewerSelector from '$lib/components/PdfViewerSelector.svelte';
@@ -22,6 +23,28 @@
   function normalizeClassification(classification) {
     if (!classification) return '';
     return classification.replace(/\([^)]*\)/g, '').trim();
+  }
+
+  // Extract special arrangement text from parentheses, or return "Padrão"
+  /**
+   * @param {string} classification
+   * @param {string} baseNormalized
+   */
+  function extractSpecialArrangement(classification, baseNormalized) {
+    if (!classification) return 'Padrão';
+    
+    // Check if this classification matches the base normalized classification
+    const normalized = normalizeClassification(classification);
+    if (normalized !== baseNormalized) return null;
+    
+    // Extract text from parentheses
+    const match = classification.match(/\(([^)]+)\)/);
+    if (match && match[1]) {
+      return match[1].trim();
+    }
+    
+    // No parentheses found, return "Padrão"
+    return 'Padrão';
   }
   
   // Expand category filter: if "Cifra" is selected, include "Cifra nível I" and "Cifra nível II"
@@ -43,53 +66,128 @@
     .filter(c => c)
     .filter((c, index, arr) => arr.indexOf(c) === index)
     .sort();
-  
-  // Filter louvores based on selected categories and classifications (inclusive filter)
-  // If no filters selected, show nothing. If all filters selected, show all louvores
-  $: filteredLouvores = (() => {
-    if (!$louvores || $louvores.length === 0) return [];
+
+  // Selected classifications (Arranjo)
+  $: selectedClassifications = $classificationFilters;
+  $: activeClassification = selectedClassifications.length === 1 ? selectedClassifications[0] : null;
+
+  // Calculate available special arrangements based on active classification
+  $: availableSpecialArrangements = (() => {
+    if (!activeClassification || !classificationFilteredLouvores || classificationFilteredLouvores.length === 0) {
+      return [];
+    }
+
+    const specialArrangements = new Set();
     
-    // First, apply category filter (with inclusive logic for Cifra)
+    for (const louvor of classificationFilteredLouvores) {
+      if (!louvor.classificacao) continue;
+      
+      const special = extractSpecialArrangement(louvor.classificacao, activeClassification);
+      if (special !== null) {
+        specialArrangements.add(special);
+      }
+    }
+    
+    return Array.from(specialArrangements).sort();
+  })();
+
+  // Filter louvores based on selected categories (inclusive filter for Cifra)
+  // If no categories selected, show nothing. If all categories selected, keep all louvores
+  $: categoryFilteredLouvores = (() => {
+    if (!$louvores || $louvores.length === 0) return [];
+
     const activeCategories = $filters;
     const allCategoriesSelected = activeCategories.length === CATEGORY_OPTIONS.length;
-    
+
     // If no categories selected, show nothing (not all)
     if (activeCategories.length === 0) {
       return [];
     }
-    
-    let categoryFiltered = $louvores;
-    if (!allCategoriesSelected && activeCategories.length > 0) {
-      // Expand "Cifra" to include "Cifra nível I" and "Cifra nível II"
-      const expandedCategories = expandCategoryFilter(activeCategories);
-      categoryFiltered = $louvores.filter(louvor => {
-        if (!louvor.categoria) return false;
-        return expandedCategories.includes(louvor.categoria);
-      });
+
+    if (allCategoriesSelected) {
+      return $louvores;
     }
-    
-    // Then, apply classification filter
+
+    // Expand "Cifra" to include "Cifra nível I" and "Cifra nível II"
+    const expandedCategories = expandCategoryFilter(activeCategories);
+    return $louvores.filter(louvor => {
+      if (!louvor.categoria) return false;
+      return expandedCategories.includes(louvor.categoria);
+    });
+  })();
+
+  // Filter louvores based on Arranjo (classificação normalizada)
+  // If no filters selected, show nothing. If all filters selected, show all category-filtered louvores
+  $: classificationFilteredLouvores = (() => {
+    if (!categoryFilteredLouvores || categoryFilteredLouvores.length === 0) return [];
+
     const selectedFilters = $classificationFilters;
-    
+
     // If no classification filters selected, show nothing (not all)
     if (selectedFilters.length === 0) {
       return [];
     }
-    
+
     // If all unique normalized classifications are selected, return category-filtered results
-    const allSelected = uniqueNormalizedClassifications.length > 0 &&
-                       selectedFilters.length === uniqueNormalizedClassifications.length &&
-                       uniqueNormalizedClassifications.every(c => selectedFilters.includes(c));
-    
+    const allSelected =
+      uniqueNormalizedClassifications.length > 0 &&
+      selectedFilters.length === uniqueNormalizedClassifications.length &&
+      uniqueNormalizedClassifications.every(c => selectedFilters.includes(c));
+
     if (allSelected) {
-      return categoryFiltered;
+      return categoryFilteredLouvores;
     }
-    
+
     // Otherwise, filter by selected classifications
-    return categoryFiltered.filter(louvor => {
+    return categoryFilteredLouvores.filter(louvor => {
       if (!louvor.classificacao) return false;
       const normalized = normalizeClassification(louvor.classificacao);
       return selectedFilters.includes(normalized);
+    });
+  })();
+
+  // State for selected special arrangements
+  /**
+   * @type {string[]}
+   */
+  let selectedSpecialArrangements = [];
+
+  // Reset special arrangements when active classification changes
+  /**
+   * @type {string | null}
+   */
+  let previousActiveClassification = null;
+  $: {
+    if (activeClassification !== previousActiveClassification) {
+      // Reset selections when switching to a different classification
+      selectedSpecialArrangements = [];
+      previousActiveClassification = activeClassification;
+    } else if (!activeClassification) {
+      // No active classification, reset
+      selectedSpecialArrangements = [];
+      previousActiveClassification = null;
+    }
+  }
+
+  // Final filtered list (refined by Arranjo Especial if applicable)
+  $: filteredLouvores = (() => {
+    if (!classificationFilteredLouvores || classificationFilteredLouvores.length === 0) {
+      return [];
+    }
+
+    // If no special arrangements selected, return all classification-filtered louvores
+    if (selectedSpecialArrangements.length === 0) {
+      return classificationFilteredLouvores;
+    }
+
+    // Filter by selected special arrangements
+    return classificationFilteredLouvores.filter(louvor => {
+      if (!louvor.classificacao || !activeClassification) return false;
+      
+      const special = extractSpecialArrangement(louvor.classificacao, activeClassification);
+      if (special === null) return false;
+      
+      return selectedSpecialArrangements.includes(special);
     });
   })();
   
@@ -282,6 +380,35 @@
   function getLouvorKey(louvor) {
     return louvor.pdfId || '';
   }
+
+  // Handlers for Special Arrangement Filters
+  /**
+   * @param {CustomEvent<{ item: string }>} event
+   */
+  function handleSpecialArrangementToggle(event) {
+    const item = event.detail.item;
+    selectedSpecialArrangements = selectedSpecialArrangements.includes(item)
+      ? selectedSpecialArrangements.filter(sa => sa !== item)
+      : [...selectedSpecialArrangements, item];
+  }
+
+  /**
+   * @param {CustomEvent<{ item: string }>} event
+   */
+  function handleSpecialArrangementSelectOnly(event) {
+    selectedSpecialArrangements = [event.detail.item];
+  }
+
+  /**
+   * @param {CustomEvent<{ items: string[] }>} event
+   */
+  function handleSpecialArrangementSelectAll(event) {
+    selectedSpecialArrangements = [...event.detail.items];
+  }
+
+  function handleSpecialArrangementDeselectAll() {
+    selectedSpecialArrangements = [];
+  }
 </script>
 
 <svelte:head>
@@ -293,6 +420,17 @@
     <CategoryFilters />
     
     <ClassificationFilters availableClassifications={$louvores.map(l => l.classificacao).filter(c => c)} />
+    
+    {#if activeClassification && availableSpecialArrangements.length > 0}
+      <SpecialArrangementFilters
+        available={availableSpecialArrangements}
+        selected={selectedSpecialArrangements}
+        on:toggle={handleSpecialArrangementToggle}
+        on:selectOnly={handleSpecialArrangementSelectOnly}
+        on:selectAll={handleSpecialArrangementSelectAll}
+        on:deselectAll={handleSpecialArrangementDeselectAll}
+      />
+    {/if}
     
     <SortSelector />
     
