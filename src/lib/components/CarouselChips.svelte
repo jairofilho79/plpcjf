@@ -134,7 +134,7 @@
           const subtituloText = `${louvor.categoria || ''} | ${louvor.classificacao || ''}`.trim();
           const subtituloParam = encodeURIComponent(subtituloText);
           const url = `/leitor?file=${fileParam}&titulo=${tituloParam}&subtitulo=${subtituloParam}&validated=true`;
-          window.open(url, '_blank', 'noopener');
+          goto(url);
           checkingPdfId = null;
           return;
         }
@@ -196,7 +196,7 @@
           const subtituloText = `${louvor.categoria || ''} | ${louvor.classificacao || ''}`.trim();
           const subtituloParam = encodeURIComponent(subtituloText);
           const url = `/leitor?file=${fileParam}&titulo=${tituloParam}&subtitulo=${subtituloParam}&validated=true`;
-          window.open(url, '_blank', 'noopener');
+          goto(url);
         }
       } catch (err) {
         console.error('Erro ao validar PDF:', err);
@@ -206,7 +206,7 @@
         const subtituloText = `${louvor.categoria || ''} | ${louvor.classificacao || ''}`.trim();
         const subtituloParam = encodeURIComponent(subtituloText);
         const url = `/leitor?file=${fileParam}&titulo=${tituloParam}&subtitulo=${subtituloParam}`;
-        window.open(url, '_blank', 'noopener');
+        goto(url);
       } finally {
         checkingPdfId = null;
       }

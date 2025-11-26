@@ -1,6 +1,7 @@
 // Offline Store - Manages offline mode state and PDF caching
 import { writable, derived, get } from 'svelte/store';
 import { browser } from '$app/environment';
+import { goto } from '$app/navigation';
 import {
   downloadPDFsViaSW,
   cancelDownload as cancelDownloadSW,
@@ -1730,7 +1731,7 @@ async function startZipDownload(categories, pdfUrls, alreadyDownloadedCategories
       if (!isLeitorOffline || isLeitorOffline !== 'true') {
         // Open offline-setup.pdf in leitor to set the flag
         const leitorUrl = '/leitor?file=/offline-setup.pdf&titulo=Configuração Offline&subtitulo=Página de funcionamento';
-        window.open(leitorUrl, '_blank', 'noopener');
+        goto(leitorUrl);
       }
     }
   } catch (error) {
@@ -1869,8 +1870,9 @@ async function downloadByCategories(categories) {
   const isLeitorOffline = localStorage.getItem('IS_LEITOR_OFFLINE');
   if (!isLeitorOffline || isLeitorOffline !== 'true') {
     // Open offline-setup.pdf in leitor to set the flag
+    // Use Safari-compatible navigation
     const leitorUrl = '/leitor?file=/offline-setup.pdf&titulo=Configuração Offline&subtitulo=Página de funcionamento';
-    window.open(leitorUrl, '_blank', 'noopener');
+    navigateToRoute(leitorUrl, { newTab: true });
   }
 
   // NOVA LÓGICA: Obter manifest e identificar lotes necessários

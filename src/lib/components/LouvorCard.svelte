@@ -10,6 +10,7 @@
     buildOnlineReaderUrl, 
     openPdfNewTabOfflineFirst 
   } from '$lib/utils/pdfUtils';
+  import { goto } from '$app/navigation';
   import { carousel } from '$lib/stores/carousel';
   import { pdfViewer } from '$lib/stores/pdfViewer';
   import { isPdfAvailableInIndex } from '$lib/utils/pdfIndex';
@@ -73,7 +74,7 @@
           const subtituloText = `${louvor.categoria || ''} | ${louvor.classificacao || ''}`.trim();
           const subtituloParam = encodeURIComponent(subtituloText);
           const url = `/leitor?file=${fileParam}&titulo=${tituloParam}&subtitulo=${subtituloParam}&validated=true`;
-          window.open(url, '_blank', 'noopener');
+          goto(url);
           isCheckingAvailability = false;
           return;
         }
@@ -133,7 +134,7 @@
           const subtituloText = `${louvor.categoria || ''} | ${louvor.classificacao || ''}`.trim();
           const subtituloParam = encodeURIComponent(subtituloText);
           const url = `/leitor?file=${fileParam}&titulo=${tituloParam}&subtitulo=${subtituloParam}&validated=true`;
-          window.open(url, '_blank', 'noopener');
+          goto(url);
         }
       } catch (err) {
         console.error('Erro ao validar PDF:', err);
@@ -144,7 +145,7 @@
         const subtituloText = `${louvor.categoria || ''} | ${louvor.classificacao || ''}`.trim();
         const subtituloParam = encodeURIComponent(subtituloText);
         const url = `/leitor?file=${fileParam}&titulo=${tituloParam}&subtitulo=${subtituloParam}`;
-        window.open(url, '_blank', 'noopener');
+        goto(url);
       } finally {
         isCheckingAvailability = false;
       }
