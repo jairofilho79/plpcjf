@@ -330,6 +330,27 @@ export async function clearCache() {
 }
 
 /**
+ * Clear a specific PDF entry from the Service Worker PDF cache
+ * to force a refetch from the network on the next request.
+ *
+ * @param {string} pdfPath - PDF path (e.g., "assets/ColAdultos/000.pdf" or "/assets/ColAdultos/000.pdf")
+ * @returns {Promise<{ pdfPath: string, removedCount: number } | void>}
+ */
+export async function clearPdfFromSwCache(pdfPath) {
+  try {
+    const response = await sendMessageToSW({
+      type: 'CLEAR_PDF_CACHE_ENTRY',
+      data: { pdfPath }
+    });
+
+    return response;
+  } catch (error) {
+    console.error('[SW Message] Failed to clear PDF cache entry:', error);
+    throw error;
+  }
+}
+
+/**
  * Check if service worker is ready
  * @returns {boolean}
  */

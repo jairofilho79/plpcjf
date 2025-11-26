@@ -8,6 +8,7 @@
   import { carousel } from '$lib/stores/carousel';
   import { getPdfRelPath } from '$lib/utils/pathUtils';
   import { loadPdfJsComplete, loadPdfJsViewer } from '$lib/utils/pdfjsLoader';
+  import { clearPdfFromSwCache } from '$lib/utils/swRegistration';
 
   // Type for PDF.js getDocument function
   type PDFJSGetDocument = (options: { url: string; withCredentials?: boolean }) => {
@@ -285,6 +286,24 @@
       pdfError = null;
     } catch (error) {
       console.error('[Leitor] Erro ao carregar PDF:', error);
+
+      // Detect InvalidPDFException and force SW to drop cached entry,
+      // so the next attempts will refetch from the network (R2)
+      const errorName = (error as any)?.name || '';
+      const errorMessage = String(error || '');
+      const isInvalidPdf =
+        errorName === 'InvalidPDFException' ||
+        errorMessage.includes('InvalidPDF') ||
+        errorMessage.includes('Invalid PDF');
+
+      if (isInvalidPdf && typeof navigator !== 'undefined' && navigator.onLine) {
+        try {
+          console.warn('[Leitor] Invalid PDF detected, clearing SW cache for refetch:', pdfPath);
+          await clearPdfFromSwCache(pdfPath);
+        } catch (clearErr) {
+          console.warn('[Leitor] Falha ao limpar entrada de cache do PDF no SW:', clearErr);
+        }
+      }
       
       // Try fallback variations if original URL failed
       // Try variations of the URL (all using original path, no normalization)

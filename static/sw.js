@@ -499,6 +499,10 @@ self.addEventListener('message', (event) => {
     case 'CLEAR_CACHE':
       handleClearCache(event);
       break;
+
+    case 'CLEAR_PDF_CACHE_ENTRY':
+      handleClearPdfCacheEntry(event, data);
+      break;
     
     case 'SKIP_WAITING':
       self.skipWaiting();
@@ -655,6 +659,73 @@ async function handleGetCachedPDFs(event) {
       type: 'ERROR',
       error: err.message
     });
+  }
+}
+
+// Clear a specific PDF entry from the PDF cache to force refetch from network
+async function handleClearPdfCacheEntry(event, data) {
+  const pdfPath = data?.pdfPath || data?.url || data?.path;
+
+  if (!pdfPath || typeof pdfPath !== 'string') {
+    if (event.ports && event.ports[0]) {
+      event.ports[0].postMessage({
+        type: 'ERROR',
+        error: 'Invalid pdfPath for CLEAR_PDF_CACHE_ENTRY'
+      });
+    }
+    return;
+  }
+
+  try {
+    const cache = await caches.open(PDF_CACHE);
+    const requests = await cache.keys();
+
+    const normalizedTarget = normalizePdfPathForCache(pdfPath);
+    let removedCount = 0;
+
+    await Promise.all(
+      requests.map(async (req) => {
+        try {
+          const url = new URL(req.url);
+          const reqPathname = url.pathname || '';
+          const normalizedReqPath = normalizePdfPathForCache(reqPathname);
+
+          if (normalizedReqPath === normalizedTarget) {
+            const deleted = await cache.delete(req);
+            if (deleted) {
+              removedCount++;
+            }
+          }
+        } catch {
+          // Ignore malformed URLs
+        }
+      })
+    );
+
+    console.log('[SW] Cleared PDF cache entry for', pdfPath, '- removed', removedCount, 'entries');
+
+    // Notify clients that cache was updated after clearing a specific entry
+    notifyClientsCacheUpdated({
+      source: 'clear-pdf-entry',
+      pdfPath,
+      removedCount
+    });
+
+    if (event.ports && event.ports[0]) {
+      event.ports[0].postMessage({
+        type: 'PDF_CACHE_ENTRY_CLEARED',
+        pdfPath,
+        removedCount
+      });
+    }
+  } catch (err) {
+    console.error('[SW] Error clearing PDF cache entry for', pdfPath, err);
+    if (event.ports && event.ports[0]) {
+      event.ports[0].postMessage({
+        type: 'ERROR',
+        error: err.message || 'Failed to clear PDF cache entry'
+      });
+    }
   }
 }
 
