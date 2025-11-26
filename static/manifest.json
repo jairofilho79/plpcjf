@@ -1,9 +1,9 @@
 {
-  "name": "Pesquisador de Louvores em Partitura e Cifra",
-  "short_name": "PLPC",
-  "description": "Pesquisador e visualizador offline de partituras de louvores",
+  "name": "Pesquisador de Louvores em Partitura, Cifra e Gestinhos",
+  "short_name": "PLPCG",
+  "description": "Pesquisador e visualizador online e offline de partituras, cifras e gestinhos de louvores da Igreja Cristâ Maranata (Não Oficial)",
   "start_url": "/",
-  "display": "browser",
+  "display": "standalone",
   "background_color": "#ffffff",
   "theme_color": "#D4AF37",
   "orientation": "any",
@@ -21,7 +21,7 @@
       "purpose": "any maskable"
     }
   ],
-  "categories": ["music", "utilities"],
+  "categories": ["music", "utilities", "worship", "praise", "MCC", "ICM", "louvor", "coletanea"],
   "screenshots": [],
   "shortcuts": []
 }
