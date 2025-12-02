@@ -7,6 +7,8 @@
   import { louvores, loadLouvores, louvoresLoaded } from '$lib/stores/louvores';
   import OfflineRequirementsAlert from '$lib/components/OfflineRequirementsAlert.svelte';
   import OfflineIndicator from '$lib/components/OfflineIndicator.svelte';
+  import ErrorModal from '$lib/components/ErrorModal.svelte';
+  import { downloadMissingPdfs } from '$lib/utils/missingPdfsDownloader.js';
   import { setupCacheSync, onCacheSync, checkCacheVersionChanged, updateCacheVersion } from '$lib/utils/cacheSync';
   import { clearPdfIndex } from '$lib/utils/pdfIndex';
   import {
@@ -31,6 +33,12 @@
   const OFFLINE_AVAILABLE_KEY = 'OFFLINE_AVAILABLE';
   let offlineAvailable = false;
   let isClearingCache = false;
+
+  // Error modal state
+  let showErrorModal = false;
+  let errorTitle = 'Erro';
+  let errorMessage = '';
+  let isDownloadingMissing = false;
 
   // Selected categories for download
   /**
@@ -1125,6 +1133,99 @@
   }
 
   /**
+   * Handle download of missing PDFs
+   */
+  async function handleDownloadMissingPdfs() {
+    if (isDownloadingMissing || downloading || !louvoresReady) return;
+
+    isDownloadingMissing = true;
+    showErrorModal = false;
+    errorMessage = '';
+    errorTitle = 'Erro';
+
+    try {
+      console.log('[Offline Page] Starting download of missing PDFs');
+
+      // Update offline state to show downloading
+      offline.updateState({
+        downloading: true,
+        progress: 0,
+        completed: 0,
+        failed: 0,
+        total: 0
+      });
+
+      // Download missing PDFs
+      const result = await downloadMissingPdfs({
+        louvoresData: $louvores,
+        onProgress: (progress) => {
+          // Update offline state with progress
+          offline.updateState({
+            downloading: true,
+            progress: progress.percentage || 0,
+            completed: progress.completed || 0,
+            failed: progress.failed || 0,
+            total: progress.total || 0
+          });
+        }
+      });
+
+      // Update final state
+      offline.updateState({
+        downloading: false,
+        progress: result.total > 0 ? Math.floor((result.completed / result.total) * 100) : 100,
+        completed: result.completed,
+        failed: result.failed,
+        total: result.total
+      });
+
+      // Reload cached PDFs list to update stats
+      await offline.loadCachedPdfsList(true, false);
+
+      // Reload stats after download
+      await loadCategoryStats(true);
+
+      // Show error modal if there were errors
+      if (!result.success || result.errors.length > 0) {
+        errorTitle = 'Erro ao baixar PDFs';
+        errorMessage = result.errors.length > 0 
+          ? result.errors.join('\n')
+          : 'Alguns PDFs não puderam ser baixados.';
+        showErrorModal = true;
+      } else if (result.total === 0) {
+        // No PDFs to download
+        errorTitle = 'Informação';
+        errorMessage = 'Todos os PDFs já estão disponíveis offline.';
+        showErrorModal = true;
+      }
+    } catch (error) {
+      console.error('[Offline Page] Error downloading missing PDFs:', error);
+      
+      // Update state with error
+      offline.updateState({
+        downloading: false,
+        error: error.message || 'Erro ao baixar PDFs faltantes.'
+      });
+
+      // Show error modal
+      errorTitle = 'Erro ao baixar PDFs';
+      errorMessage = error.message || 'Ocorreu um erro ao tentar baixar os PDFs faltantes. Tente novamente.';
+      showErrorModal = true;
+    } finally {
+      isDownloadingMissing = false;
+    }
+  }
+
+  /**
+   * Close error modal
+   */
+  function closeErrorModal() {
+    showErrorModal = false;
+    errorMessage = '';
+    errorTitle = 'Erro';
+  }
+
+  /**
    * Clear all cache storage
    */
   async function clearAllCache() {
@@ -1500,20 +1601,37 @@
 
       <!-- Simplified action button -->
       <div class="action-buttons">
-        <button
-          class="btn btn-primary"
-          on:click={downloadAllCategories}
-          disabled={downloading || !louvoresReady || offlineAvailable}
-          title={!louvoresReady ? 'Aguardando carregamento dos louvores...' : offlineAvailable ? 'Conteúdo já disponível offline' : 'Baixar todas as categorias para uso offline'}
-        >
-          {#if downloading}
-            <RefreshCw class="w-5 h-5 spinning" />
-            <span>Baixando...</span>
-          {:else}
-            <Download class="w-5 h-5" />
-            <span>Disponibilizar offline</span>
-          {/if}
-        </button>
+        {#if offlineAvailable}
+          <button
+            class="btn btn-primary"
+            on:click={handleDownloadMissingPdfs}
+            disabled={downloading || isDownloadingMissing || !louvoresReady}
+            title={!louvoresReady ? 'Aguardando carregamento dos louvores...' : downloading || isDownloadingMissing ? 'Download em andamento...' : 'Baixar apenas os PDFs que estão faltando'}
+          >
+            {#if downloading || isDownloadingMissing}
+              <RefreshCw class="w-5 h-5 spinning" />
+              <span>Baixando...</span>
+            {:else}
+              <Download class="w-5 h-5" />
+              <span>Baixar PDFs faltantes</span>
+            {/if}
+          </button>
+        {:else}
+          <button
+            class="btn btn-primary"
+            on:click={downloadAllCategories}
+            disabled={downloading || !louvoresReady || offlineAvailable}
+            title={!louvoresReady ? 'Aguardando carregamento dos louvores...' : offlineAvailable ? 'Conteúdo já disponível offline' : 'Baixar todas as categorias para uso offline'}
+          >
+            {#if downloading}
+              <RefreshCw class="w-5 h-5 spinning" />
+              <span>Baixando...</span>
+            {:else}
+              <Download class="w-5 h-5" />
+              <span>Disponibilizar offline</span>
+            {/if}
+          </button>
+        {/if}
       </div>
     {:else if downloading}
       <!-- Download progress -->
@@ -1575,6 +1693,14 @@
     {/if}
   </div>
 </div>
+
+<!-- Error Modal -->
+<ErrorModal 
+  show={showErrorModal}
+  title={errorTitle}
+  message={errorMessage}
+  onClose={closeErrorModal}
+/>
 
 <style>
   .max-w-4xl {
