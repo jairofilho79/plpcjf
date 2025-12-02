@@ -119,6 +119,16 @@
   function handleSobreClick() {
     goto('/sobre');
   }
+
+  // Detectar página atual para aplicar estilos dinâmicos
+  $: isSobreActive = $page.url.pathname === '/sobre';
+  $: isBibliotecaActive = $page.url.pathname === '/biblioteca';
+  $: isHomeActive = $page.url.pathname === '/';
+  $: isOfflineActive = $page.url.pathname === '/offline';
+  $: isListasActive = $page.url.pathname === '/listas';
+  
+  // Verificar se alguma página está ativa (para aplicar estado inativo nos outros)
+  $: hasActivePage = isSobreActive || isBibliotecaActive || isHomeActive || isOfflineActive || isListasActive;
 </script>
 
 <!-- Toolbar fixa no topo (oculta no /leitor) -->
@@ -130,6 +140,8 @@
           <div class="header-left">
             <button 
               class="header-button sobre-button"
+              class:active={isSobreActive}
+              class:inactive={hasActivePage && !isSobreActive}
               on:click={handleSobreClick}
               aria-label="Sobre"
             >
@@ -137,9 +149,12 @@
                 <path stroke-linecap="round" stroke-linejoin="round" d="m11.25 11.25.041-.02a.75.75 0 0 1 1.063.852l-.708 2.836a.75.75 0 0 0 1.063.853l.041-.021M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Zm-9-3.75h.008v.008H12V8.25Z" />
               </svg>
               <span>Como Usar</span>
+              <div class="light-beam"></div>
             </button>
             <button 
               class="header-button biblioteca-button"
+              class:active={isBibliotecaActive}
+              class:inactive={hasActivePage && !isBibliotecaActive}
               on:click={() => goto('/biblioteca')}
               aria-label="Ir para Biblioteca"
             >
@@ -147,30 +162,39 @@
                 <path stroke-linecap="round" stroke-linejoin="round" d="M12 21v-8.25M15.75 21v-8.25M8.25 21v-8.25M3 9l9-6 9 6m-1.5 12V10.332A48.36 48.36 0 0 0 12 9.75c-2.551 0-5.056.2-7.5.582V21M3 21h18M12 6.75h.008v.008H12V6.75Z" />
               </svg>
               <span>Biblioteca</span>
+              <div class="light-beam"></div>
             </button>
           </div>
           <div class="header-center">
             <button 
               class="plpc-title-button"
+              class:active={isHomeActive}
+              class:inactive={hasActivePage && !isHomeActive}
               on:click={() => goto('/')}
               aria-label="Ir para página principal"
             >
               <h1 class="text-center py-4 text-3xl font-garamond font-bold text-placeholder-color tracking-wide" style="text-shadow: 1px 1px 2px rgba(0,0,0,0.3);">
                 PLPCG
               </h1>
+              <div class="light-beam"></div>
             </button>
           </div>
           <div class="header-right">
             <button 
               class="header-button offline-button"
+              class:active={isOfflineActive}
+              class:inactive={hasActivePage && !isOfflineActive}
               on:click={handleOfflineClick}
               aria-label="Offline"
             >
               <CloudOff class="icon" />
               <span>Offline</span>
+              <div class="light-beam"></div>
             </button>
             <button 
               class="header-button listas-button"
+              class:active={isListasActive}
+              class:inactive={hasActivePage && !isListasActive}
               on:click={handleListasClick}
               aria-label="Listas"
             >
@@ -178,6 +202,7 @@
                 <path stroke-linecap="round" stroke-linejoin="round" d="M3.75 12h16.5m-16.5 3.75h16.5M3.75 19.5h16.5M5.625 4.5h12.75a1.875 1.875 0 0 1 0 3.75H5.625a1.875 1.875 0 0 1 0-3.75Z" />
               </svg>
               <span>Listas</span>
+              <div class="light-beam"></div>
             </button>
           </div>
         </div>
@@ -246,7 +271,8 @@
     border: none;
     padding: 0;
     cursor: pointer;
-    transition: transform 0.2s ease;
+    transition: all 0.3s ease;
+    position: relative;
   }
   
   .plpc-title-button:hover {
@@ -256,10 +282,20 @@
   .plpc-title-button:active {
     transform: scale(1.02);
   }
+
+  .plpc-title-button.inactive {
+    opacity: 0.5;
+  }
+
+  .plpc-title-button.inactive :global(h1) {
+    font-size: 1.5rem;
+    opacity: 0.7;
+  }
   
   .header-title-section :global(h1) {
     text-align: center;
     margin: 0;
+    transition: all 0.3s ease;
   }
   
   .header-button {
@@ -274,29 +310,108 @@
     font-size: 0.875rem;
     font-weight: 500;
     cursor: pointer;
-    transition: all 0.2s ease;
+    transition: all 0.3s ease;
     opacity: 0.7;
+    position: relative;
   }
   
   .header-button:hover {
     opacity: 1;
-    box-shadow: 
-      0 2px 4px rgba(0, 0, 0, 0.3),
-      0 4px 8px rgba(0, 0, 0, 0.2),
-      inset 0 1px 0 rgba(255, 255, 255, 0.1);
-    transform: translateY(-1px);
+    font-size: 0.92rem;
+    filter: brightness(1.1);
   }
   
   .header-button:active {
-    transform: translateY(0);
-    box-shadow: 
-      0 1px 2px rgba(0, 0, 0, 0.2),
-      inset 0 1px 2px rgba(0, 0, 0, 0.1);
+    transform: scale(0.98);
+  }
+
+  /* Estado ativo - aplicar estilo PLPCG */
+  .header-button.active {
+    font-size: 1.875rem; /* text-3xl equivalente */
+    font-family: 'Garamond', serif;
+    font-weight: 700;
+    color: var(--placeholder-color);
+    text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.3);
+    opacity: 1;
+  }
+
+  .header-button.active .icon {
+    width: 1.5rem;
+    height: 1.5rem;
+    filter: brightness(1.2);
+  }
+
+  .header-button.active span {
+    font-size: 1.875rem;
+    font-family: 'Garamond', serif;
+    font-weight: 700;
+  }
+
+  /* Estado inativo - mais apagado */
+  .header-button.inactive {
+    opacity: 0.5;
+  }
+
+  .header-button.inactive .icon {
+    opacity: 0.6;
   }
   
   .header-button .icon {
     width: 1.25rem;
     height: 1.25rem;
+    transition: all 0.3s ease;
+  }
+
+  /* Feixe de luz */
+  .light-beam {
+    position: absolute;
+    bottom: -2px;
+    left: 50%;
+    transform: translateX(-50%);
+    height: 4px;
+    width: 0;
+    background: linear-gradient(to right, 
+      transparent 0%, 
+      rgba(255, 240, 160, 0.95) 15%,
+      rgba(255, 230, 120, 1) 30%,
+      rgba(255, 220, 100, 1) 50%, 
+      rgba(255, 230, 120, 1) 70%,
+      rgba(255, 240, 160, 0.95) 85%,
+      transparent 100%);
+    box-shadow: 
+      0 0 12px rgba(255, 220, 100, 1),
+      0 0 24px rgba(255, 220, 100, 0.8),
+      0 0 36px rgba(255, 220, 100, 0.6),
+      0 0 48px rgba(255, 220, 100, 0.4),
+      0 2px 8px rgba(255, 220, 100, 0.7);
+    border-radius: 50%;
+    transition: width 0.3s ease, opacity 0.3s ease, box-shadow 0.3s ease;
+    opacity: 0;
+  }
+
+  .header-button:hover .light-beam,
+  .plpc-title-button:hover .light-beam {
+    opacity: 1;
+    width: 60%;
+  }
+
+  .header-button.active .light-beam {
+    opacity: 1;
+    width: calc(100% - 2rem);
+  }
+
+  .plpc-title-button .light-beam {
+    bottom: 0.25rem;
+  }
+
+  .plpc-title-button:hover .light-beam {
+    opacity: 1;
+    width: 60%;
+  }
+
+  .plpc-title-button.active .light-beam {
+    opacity: 1;
+    width: calc(100% - 1rem);
   }
   
   
@@ -313,6 +428,19 @@
       padding: 0.375rem 0.75rem;
       font-size: 0.75rem;
     }
+
+    .header-button.active {
+      font-size: 1.25rem;
+    }
+
+    .header-button.active span {
+      font-size: 1.25rem;
+    }
+
+    .header-button.active .icon {
+      width: 1.25rem;
+      height: 1.25rem;
+    }
     
     .header-button span {
       display: none;
@@ -321,6 +449,24 @@
     .header-button .icon {
       width: 1.125rem;
       height: 1.125rem;
+    }
+
+    .plpc-title-button.inactive :global(h1) {
+      font-size: 1.25rem;
+    }
+
+    .light-beam {
+      height: 3px;
+      box-shadow: 
+        0 0 8px rgba(255, 220, 100, 1),
+        0 0 16px rgba(255, 220, 100, 0.8),
+        0 0 24px rgba(255, 220, 100, 0.6),
+        0 2px 6px rgba(255, 220, 100, 0.7);
+    }
+
+    .header-button.active .light-beam,
+    .plpc-title-button.active .light-beam {
+      width: calc(100% - 1rem);
     }
   }
   
