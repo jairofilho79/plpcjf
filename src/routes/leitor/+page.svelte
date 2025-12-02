@@ -1287,22 +1287,28 @@
     pointer-events: none;
   }
 
-  /* Zonas de navegação nas laterais */
+  /* Zonas de navegação nas laterais e centro */
   .navigation-zone {
     position: absolute;
     top: 0;
     bottom: 0;
-    width: 25%; /* Primeiro/último quarto */
     z-index: 10; /* Acima do PDF, abaixo da toolbar */
     pointer-events: none; /* Container não captura, mas filhos sim */
   }
 
   .navigation-zone.left {
     left: 0;
+    width: 25%; /* Primeiro quarto */
+  }
+
+  .navigation-zone.center {
+    left: 25%;
+    width: 50%; /* Meio da tela */
   }
 
   .navigation-zone.right {
     right: 0;
+    width: 25%; /* Último quarto */
   }
 
   .navigation-zone :global(.gesture-button-wrapper) {
@@ -1471,6 +1477,18 @@
       preventDefault={true}
     >
       <div class="touch-zone left"></div>
+    </GestureButton>
+  </div>
+
+  <!-- Zona de navegação central -->
+  <div class="navigation-zone center">
+    <GestureButton
+      on:longpress={toggleToolbar}
+      longPressDuration={500}
+      hapticFeedback={true}
+      preventDefault={true}
+    >
+      <div class="touch-zone center"></div>
     </GestureButton>
   </div>
 
