@@ -59,19 +59,37 @@
       dispatch('navigate', { louvor: prevPdf, direction: 'previous' });
     }
   }
+  
+  // Função para abrir página de listas em nova aba
+  // Funciona mesmo quando o botão está desabilitado
+  function handleOpenListas() {
+    // Tentar abrir em nova aba usando window.open
+    const newWindow = window.open('/listas', '_blank');
+    
+    // Se window.open foi bloqueado (comum em Safari mobile quando não é ação direta do usuário),
+    // criar um link temporário e clicar nele
+    if (!newWindow || newWindow.closed || typeof newWindow.closed === 'undefined') {
+      const link = document.createElement('a');
+      link.href = '/listas';
+      link.target = '_blank';
+      link.rel = 'noopener noreferrer';
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    }
+  }
 </script>
 
 <div class="carousel-navigator">
   <GestureButton
     on:click={handleNext}
-    on:longpress={handlePrevious}
+    on:longpress={handleOpenListas}
     longPressDuration={500}
     visualFeedback={true}
     hapticFeedback={true}
-    disabled={isDisabled}
     preventDefault={true}
   >
-    <div class="carousel-control">
+    <div class="carousel-control" class:disabled={isDisabled}>
       <svg 
         xmlns="http://www.w3.org/2000/svg" 
         fill="none" 
@@ -112,11 +130,16 @@
     -webkit-user-select: none;
     -moz-user-select: none;
     -ms-user-select: none;
-    transition: filter 0.2s ease;
+    transition: filter 0.2s ease, opacity 0.2s ease;
   }
   
   .carousel-control:hover {
     filter: brightness(1.05);
+  }
+  
+  .carousel-control.disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
   }
   
   .icon {
