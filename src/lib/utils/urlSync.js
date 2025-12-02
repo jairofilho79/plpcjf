@@ -64,7 +64,12 @@ export function updateUrlParams(newParams, options = {}) {
   } = options;
   
   const currentUrl = get(page);
-  const search = currentUrl.search || '';
+  if (!currentUrl || !currentUrl.url || !currentUrl.url.pathname) {
+    console.warn('updateUrlParams: currentUrl inválido', currentUrl);
+    return;
+  }
+  
+  const search = currentUrl.url.search || '';
   const currentParams = new URLSearchParams(search);
   
   // Atualizar params
@@ -135,7 +140,8 @@ export function updateUrlParams(newParams, options = {}) {
   
   // Construir nova URL
   const newSearch = currentParams.toString();
-  const newUrl = currentUrl.pathname + (newSearch ? `?${newSearch}` : '');
+  const pathname = currentUrl.url.pathname || '/';
+  const newUrl = pathname + (newSearch ? `?${newSearch}` : '');
   
   // Atualizar URL usando replaceState para não adicionar ao histórico
   goto(newUrl, { 
