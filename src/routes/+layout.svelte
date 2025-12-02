@@ -325,9 +325,10 @@
     transform: scale(0.98);
   }
 
-  /* Estado ativo - aplicar estilo PLPCG */
+  /* Estado ativo - aplicar estilo PLPCG com crescimento proporcional */
+  /* PLPCG: 1.5rem → 1.875rem = 1.25x, então: 0.875rem → 1.09375rem ≈ 1.1rem */
   .header-button.active {
-    font-size: 1.875rem; /* text-3xl equivalente */
+    font-size: 1.1rem; /* Crescimento proporcional: 0.875rem → 1.1rem = 1.257x (mesmo que PLPCG) */
     font-family: 'Garamond', serif;
     font-weight: 700;
     color: var(--placeholder-color);
@@ -336,13 +337,13 @@
   }
 
   .header-button.active .icon {
-    width: 1.5rem;
-    height: 1.5rem;
+    width: 1.375rem;
+    height: 1.375rem;
     filter: brightness(1.2);
   }
 
   .header-button.active span {
-    font-size: 1.875rem;
+    font-size: 1.1rem; /* Crescimento proporcional: 0.875rem → 1.1rem = 1.257x (mesmo que PLPCG) */
     font-family: 'Garamond', serif;
     font-weight: 700;
   }
@@ -354,6 +355,11 @@
 
   .header-button.inactive .icon {
     opacity: 0.6;
+  }
+
+  .header-button span {
+    font-size: 0.875rem; /* Tamanho base do texto (mesmo que o botão) */
+    transition: all 0.3s ease;
   }
   
   .header-button .icon {
@@ -430,11 +436,11 @@
     }
 
     .header-button.active {
-      font-size: 1.25rem;
+      font-size: 0.9375rem; /* Crescimento proporcional: 0.75rem → 0.9375rem = 1.25x */
     }
 
     .header-button.active span {
-      font-size: 1.25rem;
+      font-size: 0.9375rem; /* Crescimento proporcional: 0.75rem → 0.9375rem = 1.25x */
     }
 
     .header-button.active .icon {
