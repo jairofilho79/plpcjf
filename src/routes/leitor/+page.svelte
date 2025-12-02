@@ -1012,10 +1012,38 @@
     line-height: 1;
     color: var(--placeholder-color);
     letter-spacing: .03em; /* tracking-wide */
-    text-shadow: 1px 1px 2px rgba(0,0,0,0.3);
+    text-shadow: 2px 2px 4px rgba(0,0,0,0.5), 0 0 8px rgba(0,0,0,0.3); /* Sombra mais pronunciada para destacar */
     cursor: pointer;
     user-select: none;
     -webkit-user-select: none;
+    position: relative;
+    padding: 10px 22px 10px 30px; /* Espaço para a seta à esquerda + borda */
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+  
+  .brand::after {
+    content: '';
+    position: absolute;
+    inset: -2px;
+    background: #9d7a1a; /* Dourado mais escuro para a borda */
+    /* Seta maior para criar a borda (expandida em 2px em todas as direções) */
+    /* Como inset: -2px expande o elemento, o clip-path precisa ser ajustado */
+    clip-path: polygon(22px 0, 100% 0, 100% 100%, 22px 100%, 0 50%);
+    z-index: -2;
+    border-radius: 0 6px 6px 0;
+  }
+  
+  .brand::before {
+    content: '';
+    position: absolute;
+    inset: 2px; /* Recuar 2px para criar espaço para a borda */
+    background: var(--gold-color, #d4af37);
+    /* Seta apontando para a esquerda: triângulo à esquerda + retângulo à direita */
+    clip-path: polygon(20px 0, 100% 0, 100% 100%, 20px 100%, 0 50%);
+    z-index: -1;
+    border-radius: 0 4px 4px 0; /* Apenas cantos direitos arredondados */
   }
 
   .indicator { display: flex; align-items: center; gap: 4px; min-width: 56px; justify-content: center; }
