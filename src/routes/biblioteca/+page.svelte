@@ -225,8 +225,8 @@
         const urlParams = parseUrlParams($page.url);
         const urlHasArranjoEspecial = $page.url.search && $page.url.search.includes('arranjoEspecial=');
         
-        // Se URL não tem arranjoEspecial e não há seleção (ou seleção está vazia), selecionar todos
-        if (!urlHasArranjoEspecial && selectedSpecialArrangements.length === 0) {
+        // Se URL não tem arranjoEspecial e não há seleção, selecionar todos
+        if (!urlHasArranjoEspecial && selectedSpecialArrangements.length === 0 && availableSpecialArrangements.length > 0) {
           isUpdatingArranjoEspecialFromUrl = true;
           selectedSpecialArrangements = [...availableSpecialArrangements];
           isUpdatingArranjoEspecialFromUrl = false;
@@ -429,11 +429,20 @@
   });
   
   // Initialize filters with all classifications when URL doesn't have arranjo param
+  // Esta lógica garante que todos sejam selecionados por padrão quando não há parâmetros na URL
   $: {
-    if ($louvores.length > 0 && uniqueNormalizedClassifications.length > 0 && browser && $page && $page.url) {
-      const urlHasArranjo = $page.url.search && $page.url.search.includes('arranjo=');
-      // Se URL não tem arranjo e não há filtros selecionados, selecionar todos
-      if (!urlHasArranjo && $classificationFilters.length === 0) {
+    if (!$louvores.length || !uniqueNormalizedClassifications.length || !browser || !$page || !$page.url) {
+      return;
+    }
+    
+    const urlHasArranjo = $page.url.search && $page.url.search.includes('arranjo=');
+    
+    // Se URL não tem arranjo e não há filtros selecionados, selecionar todos
+    // Verificar se precisa inicializar comparando o estado atual
+    if (!urlHasArranjo && $classificationFilters.length === 0 && uniqueNormalizedClassifications.length > 0) {
+      // Verificar se todos já estão selecionados (pode ter sido selecionado por outra lógica)
+      const allSelected = uniqueNormalizedClassifications.every(c => $classificationFilters.includes(c));
+      if (!allSelected) {
         classificationFilters.selectAll(uniqueNormalizedClassifications);
       }
     }
