@@ -19,7 +19,7 @@
   import CarouselChips from '$lib/components/CarouselChips.svelte';
   
   // Inicializar searchQuery da URL
-  let searchQuery = browser ? (parseUrlParams($page).pesquisa || '') : '';
+  let searchQuery = browser && $page && $page.url ? (parseUrlParams($page.url).pesquisa || '') : '';
   /**
      * @type {string | any[]}
      */
@@ -33,8 +33,8 @@
   let sharedLinkProcessed = false;
   
   // Reagir a mudanças na URL para atualizar searchQuery
-  $: if (browser && !isUpdatingFromUrl) {
-    const urlParams = parseUrlParams($page);
+  $: if (browser && !isUpdatingFromUrl && $page && $page.url) {
+    const urlParams = parseUrlParams($page.url);
     if (urlParams.pesquisa !== searchQuery) {
       isUpdatingFromUrl = true;
       searchQuery = urlParams.pesquisa || '';
@@ -261,8 +261,8 @@
   // Initialize filters with all classifications on first load if URL doesn't have arranjo param
   let filtersInitialized = false;
   $: {
-    if ($louvores.length && !filtersInitialized && browser) {
-      const urlParams = parseUrlParams($page);
+    if ($louvores.length && !filtersInitialized && browser && $page && $page.url) {
+      const urlParams = parseUrlParams($page.url);
       // Se URL não tem arranjo e não há filtros selecionados, selecionar todos
       if (!urlParams.arranjo && $classificationFilters.length === 0 && uniqueNormalizedClassifications.length > 0) {
         filtersInitialized = true;

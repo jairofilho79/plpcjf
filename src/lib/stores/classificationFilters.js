@@ -6,9 +6,16 @@ import { parseUrlParams, updateUrlParams } from '$lib/utils/urlSync';
 function getInitialFilters() {
   if (!browser) return [];
   
-  const urlParams = parseUrlParams(get(page));
-  if (urlParams.arranjo && urlParams.arranjo.length > 0) {
-    return urlParams.arranjo;
+  try {
+    const currentPage = get(page);
+    if (!currentPage || !currentPage.url) return [];
+    
+    const urlParams = parseUrlParams(currentPage.url);
+    if (urlParams.arranjo && urlParams.arranjo.length > 0) {
+      return urlParams.arranjo;
+    }
+  } catch (e) {
+    console.warn('Erro ao ler filtros de classificação da URL:', e);
   }
   
   return [];
@@ -23,10 +30,10 @@ function createClassificationFiltersStore() {
   if (browser) {
     let currentValue = getInitialFilters();
     page.subscribe($page => {
-      if (isUpdatingUrl) return; // Evitar loop
+      if (isUpdatingUrl || !$page || !$page.url) return; // Evitar loop
       
-      const urlParams = parseUrlParams($page);
-      const urlHasArranjo = $page.search.includes('arranjo=');
+      const urlParams = parseUrlParams($page.url);
+      const urlHasArranjo = $page.url.search && $page.url.search.includes('arranjo=');
       const newValue = urlHasArranjo ? (urlParams.arranjo || []) : [];
       
       if (JSON.stringify(newValue.sort()) !== JSON.stringify(currentValue.sort())) {

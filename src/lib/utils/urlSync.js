@@ -32,7 +32,8 @@ export function deserializeArrayParam(param) {
  * @returns {Object}
  */
 export function parseUrlParams(url) {
-  const params = new URLSearchParams(url.search);
+  const search = url.search || '';
+  const params = new URLSearchParams(search);
   
   const comoAbrirParam = params.get('comoAbrir');
   const pesquisaParam = params.get('pesquisa');
@@ -63,7 +64,8 @@ export function updateUrlParams(newParams, options = {}) {
   } = options;
   
   const currentUrl = get(page);
-  const currentParams = new URLSearchParams(currentUrl.search);
+  const search = currentUrl.search || '';
+  const currentParams = new URLSearchParams(search);
   
   // Atualizar params
   if (newParams.materiais !== undefined) {

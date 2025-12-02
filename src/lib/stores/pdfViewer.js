@@ -9,9 +9,16 @@ const VALID_MODES = ['leitor', 'online', 'newtab', 'share', 'save'];
 function getInitialViewerMode() {
   if (!browser) return DEFAULT_VIEWER_MODE;
   
-  const urlParams = parseUrlParams(get(page));
-  if (urlParams.comoAbrir && VALID_MODES.includes(urlParams.comoAbrir)) {
-    return urlParams.comoAbrir;
+  try {
+    const currentPage = get(page);
+    if (!currentPage || !currentPage.url) return DEFAULT_VIEWER_MODE;
+    
+    const urlParams = parseUrlParams(currentPage.url);
+    if (urlParams.comoAbrir && VALID_MODES.includes(urlParams.comoAbrir)) {
+      return urlParams.comoAbrir;
+    }
+  } catch (e) {
+    console.warn('Erro ao ler modo de visualização da URL:', e);
   }
   
   return DEFAULT_VIEWER_MODE;
@@ -26,10 +33,10 @@ function createPdfViewerStore() {
   if (browser) {
     let currentValue = getInitialViewerMode();
     page.subscribe($page => {
-      if (isUpdatingUrl) return; // Evitar loop
+      if (isUpdatingUrl || !$page || !$page.url) return; // Evitar loop
       
-      const urlParams = parseUrlParams($page);
-      const urlHasComoAbrir = $page.search.includes('comoAbrir=');
+      const urlParams = parseUrlParams($page.url);
+      const urlHasComoAbrir = $page.url.search && $page.url.search.includes('comoAbrir=');
       const newValue = urlHasComoAbrir && urlParams.comoAbrir && VALID_MODES.includes(urlParams.comoAbrir)
         ? urlParams.comoAbrir
         : DEFAULT_VIEWER_MODE;

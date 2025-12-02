@@ -8,9 +8,16 @@ export const CATEGORY_OPTIONS = ['Partitura', 'Cifra', 'Gestos em Gravura'];
 function getInitialFilters() {
   if (!browser) return CATEGORY_OPTIONS;
   
-  const urlParams = parseUrlParams(get(page));
-  if (urlParams.materiais && urlParams.materiais.length > 0) {
-    return urlParams.materiais;
+  try {
+    const currentPage = get(page);
+    if (!currentPage || !currentPage.url) return CATEGORY_OPTIONS;
+    
+    const urlParams = parseUrlParams(currentPage.url);
+    if (urlParams.materiais && urlParams.materiais.length > 0) {
+      return urlParams.materiais;
+    }
+  } catch (e) {
+    console.warn('Erro ao ler filtros da URL:', e);
   }
   
   return CATEGORY_OPTIONS;
@@ -25,10 +32,10 @@ function createFiltersStore() {
   if (browser) {
     let currentValue = getInitialFilters();
     page.subscribe($page => {
-      if (isUpdatingUrl) return; // Evitar loop
+      if (isUpdatingUrl || !$page || !$page.url) return; // Evitar loop
       
-      const urlParams = parseUrlParams($page);
-      const urlHasMateriais = $page.search.includes('materiais=');
+      const urlParams = parseUrlParams($page.url);
+      const urlHasMateriais = $page.url.search && $page.url.search.includes('materiais=');
       
       if (urlHasMateriais) {
         // URL tem param materiais

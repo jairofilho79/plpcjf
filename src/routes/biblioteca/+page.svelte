@@ -162,7 +162,7 @@
   /**
    * @type {string[]}
    */
-  let selectedSpecialArrangements = browser ? (parseUrlParams($page).arranjoEspecial || []) : [];
+  let selectedSpecialArrangements = browser && $page && $page.url ? (parseUrlParams($page.url).arranjoEspecial || []) : [];
   let isUpdatingArranjoEspecialFromUrl = false;
 
   // Reset special arrangements when selected classifications change significantly
@@ -187,8 +187,8 @@
   let previousAvailableLength = 0;
 
   // Reagir a mudanças na URL para atualizar selectedSpecialArrangements
-  $: if (browser && !isUpdatingArranjoEspecialFromUrl) {
-    const urlParams = parseUrlParams($page);
+  $: if (browser && !isUpdatingArranjoEspecialFromUrl && $page && $page.url) {
+    const urlParams = parseUrlParams($page.url);
     const urlArranjoEspecial = urlParams.arranjoEspecial || [];
     // Só atualizar se for diferente e se os valores da URL são válidos (existem em availableSpecialArrangements)
     if (urlArranjoEspecial.length > 0 && availableSpecialArrangements.length > 0) {
@@ -221,8 +221,8 @@
       }
     } else if (previousAvailableLength === 0 && currentLength > 0) {
       // Auto-select all when component appears/reappears (só se URL não tem valor)
-      if (browser && !isUpdatingArranjoEspecialFromUrl) {
-        const urlParams = parseUrlParams($page);
+      if (browser && !isUpdatingArranjoEspecialFromUrl && $page && $page.url) {
+        const urlParams = parseUrlParams($page.url);
         if (!urlParams.arranjoEspecial || urlParams.arranjoEspecial.length === 0) {
           isUpdatingArranjoEspecialFromUrl = true;
           selectedSpecialArrangements = [...availableSpecialArrangements];
@@ -428,8 +428,8 @@
   
   // Initialize filters with all classifications on first load if URL doesn't have arranjo param
   $: {
-    if ($louvores.length && !filtersInitialized && browser) {
-      const urlParams = parseUrlParams($page);
+    if ($louvores.length && !filtersInitialized && browser && $page && $page.url) {
+      const urlParams = parseUrlParams($page.url);
       // Se URL não tem arranjo e não há filtros selecionados, selecionar todos
       if (!urlParams.arranjo && $classificationFilters.length === 0 && uniqueNormalizedClassifications.length > 0) {
         filtersInitialized = true;
