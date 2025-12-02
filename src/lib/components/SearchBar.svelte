@@ -4,6 +4,7 @@
   export let searchQuery = '';
   
   const dispatch = createEventDispatcher();
+  let searchInput;
   
   function handleKeydown(event) {
     if (event.key === 'Enter') {
@@ -14,6 +15,10 @@
   function clearSearch() {
     searchQuery = '';
     dispatch('clear');
+    // Focar no input após limpar para que o usuário possa continuar digitando
+    if (searchInput) {
+      searchInput.focus();
+    }
   }
 </script>
 
@@ -36,6 +41,7 @@
     
     <input
       type="text"
+      bind:this={searchInput}
       bind:value={searchQuery}
       on:keydown={handleKeydown}
       placeholder="Pesquisar louvor..."
