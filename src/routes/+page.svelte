@@ -4,7 +4,7 @@
   import { derived } from 'svelte/store';
   import { page } from '$app/stores';
   import { goto } from '$app/navigation';
-  import { louvores, loadLouvores } from '$lib/stores/louvores';
+  import { louvores, loadLouvores, louvoresLoaded } from '$lib/stores/louvores';
   import { filters, CATEGORY_OPTIONS } from '$lib/stores/filters';
   import { classificationFilters } from '$lib/stores/classificationFilters';
   import { pdfViewer } from '$lib/stores/pdfViewer';
@@ -54,18 +54,71 @@
     }
   }
   
-  onMount(() => {
-    loadLouvores();
+  let filtersInitialized = false;
+  let initTimeout = null;
+  
+  // Função para inicializar os filtros
+  function initializeFiltersIfNeeded() {
+    if (filtersInitialized || !browser || !$page || !$page.url) return;
+    if (!$louvores.length || !$louvoresLoaded) return;
     
-    // Limpar timers ao destruir componente
-    return () => {
-      if (debounceTimer) {
-        clearTimeout(debounceTimer);
-      }
-      if (searchUrlUpdateTimer) {
-        clearTimeout(searchUrlUpdateTimer);
-      }
-    };
+    const urlParams = parseUrlParams($page.url);
+    const urlHasArranjo = $page.url.search && $page.url.search.includes('arranjo=');
+    
+    // Calcular classificações únicas
+    const classifications = $louvores
+      .map(louvor => normalizeClassification(louvor.classificacao))
+      .filter(c => c)
+      .filter((c, index, arr) => arr.indexOf(c) === index)
+      .sort();
+    
+    if (classifications.length === 0) return; // Ainda não há classificações disponíveis
+    
+    // Se URL não tem arranjo e não há filtros selecionados, selecionar todos
+    if (!urlHasArranjo && $classificationFilters.length === 0) {
+      filtersInitialized = true;
+      classificationFilters.selectAll(classifications);
+    } else if (urlHasArranjo || $classificationFilters.length > 0) {
+      // Já tem parâmetro na URL ou já há filtros selecionados
+      filtersInitialized = true;
+    }
+  }
+  
+  onMount(async () => {
+    await loadLouvores();
+    
+    if (browser) {
+      // Aguardar até que os louvores estejam carregados
+      const checkAndInit = () => {
+        if ($louvoresLoaded && $louvores.length > 0 && !filtersInitialized) {
+          // Aguardar um pouco para garantir que os dados reativos estejam processados
+          if (initTimeout) clearTimeout(initTimeout);
+          initTimeout = setTimeout(() => {
+            initializeFiltersIfNeeded();
+          }, 200);
+        }
+      };
+      
+      // Verificar imediatamente se já está pronto
+      checkAndInit();
+      
+      // Também escutar mudanças
+      const unsubscribeLouvores = louvoresLoaded.subscribe(() => {
+        checkAndInit();
+      });
+      
+      // Limpar timers ao destruir componente
+      return () => {
+        unsubscribeLouvores();
+        if (initTimeout) clearTimeout(initTimeout);
+        if (debounceTimer) {
+          clearTimeout(debounceTimer);
+        }
+        if (searchUrlUpdateTimer) {
+          clearTimeout(searchUrlUpdateTimer);
+        }
+      };
+    }
   });
 
   /**
@@ -282,19 +335,11 @@
   }
   
   // Initialize filters with all classifications on first load if URL doesn't have arranjo param
-  let filtersInitialized = false;
-  $: {
-    if ($louvores.length && !filtersInitialized && browser && $page && $page.url) {
-      const urlParams = parseUrlParams($page.url);
-      // Se URL não tem arranjo e não há filtros selecionados, selecionar todos
-      if (!urlParams.arranjo && $classificationFilters.length === 0 && uniqueNormalizedClassifications.length > 0) {
-        filtersInitialized = true;
-        classificationFilters.selectAll(uniqueNormalizedClassifications);
-      } else {
-        // Filters already initialized from URL or already set
-        filtersInitialized = true;
-      }
-    }
+  // Esta lógica funciona como backup caso o onMount não execute ou os dados estejam prontos antes
+  // Usa flag para garantir que só inicialize uma vez, permitindo que usuário desselecione depois
+  $: if ($louvores.length > 0 && $louvoresLoaded && !filtersInitialized && browser && $page && $page.url) {
+    // Usar a mesma função de inicialização para garantir consistência
+    initializeFiltersIfNeeded();
   }
   
   /**
