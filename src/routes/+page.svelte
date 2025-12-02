@@ -33,12 +33,31 @@
   let sharedLinkProcessed = false;
   
   // Reagir a mudanças na URL para atualizar searchQuery
+  // Só atualiza se o valor da URL for diferente do valor atual (normalizado)
+  // E não atualiza se houver um timer ativo ou se um input estiver focado (usuário está digitando)
   $: if (browser && !isUpdatingFromUrl && $page && $page.url) {
     const urlParams = parseUrlParams($page.url);
-    if (urlParams.pesquisa !== searchQuery) {
+    const urlPesquisa = (urlParams.pesquisa || '').trim();
+    const currentPesquisa = (searchQuery || '').trim();
+    
+    // Não atualizar se houver um timer ativo (usuário está digitando)
+    if (debounceTimer || searchUrlUpdateTimer) {
+      return;
+    }
+    
+    // Não atualizar se um input estiver focado (usuário está digitando)
+    if (document.activeElement && document.activeElement.tagName === 'INPUT') {
+      return;
+    }
+    
+    // Só atualiza se realmente for diferente (evita loops)
+    if (urlPesquisa !== currentPesquisa) {
       isUpdatingFromUrl = true;
       searchQuery = urlParams.pesquisa || '';
-      isUpdatingFromUrl = false;
+      // Usar setTimeout para garantir que a flag seja resetada após a atualização
+      setTimeout(() => {
+        isUpdatingFromUrl = false;
+      }, 0);
     }
   }
   
@@ -228,7 +247,7 @@
   
   // Debounce: Aguarda 300ms após o usuário parar de digitar antes de pesquisar
   // Isso evita que a pesquisa bloqueie a digitação
-  $: if (searchQuery !== undefined && !isUpdatingFromUrl) {
+  $: if (searchQuery !== undefined && !isUpdatingFromUrl && browser) {
     $filters;
     $classificationFilters;
     
@@ -238,24 +257,35 @@
     }
     
     // Criar novo timer para executar a pesquisa após 300ms
-    if (browser) {
-      debounceTimer = setTimeout(() => {
-        filterLouvores();
-      }, 300);
-      
-      // Atualizar URL com debounce também (500ms para evitar muitas atualizações)
-      if (searchUrlUpdateTimer) {
-        clearTimeout(searchUrlUpdateTimer);
-      }
-      searchUrlUpdateTimer = setTimeout(() => {
-        if (!isUpdatingFromUrl) {
-          updateUrlParams({ pesquisa: searchQuery });
-        }
-      }, 500);
-    } else {
-      // No servidor, executar diretamente
+    debounceTimer = setTimeout(() => {
       filterLouvores();
+    }, 300);
+    
+    // Atualizar URL com debounce também (500ms para evitar muitas atualizações)
+    // Só atualiza se o valor for diferente do que está na URL
+    if (searchUrlUpdateTimer) {
+      clearTimeout(searchUrlUpdateTimer);
     }
+    searchUrlUpdateTimer = setTimeout(() => {
+      if (!isUpdatingFromUrl) {
+        const urlParams = parseUrlParams($page.url);
+        const urlPesquisa = (urlParams.pesquisa || '').trim();
+        const currentPesquisa = (searchQuery || '').trim();
+        
+        // Só atualiza a URL se o valor realmente mudou
+        if (urlPesquisa !== currentPesquisa) {
+          isUpdatingFromUrl = true;
+          updateUrlParams({ pesquisa: searchQuery });
+          // Resetar flag após um pequeno delay para permitir que a URL seja atualizada
+          setTimeout(() => {
+            isUpdatingFromUrl = false;
+          }, 100);
+        }
+      }
+    }, 500);
+  } else if (!browser) {
+    // No servidor, executar diretamente
+    filterLouvores();
   }
   
   // Initialize filters with all classifications on first load if URL doesn't have arranjo param
