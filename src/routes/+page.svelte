@@ -34,24 +34,17 @@
   
   // Reagir a mudanças na URL para atualizar searchQuery
   // Só atualiza se o valor da URL for diferente do valor atual (normalizado)
-  // E não atualiza se houver um timer ativo ou se um input estiver focado (usuário está digitando)
+  // E não atualiza se um input estiver focado (usuário está digitando)
   $: if (browser && !isUpdatingFromUrl && $page && $page.url) {
     const urlParams = parseUrlParams($page.url);
     const urlPesquisa = (urlParams.pesquisa || '').trim();
     const currentPesquisa = (searchQuery || '').trim();
     
-    // Não atualizar se houver um timer ativo (usuário está digitando)
-    if (debounceTimer || searchUrlUpdateTimer) {
-      return;
-    }
-    
     // Não atualizar se um input estiver focado (usuário está digitando)
-    if (document.activeElement && document.activeElement.tagName === 'INPUT') {
-      return;
-    }
+    const inputFocused = browser && document.activeElement && document.activeElement.tagName === 'INPUT';
     
-    // Só atualiza se realmente for diferente (evita loops)
-    if (urlPesquisa !== currentPesquisa) {
+    // Só atualiza se o valor realmente for diferente E nenhum input estiver focado
+    if (urlPesquisa !== currentPesquisa && !inputFocused) {
       isUpdatingFromUrl = true;
       searchQuery = urlParams.pesquisa || '';
       // Usar setTimeout para garantir que a flag seja resetada após a atualização

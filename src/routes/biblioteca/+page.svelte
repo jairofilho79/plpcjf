@@ -219,11 +219,14 @@
           updateUrlParams({ arranjoEspecial: [] });
         }
       }
-    } else if (previousAvailableLength === 0 && currentLength > 0) {
-      // Auto-select all when component appears/reappears (só se URL não tem valor)
+    } else if (currentLength > 0) {
+      // Auto-select all when available arrangements exist (só se URL não tem valor e não há seleção)
       if (browser && !isUpdatingArranjoEspecialFromUrl && $page && $page.url) {
         const urlParams = parseUrlParams($page.url);
-        if (!urlParams.arranjoEspecial || urlParams.arranjoEspecial.length === 0) {
+        const urlHasArranjoEspecial = $page.url.search && $page.url.search.includes('arranjoEspecial=');
+        
+        // Se URL não tem arranjoEspecial e não há seleção (ou seleção está vazia), selecionar todos
+        if (!urlHasArranjoEspecial && selectedSpecialArrangements.length === 0) {
           isUpdatingArranjoEspecialFromUrl = true;
           selectedSpecialArrangements = [...availableSpecialArrangements];
           isUpdatingArranjoEspecialFromUrl = false;
@@ -397,7 +400,6 @@
     }
   }
   
-  let filtersInitialized = false;
   /**
    * @type {HTMLElement | null}
    */
@@ -426,17 +428,13 @@
     }
   });
   
-  // Initialize filters with all classifications on first load if URL doesn't have arranjo param
+  // Initialize filters with all classifications when URL doesn't have arranjo param
   $: {
-    if ($louvores.length && !filtersInitialized && browser && $page && $page.url) {
-      const urlParams = parseUrlParams($page.url);
+    if ($louvores.length > 0 && uniqueNormalizedClassifications.length > 0 && browser && $page && $page.url) {
+      const urlHasArranjo = $page.url.search && $page.url.search.includes('arranjo=');
       // Se URL não tem arranjo e não há filtros selecionados, selecionar todos
-      if (!urlParams.arranjo && $classificationFilters.length === 0 && uniqueNormalizedClassifications.length > 0) {
-        filtersInitialized = true;
+      if (!urlHasArranjo && $classificationFilters.length === 0) {
         classificationFilters.selectAll(uniqueNormalizedClassifications);
-      } else {
-        // Filters already initialized from URL or already set
-        filtersInitialized = true;
       }
     }
   }
