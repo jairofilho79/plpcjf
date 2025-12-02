@@ -776,6 +776,25 @@
     }, 100);
   }
   
+  // Função para navegar para a página inicial em uma nova aba
+  // Compatível com Chrome e Safari (incluindo mobile)
+  function goToHomeNewHistory() {
+    // Tentar abrir em nova aba usando window.open
+    const newWindow = window.open('/', '_blank');
+    
+    // Se window.open foi bloqueado (comum em Safari mobile quando não é ação direta do usuário),
+    // criar um link temporário e clicar nele
+    if (!newWindow || newWindow.closed || typeof newWindow.closed === 'undefined') {
+      const link = document.createElement('a');
+      link.href = '/';
+      link.target = '_blank';
+      link.rel = 'noopener noreferrer';
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    }
+  }
+  
   // Função para navegar para PDF do carousel
   function navigateToPdf(louvor: any) {
     const pdfPath = getPdfRelPath(louvor);
@@ -1333,7 +1352,7 @@
 <div class="toolbar" bind:this={toolbarEl} class:hidden={!isToolbarVisible}>
   <GestureButton
     on:click={goToHome}
-    on:longpress={toggleToolbar}
+    on:longpress={goToHomeNewHistory}
     longPressDuration={500}
     hapticFeedback={true}
     preventDefault={true}
