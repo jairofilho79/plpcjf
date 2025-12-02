@@ -430,11 +430,7 @@
   
   // Initialize filters with all classifications when URL doesn't have arranjo param
   // Esta lógica garante que todos sejam selecionados por padrão quando não há parâmetros na URL
-  $: {
-    if (!$louvores.length || !uniqueNormalizedClassifications.length || !browser || !$page || !$page.url) {
-      return;
-    }
-    
+  $: if ($louvores.length > 0 && uniqueNormalizedClassifications.length > 0 && browser && $page && $page.url) {
     const urlHasArranjo = $page.url.search && $page.url.search.includes('arranjo=');
     
     // Se URL não tem arranjo e não há filtros selecionados, selecionar todos
