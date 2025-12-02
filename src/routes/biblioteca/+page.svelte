@@ -2,7 +2,7 @@
   import { onMount, onDestroy } from 'svelte';
   import { browser } from '$app/environment';
   import { page } from '$app/stores';
-  import { louvores, loadLouvores } from '$lib/stores/louvores';
+  import { louvores, loadLouvores, louvoresLoaded } from '$lib/stores/louvores';
   import { classificationFilters } from '$lib/stores/classificationFilters';
   import { filters, CATEGORY_OPTIONS } from '$lib/stores/filters';
   import { bibliotecaSort } from '$lib/stores/bibliotecaSort';
@@ -185,6 +185,7 @@
 
   // Track previous available arrangements length to detect appearance/disappearance
   let previousAvailableLength = 0;
+  let specialArrangementsInitialized = false;
 
   // Reagir a mudanças na URL para atualizar selectedSpecialArrangements
   $: if (browser && !isUpdatingArranjoEspecialFromUrl && $page && $page.url) {
@@ -196,6 +197,7 @@
       if (JSON.stringify(validFromUrl.sort()) !== JSON.stringify(selectedSpecialArrangements.sort())) {
         isUpdatingArranjoEspecialFromUrl = true;
         selectedSpecialArrangements = validFromUrl;
+        specialArrangementsInitialized = true; // Se veio da URL, marcar como inicializado
         isUpdatingArranjoEspecialFromUrl = false;
       }
     } else if (urlArranjoEspecial.length === 0 && selectedSpecialArrangements.length > 0 && $page.pathname === '/biblioteca') {
@@ -205,7 +207,7 @@
   }
 
   // Clear special arrangements when they become unavailable
-  // Auto-select all when they become available (só se não vier da URL)
+  // Auto-select all when they become available (só se não vier da URL e não foi inicializado ainda)
   $: {
     const currentLength = availableSpecialArrangements.length;
     
@@ -214,23 +216,28 @@
       if (!isUpdatingArranjoEspecialFromUrl && selectedSpecialArrangements.length > 0) {
         isUpdatingArranjoEspecialFromUrl = true;
         selectedSpecialArrangements = [];
+        specialArrangementsInitialized = false; // Reset flag quando desaparece
         isUpdatingArranjoEspecialFromUrl = false;
         if (browser) {
           updateUrlParams({ arranjoEspecial: [] });
         }
       }
-    } else if (currentLength > 0) {
-      // Auto-select all when available arrangements exist (só se URL não tem valor e não há seleção)
-      if (browser && !isUpdatingArranjoEspecialFromUrl && $page && $page.url) {
+    } else if (currentLength > 0 && previousAvailableLength === 0) {
+      // Auto-select all when arrangements appear for the first time (só se não vier da URL e não foi inicializado)
+      if (browser && !isUpdatingArranjoEspecialFromUrl && !specialArrangementsInitialized && $page && $page.url) {
         const urlParams = parseUrlParams($page.url);
         const urlHasArranjoEspecial = $page.url.search && $page.url.search.includes('arranjoEspecial=');
         
-        // Se URL não tem arranjoEspecial e não há seleção, selecionar todos
+        // Se URL não tem arranjoEspecial e não há seleção, selecionar todos (só na primeira vez)
         if (!urlHasArranjoEspecial && selectedSpecialArrangements.length === 0 && availableSpecialArrangements.length > 0) {
           isUpdatingArranjoEspecialFromUrl = true;
           selectedSpecialArrangements = [...availableSpecialArrangements];
+          specialArrangementsInitialized = true;
           isUpdatingArranjoEspecialFromUrl = false;
           updateUrlParams({ arranjoEspecial: selectedSpecialArrangements });
+        } else if (urlHasArranjoEspecial) {
+          // Se URL tem parâmetro, marcar como inicializado
+          specialArrangementsInitialized = true;
         }
       }
     }
@@ -415,36 +422,112 @@
     }
   }
   
-  onMount(() => {
-    loadLouvores();
+  let filtersInitialized = false;
+  let initTimeout = null;
+  
+  // Função para inicializar os filtros
+  function initializeFiltersIfNeeded() {
+    if (filtersInitialized || !browser || !$page || !$page.url) return;
+    if (!$louvores.length || !$louvoresLoaded) return;
+    
+    const urlParams = parseUrlParams($page.url);
+    const urlHasArranjo = $page.url.search && $page.url.search.includes('arranjo=');
+    
+    // Calcular classificações únicas
+    const classifications = $louvores
+      .map(louvor => normalizeClassification(louvor.classificacao))
+      .filter(c => c)
+      .filter((c, index, arr) => arr.indexOf(c) === index)
+      .sort();
+    
+    if (classifications.length === 0) return; // Ainda não há classificações disponíveis
+    
+    // Se URL não tem arranjo e não há filtros selecionados, selecionar todos
+    if (!urlHasArranjo && $classificationFilters.length === 0) {
+      filtersInitialized = true;
+      // Usar setTimeout para garantir que não haja conflito com outras atualizações
+      setTimeout(() => {
+        if ($classificationFilters.length === 0 && classifications.length > 0) {
+          classificationFilters.selectAll(classifications);
+        }
+      }, 0);
+    } else if (urlHasArranjo || $classificationFilters.length > 0) {
+      // Já tem parâmetro na URL ou já há filtros selecionados
+      filtersInitialized = true;
+    }
+  }
+  
+  onMount(async () => {
+    await loadLouvores();
+    
     if (browser) {
       document.addEventListener('click', handleClickOutside);
+      
+      // Aguardar até que os louvores estejam realmente carregados e processados
+      const initFilters = () => {
+        if (filtersInitialized) return;
+        
+        const urlParams = parseUrlParams($page.url);
+        const urlHasArranjo = $page.url.search && $page.url.search.includes('arranjo=');
+        
+        // Calcular classificações únicas
+        const classifications = $louvores
+          .map(louvor => normalizeClassification(louvor.classificacao))
+          .filter(c => c)
+          .filter((c, index, arr) => arr.indexOf(c) === index)
+          .sort();
+        
+        if (classifications.length === 0) return; // Ainda não há classificações
+        
+        // Se URL não tem arranjo e não há filtros selecionados, selecionar todos
+        if (!urlHasArranjo && $classificationFilters.length === 0) {
+          filtersInitialized = true;
+          classificationFilters.selectAll(classifications);
+        } else {
+          filtersInitialized = true;
+        }
+      };
+      
+      // Aguardar até que os louvores estejam carregados
+      const checkAndInit = () => {
+        if ($louvoresLoaded && $louvores.length > 0 && !filtersInitialized) {
+          // Aguardar um pouco para garantir que os dados reativos estejam processados
+          initTimeout = setTimeout(() => {
+            initFilters();
+          }, 200);
+        }
+      };
+      
+      // Verificar imediatamente se já está pronto
+      checkAndInit();
+      
+      // Também escutar mudanças
+      const unsubscribeLouvores = louvoresLoaded.subscribe(() => {
+        checkAndInit();
+      });
+      
+      // Cleanup
+      return () => {
+        unsubscribeLouvores();
+        if (initTimeout) clearTimeout(initTimeout);
+        document.removeEventListener('click', handleClickOutside);
+      };
     }
   });
   
   onDestroy(() => {
     if (browser) {
+      if (initTimeout) clearTimeout(initTimeout);
       document.removeEventListener('click', handleClickOutside);
     }
   });
   
-  // Initialize filters with all classifications when URL doesn't have arranjo param
-  // Esta lógica garante que todos sejam selecionados por padrão quando não há parâmetros na URL
-  $: if ($louvores.length > 0 && uniqueNormalizedClassifications.length > 0 && browser && $page && $page.url) {
-    const urlHasArranjo = $page.url.search && $page.url.search.includes('arranjo=');
-    
-    // Se URL não tem arranjo e não há filtros selecionados, selecionar todos
-    if (!urlHasArranjo && $classificationFilters.length === 0) {
-      // Verificar se todos já estão selecionados antes de tentar selecionar
-      const allSelected = uniqueNormalizedClassifications.length > 0 &&
-        $classificationFilters.length === uniqueNormalizedClassifications.length &&
-        uniqueNormalizedClassifications.every(c => $classificationFilters.includes(c));
-      
-      if (!allSelected) {
-        // Selecionar todos os filtros disponíveis
-        classificationFilters.selectAll(uniqueNormalizedClassifications);
-      }
-    }
+  // Initialize filters with all classifications on first load if URL doesn't have arranjo param
+  // Esta lógica funciona como backup caso o onMount não execute ou os dados estejam prontos antes
+  // Usa flag para garantir que só inicialize uma vez, permitindo que usuário desselecione depois
+  $: if ($louvores.length > 0 && $louvoresLoaded && !filtersInitialized && browser && $page && $page.url) {
+    // Usar a mesma função de inicialização para garantir consistência
+    initializeFiltersIfNeeded();
   }
   
   /**
