@@ -434,11 +434,14 @@
     const urlHasArranjo = $page.url.search && $page.url.search.includes('arranjo=');
     
     // Se URL não tem arranjo e não há filtros selecionados, selecionar todos
-    // Verificar se precisa inicializar comparando o estado atual
-    if (!urlHasArranjo && $classificationFilters.length === 0 && uniqueNormalizedClassifications.length > 0) {
-      // Verificar se todos já estão selecionados (pode ter sido selecionado por outra lógica)
-      const allSelected = uniqueNormalizedClassifications.every(c => $classificationFilters.includes(c));
+    if (!urlHasArranjo && $classificationFilters.length === 0) {
+      // Verificar se todos já estão selecionados antes de tentar selecionar
+      const allSelected = uniqueNormalizedClassifications.length > 0 &&
+        $classificationFilters.length === uniqueNormalizedClassifications.length &&
+        uniqueNormalizedClassifications.every(c => $classificationFilters.includes(c));
+      
       if (!allSelected) {
+        // Selecionar todos os filtros disponíveis
         classificationFilters.selectAll(uniqueNormalizedClassifications);
       }
     }

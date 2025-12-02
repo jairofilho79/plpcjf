@@ -34,14 +34,20 @@ function createClassificationFiltersStore() {
       
       const urlParams = parseUrlParams($page.url);
       const urlHasArranjo = $page.url.search && $page.url.search.includes('arranjo=');
-      const newValue = urlHasArranjo ? (urlParams.arranjo || []) : [];
       
-      if (JSON.stringify(newValue.sort()) !== JSON.stringify(currentValue.sort())) {
-        isUpdatingFromUrl = true;
-        set(newValue);
-        currentValue = newValue;
-        isUpdatingFromUrl = false;
+      // Só atualizar se houver parâmetro na URL
+      // Se não houver parâmetro, manter o valor atual (não limpar)
+      if (urlHasArranjo) {
+        const newValue = urlParams.arranjo || [];
+        
+        if (JSON.stringify(newValue.sort()) !== JSON.stringify(currentValue.sort())) {
+          isUpdatingFromUrl = true;
+          set(newValue);
+          currentValue = newValue;
+          isUpdatingFromUrl = false;
+        }
       }
+      // Se não há parâmetro na URL, não fazer nada (manter valor atual)
     });
   }
 
