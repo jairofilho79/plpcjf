@@ -1,27 +1,52 @@
-import { writable } from 'svelte/store';
+import { writable, get } from 'svelte/store';
 import { browser } from '$app/environment';
+import { page } from '$app/stores';
+import { parseUrlParams, updateUrlParams } from '$lib/utils/urlSync';
 
-const FILTER_STORAGE_KEY = 'bibliotecaClassificationFilters';
-
-function loadFiltersFromStorage() {
+function getInitialFilters() {
   if (!browser) return [];
   
-  try {
-    const saved = localStorage.getItem(FILTER_STORAGE_KEY);
-    if (saved) {
-      const parsed = JSON.parse(saved);
-      if (Array.isArray(parsed)) {
-        return parsed;
-      }
-    }
-  } catch (e) {
-    console.warn('Não foi possível ler os filtros de classificação do localStorage:', e);
+  const urlParams = parseUrlParams(get(page));
+  if (urlParams.arranjo && urlParams.arranjo.length > 0) {
+    return urlParams.arranjo;
   }
+  
   return [];
 }
 
 function createClassificationFiltersStore() {
-  const { subscribe, set, update } = writable(loadFiltersFromStorage());
+  const { subscribe, set, update } = writable(getInitialFilters());
+  let isUpdatingFromUrl = false;
+  let isUpdatingUrl = false;
+
+  // Reagir a mudanças na URL
+  if (browser) {
+    let currentValue = getInitialFilters();
+    page.subscribe($page => {
+      if (isUpdatingUrl) return; // Evitar loop
+      
+      const urlParams = parseUrlParams($page);
+      const urlHasArranjo = $page.search.includes('arranjo=');
+      const newValue = urlHasArranjo ? (urlParams.arranjo || []) : [];
+      
+      if (JSON.stringify(newValue.sort()) !== JSON.stringify(currentValue.sort())) {
+        isUpdatingFromUrl = true;
+        set(newValue);
+        currentValue = newValue;
+        isUpdatingFromUrl = false;
+      }
+    });
+  }
+
+  function updateUrl(classifications) {
+    if (!browser || isUpdatingFromUrl) return;
+    
+    isUpdatingUrl = true;
+    updateUrlParams({ arranjo: classifications });
+    setTimeout(() => {
+      isUpdatingUrl = false;
+    }, 0);
+  }
 
   return {
     subscribe,
@@ -31,46 +56,21 @@ function createClassificationFiltersStore() {
           ? classifications.filter(c => c !== classification)
           : [...classifications, classification];
         
-        if (browser) {
-          try {
-            localStorage.setItem(FILTER_STORAGE_KEY, JSON.stringify(filtered));
-          } catch (e) {
-            console.warn('Não foi possível salvar os filtros de classificação no localStorage:', e);
-          }
-        }
-        
+        updateUrl(filtered);
         return filtered;
       });
     },
     selectOnly: (classification) => {
       set([classification]);
-      if (browser) {
-        try {
-          localStorage.setItem(FILTER_STORAGE_KEY, JSON.stringify([classification]));
-        } catch (e) {
-          console.warn('Não foi possível salvar os filtros de classificação no localStorage:', e);
-        }
-      }
+      updateUrl([classification]);
     },
     selectAll: (allClassifications) => {
       set(allClassifications);
-      if (browser) {
-        try {
-          localStorage.setItem(FILTER_STORAGE_KEY, JSON.stringify(allClassifications));
-        } catch (e) {
-          console.warn('Não foi possível salvar os filtros de classificação no localStorage:', e);
-        }
-      }
+      updateUrl(allClassifications);
     },
     deselectAll: () => {
       set([]);
-      if (browser) {
-        try {
-          localStorage.setItem(FILTER_STORAGE_KEY, JSON.stringify([]));
-        } catch (e) {
-          console.warn('Não foi possível salvar os filtros de classificação no localStorage:', e);
-        }
-      }
+      updateUrl([]);
     }
   };
 }

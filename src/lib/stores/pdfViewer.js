@@ -1,36 +1,67 @@
-import { writable } from 'svelte/store';
+import { writable, get } from 'svelte/store';
 import { browser } from '$app/environment';
+import { page } from '$app/stores';
+import { parseUrlParams, updateUrlParams } from '$lib/utils/urlSync';
 
-const PDF_VIEWER_STORAGE_KEY = 'pdfViewerMode';
+const DEFAULT_VIEWER_MODE = 'leitor';
+const VALID_MODES = ['leitor', 'online', 'newtab', 'share', 'save'];
 
-function loadPdfViewerMode() {
-  if (!browser) return 'leitor';
+function getInitialViewerMode() {
+  if (!browser) return DEFAULT_VIEWER_MODE;
   
-  try {
-    const saved = localStorage.getItem(PDF_VIEWER_STORAGE_KEY);
-    if (saved && ['leitor', 'online', 'newtab', 'share', 'save'].includes(saved)) {
-      return saved;
-    }
-  } catch (e) {
-    console.warn('Não foi possível ler o modo de visualização do localStorage:', e);
+  const urlParams = parseUrlParams(get(page));
+  if (urlParams.comoAbrir && VALID_MODES.includes(urlParams.comoAbrir)) {
+    return urlParams.comoAbrir;
   }
-  return 'leitor';
+  
+  return DEFAULT_VIEWER_MODE;
 }
 
 function createPdfViewerStore() {
-  const { subscribe, set } = writable(loadPdfViewerMode());
+  const { subscribe, set } = writable(getInitialViewerMode());
+  let isUpdatingFromUrl = false;
+  let isUpdatingUrl = false;
+
+  // Reagir a mudanças na URL
+  if (browser) {
+    let currentValue = getInitialViewerMode();
+    page.subscribe($page => {
+      if (isUpdatingUrl) return; // Evitar loop
+      
+      const urlParams = parseUrlParams($page);
+      const urlHasComoAbrir = $page.search.includes('comoAbrir=');
+      const newValue = urlHasComoAbrir && urlParams.comoAbrir && VALID_MODES.includes(urlParams.comoAbrir)
+        ? urlParams.comoAbrir
+        : DEFAULT_VIEWER_MODE;
+      
+      if (newValue !== currentValue) {
+        isUpdatingFromUrl = true;
+        set(newValue);
+        currentValue = newValue;
+        isUpdatingFromUrl = false;
+      }
+    });
+  }
+
+  function updateUrl(value) {
+    if (!browser || isUpdatingFromUrl) return;
+    
+    isUpdatingUrl = true;
+    updateUrlParams({ comoAbrir: value }, { defaultComoAbrir: DEFAULT_VIEWER_MODE });
+    setTimeout(() => {
+      isUpdatingUrl = false;
+    }, 0);
+  }
 
   return {
     subscribe,
     set: (value) => {
-      set(value);
-      if (browser) {
-        try {
-          localStorage.setItem(PDF_VIEWER_STORAGE_KEY, value);
-        } catch (e) {
-          console.warn('Não foi possível salvar o modo de visualização no localStorage:', e);
-        }
+      if (!VALID_MODES.includes(value)) {
+        console.warn(`Modo de visualização inválido: ${value}`);
+        return;
       }
+      set(value);
+      updateUrl(value);
     }
   };
 }

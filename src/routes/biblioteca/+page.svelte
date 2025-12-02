@@ -1,12 +1,14 @@
 <script>
   import { onMount, onDestroy } from 'svelte';
   import { browser } from '$app/environment';
+  import { page } from '$app/stores';
   import { louvores, loadLouvores } from '$lib/stores/louvores';
   import { classificationFilters } from '$lib/stores/classificationFilters';
   import { filters, CATEGORY_OPTIONS } from '$lib/stores/filters';
   import { bibliotecaSort } from '$lib/stores/bibliotecaSort';
   import { bibliotecaItemsPerPage, VALID_OPTIONS } from '$lib/stores/bibliotecaItemsPerPage';
   import { pdfViewer } from '$lib/stores/pdfViewer';
+  import { parseUrlParams, updateUrlParams } from '$lib/utils/urlSync';
   import ClassificationFilters from '$lib/components/ClassificationFilters.svelte';
   import SpecialArrangementFilters from '$lib/components/SpecialArrangementFilters.svelte';
   import CategoryFilters from '$lib/components/CategoryFilters.svelte';
@@ -156,11 +158,12 @@
     });
   })();
 
-  // State for selected special arrangements
+  // State for selected special arrangements - inicializar da URL
   /**
    * @type {string[]}
    */
-  let selectedSpecialArrangements = [];
+  let selectedSpecialArrangements = browser ? (parseUrlParams($page).arranjoEspecial || []) : [];
+  let isUpdatingArranjoEspecialFromUrl = false;
 
   // Reset special arrangements when selected classifications change significantly
   let previousSelectedClassifications = [];
@@ -183,17 +186,50 @@
   // Track previous available arrangements length to detect appearance/disappearance
   let previousAvailableLength = 0;
 
+  // Reagir a mudanças na URL para atualizar selectedSpecialArrangements
+  $: if (browser && !isUpdatingArranjoEspecialFromUrl) {
+    const urlParams = parseUrlParams($page);
+    const urlArranjoEspecial = urlParams.arranjoEspecial || [];
+    // Só atualizar se for diferente e se os valores da URL são válidos (existem em availableSpecialArrangements)
+    if (urlArranjoEspecial.length > 0 && availableSpecialArrangements.length > 0) {
+      const validFromUrl = urlArranjoEspecial.filter(sa => availableSpecialArrangements.includes(sa));
+      if (JSON.stringify(validFromUrl.sort()) !== JSON.stringify(selectedSpecialArrangements.sort())) {
+        isUpdatingArranjoEspecialFromUrl = true;
+        selectedSpecialArrangements = validFromUrl;
+        isUpdatingArranjoEspecialFromUrl = false;
+      }
+    } else if (urlArranjoEspecial.length === 0 && selectedSpecialArrangements.length > 0 && $page.pathname === '/biblioteca') {
+      // Se URL não tem arranjoEspecial, manter seleção atual (não limpar automaticamente)
+      // A lógica abaixo vai lidar com auto-seleção quando disponível
+    }
+  }
+
   // Clear special arrangements when they become unavailable
-  // Auto-select all when they become available
+  // Auto-select all when they become available (só se não vier da URL)
   $: {
     const currentLength = availableSpecialArrangements.length;
     
     if (currentLength === 0) {
       // Clear selections when component disappears
-      selectedSpecialArrangements = [];
+      if (!isUpdatingArranjoEspecialFromUrl && selectedSpecialArrangements.length > 0) {
+        isUpdatingArranjoEspecialFromUrl = true;
+        selectedSpecialArrangements = [];
+        isUpdatingArranjoEspecialFromUrl = false;
+        if (browser) {
+          updateUrlParams({ arranjoEspecial: [] });
+        }
+      }
     } else if (previousAvailableLength === 0 && currentLength > 0) {
-      // Auto-select all when component appears/reappears
-      selectedSpecialArrangements = [...availableSpecialArrangements];
+      // Auto-select all when component appears/reappears (só se URL não tem valor)
+      if (browser && !isUpdatingArranjoEspecialFromUrl) {
+        const urlParams = parseUrlParams($page);
+        if (!urlParams.arranjoEspecial || urlParams.arranjoEspecial.length === 0) {
+          isUpdatingArranjoEspecialFromUrl = true;
+          selectedSpecialArrangements = [...availableSpecialArrangements];
+          isUpdatingArranjoEspecialFromUrl = false;
+          updateUrlParams({ arranjoEspecial: selectedSpecialArrangements });
+        }
+      }
     }
     
     previousAvailableLength = currentLength;
@@ -390,15 +426,16 @@
     }
   });
   
-  // Initialize filters with all classifications on first load if localStorage is empty
+  // Initialize filters with all classifications on first load if URL doesn't have arranjo param
   $: {
-    if ($louvores.length && !filtersInitialized) {
-      // Check if filters are empty (not initialized) and we have classifications
-      if ($classificationFilters.length === 0 && uniqueNormalizedClassifications.length > 0) {
+    if ($louvores.length && !filtersInitialized && browser) {
+      const urlParams = parseUrlParams($page);
+      // Se URL não tem arranjo e não há filtros selecionados, selecionar todos
+      if (!urlParams.arranjo && $classificationFilters.length === 0 && uniqueNormalizedClassifications.length > 0) {
         filtersInitialized = true;
         classificationFilters.selectAll(uniqueNormalizedClassifications);
-      } else if ($classificationFilters.length > 0) {
-        // Filters already initialized from localStorage
+      } else {
+        // Filters already initialized from URL or already set
         filtersInitialized = true;
       }
     }
@@ -416,28 +453,45 @@
    * @param {CustomEvent<{ item: string }>} event
    */
   function handleSpecialArrangementToggle(event) {
+    if (isUpdatingArranjoEspecialFromUrl) return;
     const item = event.detail.item;
     selectedSpecialArrangements = selectedSpecialArrangements.includes(item)
       ? selectedSpecialArrangements.filter(sa => sa !== item)
       : [...selectedSpecialArrangements, item];
+    // Atualizar URL após mudança
+    if (browser) {
+      updateUrlParams({ arranjoEspecial: selectedSpecialArrangements });
+    }
   }
 
   /**
    * @param {CustomEvent<{ item: string }>} event
    */
   function handleSpecialArrangementSelectOnly(event) {
+    if (isUpdatingArranjoEspecialFromUrl) return;
     selectedSpecialArrangements = [event.detail.item];
+    if (browser) {
+      updateUrlParams({ arranjoEspecial: selectedSpecialArrangements });
+    }
   }
 
   /**
    * @param {CustomEvent<{ items: string[] }>} event
    */
   function handleSpecialArrangementSelectAll(event) {
+    if (isUpdatingArranjoEspecialFromUrl) return;
     selectedSpecialArrangements = [...event.detail.items];
+    if (browser) {
+      updateUrlParams({ arranjoEspecial: selectedSpecialArrangements });
+    }
   }
 
   function handleSpecialArrangementDeselectAll() {
+    if (isUpdatingArranjoEspecialFromUrl) return;
     selectedSpecialArrangements = [];
+    if (browser) {
+      updateUrlParams({ arranjoEspecial: [] });
+    }
   }
 </script>
 

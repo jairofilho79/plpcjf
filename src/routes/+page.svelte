@@ -10,6 +10,7 @@
   import { pdfViewer } from '$lib/stores/pdfViewer';
   import { carousel } from '$lib/stores/carousel';
   import { savedPlaylists } from '$lib/stores/savedPlaylists';
+  import { parseUrlParams, updateUrlParams } from '$lib/utils/urlSync';
   import SearchBar from '$lib/components/SearchBar.svelte';
   import CategoryFilters from '$lib/components/CategoryFilters.svelte';
   import ClassificationFilters from '$lib/components/ClassificationFilters.svelte';
@@ -17,7 +18,8 @@
   import LouvorCard from '$lib/components/LouvorCard.svelte';
   import CarouselChips from '$lib/components/CarouselChips.svelte';
   
-  let searchQuery = '';
+  // Inicializar searchQuery da URL
+  let searchQuery = browser ? (parseUrlParams($page).pesquisa || '') : '';
   /**
      * @type {string | any[]}
      */
@@ -26,15 +28,30 @@
      * @type {number | null | undefined}
      */
   let debounceTimer = null;
+  let searchUrlUpdateTimer = null;
+  let isUpdatingFromUrl = false;
   let sharedLinkProcessed = false;
+  
+  // Reagir a mudanças na URL para atualizar searchQuery
+  $: if (browser && !isUpdatingFromUrl) {
+    const urlParams = parseUrlParams($page);
+    if (urlParams.pesquisa !== searchQuery) {
+      isUpdatingFromUrl = true;
+      searchQuery = urlParams.pesquisa || '';
+      isUpdatingFromUrl = false;
+    }
+  }
   
   onMount(() => {
     loadLouvores();
     
-    // Limpar timer ao destruir componente
+    // Limpar timers ao destruir componente
     return () => {
       if (debounceTimer) {
         clearTimeout(debounceTimer);
+      }
+      if (searchUrlUpdateTimer) {
+        clearTimeout(searchUrlUpdateTimer);
       }
     };
   });
@@ -128,7 +145,16 @@
       clearTimeout(debounceTimer);
       debounceTimer = null;
     }
+    if (searchUrlUpdateTimer) {
+      clearTimeout(searchUrlUpdateTimer);
+      searchUrlUpdateTimer = null;
+    }
+    searchQuery = '';
     filteredResults = [];
+    // Atualizar URL imediatamente ao limpar
+    if (browser && !isUpdatingFromUrl) {
+      updateUrlParams({ pesquisa: '' });
+    }
   }
   
   function filterLouvores() {
@@ -202,7 +228,7 @@
   
   // Debounce: Aguarda 300ms após o usuário parar de digitar antes de pesquisar
   // Isso evita que a pesquisa bloqueie a digitação
-  $: if (searchQuery !== undefined) {
+  $: if (searchQuery !== undefined && !isUpdatingFromUrl) {
     $filters;
     $classificationFilters;
     
@@ -216,22 +242,33 @@
       debounceTimer = setTimeout(() => {
         filterLouvores();
       }, 300);
+      
+      // Atualizar URL com debounce também (500ms para evitar muitas atualizações)
+      if (searchUrlUpdateTimer) {
+        clearTimeout(searchUrlUpdateTimer);
+      }
+      searchUrlUpdateTimer = setTimeout(() => {
+        if (!isUpdatingFromUrl) {
+          updateUrlParams({ pesquisa: searchQuery });
+        }
+      }, 500);
     } else {
       // No servidor, executar diretamente
       filterLouvores();
     }
   }
   
-  // Initialize filters with all classifications on first load if localStorage is empty
+  // Initialize filters with all classifications on first load if URL doesn't have arranjo param
   let filtersInitialized = false;
   $: {
-    if ($louvores.length && !filtersInitialized) {
-      // Check if filters are empty (not initialized) and we have classifications
-      if ($classificationFilters.length === 0 && uniqueNormalizedClassifications.length > 0) {
+    if ($louvores.length && !filtersInitialized && browser) {
+      const urlParams = parseUrlParams($page);
+      // Se URL não tem arranjo e não há filtros selecionados, selecionar todos
+      if (!urlParams.arranjo && $classificationFilters.length === 0 && uniqueNormalizedClassifications.length > 0) {
         filtersInitialized = true;
         classificationFilters.selectAll(uniqueNormalizedClassifications);
-      } else if ($classificationFilters.length > 0) {
-        // Filters already initialized from localStorage
+      } else {
+        // Filters already initialized from URL or already set
         filtersInitialized = true;
       }
     }
