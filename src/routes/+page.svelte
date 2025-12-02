@@ -252,8 +252,6 @@
 
 <div class="max-w-6xl mx-auto">
   <div class="flex flex-col items-center mt-8 space-y-4">
-    <SearchBar bind:searchQuery on:clear={handleClear} />
-    
     <CategoryFilters />
     
     <ClassificationFilters availableClassifications={$louvores.map(l => l.classificacao).filter(c => c)} />
@@ -261,6 +259,8 @@
     <PdfViewerSelector />
     
     <CarouselChips />
+    
+    <SearchBar bind:searchQuery on:clear={handleClear} />
   </div>
   
   <div class="mt-8 flex justify-center">

@@ -25,6 +25,13 @@
 <div class="search-bar-container">
   <span class="container-tag">Buscar</span>
   <div class="search-input-wrapper">
+    {#if !searchQuery.trim()}
+      <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <circle cx="11" cy="11" r="8"></circle>
+        <path d="m21 21-4.35-4.35"></path>
+      </svg>
+    {/if}
+    
     {#if searchQuery.trim()}
       <button
         on:click={clearSearch}
@@ -47,6 +54,7 @@
       placeholder="Pesquisar louvor..."
       class="search-input"
       class:has-text={searchQuery.trim()}
+      class:has-icon={!searchQuery.trim()}
     />
   </div>
 </div>
@@ -56,6 +64,16 @@
     width: 100%;
     max-width: 56rem; /* max-w-4xl = 56rem */
     position: relative;
+    margin: 2.5rem 0;
+    padding: 0.75rem;
+    background: linear-gradient(135deg, rgba(212, 175, 55, 0.05) 0%, rgba(212, 175, 55, 0.02) 100%);
+    border-radius: 0.75rem;
+    transform: translateY(0);
+    transition: transform 0.3s ease;
+  }
+  
+  .search-bar-container:hover {
+    transform: translateY(-2px);
   }
   
   .container-tag {
@@ -78,18 +96,31 @@
     display: flex;
     align-items: center;
     width: 100%;
-    background-color: var(--card-color);
-    border: 2px solid var(--gold-color);
+    background: linear-gradient(135deg, var(--card-color) 0%, #FFF9E6 100%);
+    border: 2.5px solid var(--gold-color);
     border-radius: 0.5rem; /* rounded-lg - padronizado com outros containers */
-    box-shadow: var(--shadow-md);
+    box-shadow: 0 6px 20px rgba(212, 175, 55, 0.25), 0 2px 6px rgba(0, 0, 0, 0.1);
     transition: all 0.3s ease;
   }
   
   .search-input-wrapper:focus-within {
     border-color: var(--gold-light) !important;
-    box-shadow: var(--shadow-lg), 0 0 0 3px rgba(244, 208, 63, 0.25) !important;
+    box-shadow: 0 8px 24px rgba(244, 208, 63, 0.35), 0 0 0 4px rgba(244, 208, 63, 0.15) !important;
     transform: translateY(-2px);
     outline: none !important;
+  }
+  
+  .search-icon {
+    position: absolute;
+    left: 0.75rem;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 1.5rem;
+    height: 1.5rem;
+    color: var(--gold-color);
+    opacity: 0.7;
+    z-index: 5;
+    pointer-events: none;
   }
   
   .search-input {
@@ -105,6 +136,10 @@
     outline: none !important;
     border-radius: 0.5rem; /* padronizado com wrapper */
     transition: padding-left 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+  
+  .search-input.has-icon {
+    padding-left: 3.5rem;
   }
   
   .search-input::-webkit-input-placeholder {
@@ -190,6 +225,11 @@
   }
   
   @media (max-width: 640px) {
+    .search-bar-container {
+      margin: 2rem 0;
+      padding: 0.5rem;
+    }
+    
     .search-input {
       height: 3.75rem;
       font-size: 1rem;
@@ -197,8 +237,18 @@
       padding-left: 1.25rem;
     }
     
+    .search-input.has-icon {
+      padding-left: 3rem;
+    }
+    
     .search-input.has-text {
       padding-left: 3rem;
+    }
+    
+    .search-icon {
+      width: 1.25rem;
+      height: 1.25rem;
+      left: 0.625rem;
     }
     
     .clear-button {
