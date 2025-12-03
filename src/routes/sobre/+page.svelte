@@ -21,10 +21,11 @@
     <h2 class="section-title">Objetivo</h2>
     <div class="section-content">
       <p>
-        O objetivo da aplicação, chamada Pesquisador de Louvores em Partitura, Cifra e Gestos em Gravuras, é ajudar os irmãos da equipe de louvor com os materiais mais básicos pro louvor (Partitura, Cifra e Gestos em gravura para as CIAs). Que seja fácil de pesquisar, consumir e que funcione offline, pois muita igrejas não tem internet ou é muito difícil o acesso em ESFs.
+        O objetivo da aplicação - chamada Pesquisador de Louvores em Partitura, Cifra e Gestos em gravuras - é ajudar aos irmãos da equipe de louvor com os materiais mais básicos pro louvor. Que seja fácil de pesquisar, consumir e que funcione offline, pois muita igrejas não tem internet ou é muito difícil o acesso em ESFs.
       </p>
       <p class="mt-4">
         Portanto, estejamos em oração por todos os irmãos que estão envolvidos nesse projeto. Quer seja diretamente no desenvolvimento da aplicação, quer seja na produção dos materiais, no uso/teste da aplicação e afins.
+        OBS: Também pedimos oração para a nova aplicação que visa auxiliar não só no uso básico, mas também nos estudos e aperfeiçoamento para o louvor do Senhor.
       </p>
     </div>
   </section>
