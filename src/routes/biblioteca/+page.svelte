@@ -371,18 +371,23 @@
           if (currentPage > totalPages) {
             setPage(totalPages, { scroll: false });
           }
-          return;
+        } else {
+          // Se não foi inicializado da URL, pode resetar normalmente
+          if (currentPage > totalPages) {
+            setPage(totalPages, { scroll: false });
+          }
         }
+      } else {
+        // Reset to page 1 if filtered results count changed significantly or current page is invalid
+        // Mas não resetar se a página foi inicializada da URL e ainda é válida
+        if (currentPage > totalPages) {
+          setPage(totalPages, { scroll: false });
+        } else if (previousFilteredCount !== 0 && previousFilteredCount !== currentFilteredCount && !pageInitializedFromUrl) {
+          // Só resetar se não foi inicializado da URL e a contagem mudou significativamente
+          setPage(1, { scroll: false });
+        }
+        previousFilteredCount = currentFilteredCount;
       }
-      // Reset to page 1 if filtered results count changed significantly or current page is invalid
-      // Mas não resetar se a página foi inicializada da URL e ainda é válida
-      if (currentPage > totalPages) {
-        setPage(totalPages, { scroll: false });
-      } else if (previousFilteredCount !== 0 && previousFilteredCount !== currentFilteredCount && !pageInitializedFromUrl) {
-        // Só resetar se não foi inicializado da URL e a contagem mudou significativamente
-        setPage(1, { scroll: false });
-      }
-      previousFilteredCount = currentFilteredCount;
     }
   }
   
