@@ -1036,33 +1036,37 @@
     user-select: none;
     -webkit-user-select: none;
     position: relative;
-    padding: 10px 22px 10px 30px; /* Espaço para a seta à esquerda + borda */
+    padding: 10px;
     display: inline-flex;
     align-items: center;
     justify-content: center;
   }
   
-  .brand::after {
-    content: '';
+  /* Feixe de luz - sempre ativo */
+  .brand .light-beam {
     position: absolute;
-    inset: -2px;
-    background: #9d7a1a; /* Dourado mais escuro para a borda */
-    /* Seta maior para criar a borda (expandida em 2px em todas as direções) */
-    /* Como inset: -2px expande o elemento, o clip-path precisa ser ajustado */
-    clip-path: polygon(22px 0, 100% 0, 100% 100%, 22px 100%, 0 50%);
-    z-index: -2;
-    border-radius: 0 6px 6px 0;
-  }
-  
-  .brand::before {
-    content: '';
-    position: absolute;
-    inset: 2px; /* Recuar 2px para criar espaço para a borda */
-    background: var(--gold-color, #d4af37);
-    /* Seta apontando para a esquerda: triângulo à esquerda + retângulo à direita */
-    clip-path: polygon(20px 0, 100% 0, 100% 100%, 20px 100%, 0 50%);
-    z-index: -1;
-    border-radius: 0 4px 4px 0; /* Apenas cantos direitos arredondados */
+    bottom: -2px;
+    left: 50%;
+    transform: translateX(-50%);
+    height: 4px;
+    width: calc(100% - 2rem);
+    background: linear-gradient(to right, 
+      transparent 0%, 
+      rgba(255, 240, 160, 0.95) 15%,
+      rgba(255, 230, 120, 1) 30%,
+      rgba(255, 220, 100, 1) 50%, 
+      rgba(255, 230, 120, 1) 70%,
+      rgba(255, 240, 160, 0.95) 85%,
+      transparent 100%);
+    box-shadow: 
+      0 0 12px rgba(255, 220, 100, 1),
+      0 0 24px rgba(255, 220, 100, 0.8),
+      0 0 36px rgba(255, 220, 100, 0.6),
+      0 0 48px rgba(255, 220, 100, 0.4),
+      0 2px 8px rgba(255, 220, 100, 0.7);
+    border-radius: 50%;
+    opacity: 1;
+    z-index: 1;
   }
 
   .indicator { display: flex; align-items: center; gap: 4px; min-width: 56px; justify-content: center; }
@@ -1175,8 +1179,18 @@
       max-height: 24px; /* Ajustado para 24px considerando os paddings */
       align-self: start; /* Alinhar ao topo da célula do grid */
       margin-bottom: 12px;
-      padding: 4px 22px 4px 30px; /* Padding-top restaurado para 4px */
+      padding: 4px; /* Padding ajustado sem espaço para seta */
       font-size: 1.25rem; /* Reduzir ligeiramente o tamanho da fonte */
+    }
+    
+    .brand .light-beam {
+      height: 3px;
+      width: calc(100% - 1rem);
+      box-shadow: 
+        0 0 8px rgba(255, 220, 100, 1),
+        0 0 16px rgba(255, 220, 100, 0.8),
+        0 0 24px rgba(255, 220, 100, 0.6),
+        0 2px 6px rgba(255, 220, 100, 0.7);
     }
   }
 
@@ -1384,7 +1398,7 @@
     preventDefault={true}
     preventClickOnLongPress={true}
   >
-    <div class="brand">PLPCG</div>
+    <div class="brand">PLPCG<div class="light-beam"></div></div>
   </GestureButton>
 
   <div class="title-wrap">
