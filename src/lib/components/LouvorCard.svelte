@@ -26,6 +26,8 @@
   let isCheckingAvailability = false;
   let availabilityError = null;
   let cardElement;
+  let isSharing = false;
+  let isSaving = false;
   
   function getCategoryIcon(category) {
     if (!category) return null;
@@ -45,6 +47,13 @@
     const mode = $pdfViewer;
     
     if (mode === 'share' || mode === 'save') {
+      // Definir estado de loading antes de começar
+      if (mode === 'share') {
+        isSharing = true;
+      } else {
+        isSaving = true;
+      }
+      
       try {
         const blob = await fetchPdfAsBlob(pdfPath);
         if (mode === 'share') {
@@ -55,6 +64,10 @@
       } catch (err) {
         console.error('Erro ao processar PDF:', err);
         window.open(pdfPath, '_blank');
+      } finally {
+        // Limpar estado de loading
+        isSharing = false;
+        isSaving = false;
       }
       return;
     }
@@ -184,9 +197,15 @@
     on:click|preventDefault={handleCardClick}
     class="louvor-info"
     class:checking={isCheckingAvailability}
+    class:processing={isSharing || isSaving}
   >
     <div class="louvor-title">
       <strong>#{louvor.numero || 'N/A'}</strong> - {louvor.nome || 'Sem título'}
+      {#if isSharing}
+        <span class="processing-indicator">Compartilhando...</span>
+      {:else if isSaving}
+        <span class="processing-indicator">Baixando...</span>
+      {/if}
     </div>
     <div class="louvor-subtitles">
       <div class="louvor-classification">
@@ -329,10 +348,20 @@
     text-align: center;
   }
   
-  .louvor-info.checking {
+  .louvor-info.checking,
+  .louvor-info.processing {
     opacity: 0.6;
     cursor: wait;
     pointer-events: none;
+  }
+  
+  .processing-indicator {
+    display: inline-block;
+    margin-left: 0.5rem;
+    font-size: 0.75rem;
+    opacity: 0.8;
+    font-weight: 400;
+    color: var(--gold-color);
   }
 </style>
 

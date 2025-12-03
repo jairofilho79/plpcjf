@@ -24,6 +24,7 @@
   let draggedIndex = null;
   let checkingPdfId = null;
   let pdfError = null;
+  let processingPdfId = null;
   /**
      * @type {number | null}
      */
@@ -223,16 +224,23 @@
       return;
     }
     if (mode === 'share') {
+      // Definir estado de loading antes de começar
+      processingPdfId = louvor.pdfId;
       try {
         const blob = await fetchPdfAsBlob(pdfPath);
         await sharePdf(blob, louvor.pdf, louvor.nome);
       } catch (_) {
         // @ts-ignore
         window.open(pdfPath, '_blank');
+      } finally {
+        // Limpar estado de loading
+        processingPdfId = null;
       }
       return;
     }
     if (mode === 'save') {
+      // Definir estado de loading antes de começar
+      processingPdfId = louvor.pdfId;
       try {
         const blob = await fetchPdfAsBlob(pdfPath);
         await savePdf(blob, louvor.pdf);
@@ -243,6 +251,9 @@
         // @ts-ignore
         a.download = louvor.pdf;
         a.click();
+      } finally {
+        // Limpar estado de loading
+        processingPdfId = null;
       }
       return;
     }
@@ -462,6 +473,7 @@
           class:dragging={draggedIndex === index}
           class:drag-over={dragOverIndex === index}
           class:checking={checkingPdfId === louvor.pdfId}
+          class:processing={processingPdfId === louvor.pdfId}
         >
           <div class="drag-handle" on:mousedown|stopPropagation>
             <GripVertical class="w-4 h-4" />
@@ -469,6 +481,11 @@
           <div class="chip-content">
             <div class="chip-title">
               <strong>#{louvor.numero || 'N/A'}</strong> - {louvor.nome || 'Sem título'}
+              {#if processingPdfId === louvor.pdfId}
+                <span class="processing-indicator">
+                  {#if $pdfViewer === 'share'}Compartilhando...{:else if $pdfViewer === 'save'}Baixando...{/if}
+                </span>
+              {/if}
             </div>
             <div class="chip-subtitles">
               <div class="chip-classification">
@@ -789,10 +806,20 @@
     text-align: center;
   }
   
-  .carousel-chip.checking {
+  .carousel-chip.checking,
+  .carousel-chip.processing {
     opacity: 0.6;
     cursor: wait;
     pointer-events: none;
+  }
+  
+  .processing-indicator {
+    display: inline-block;
+    margin-left: 0.5rem;
+    font-size: 0.7rem;
+    opacity: 0.8;
+    font-weight: 400;
+    color: var(--gold-color);
   }
 </style>
 
