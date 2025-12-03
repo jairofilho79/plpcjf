@@ -282,12 +282,7 @@
   })();
   
   // Pagination
-  // Inicializar currentPage da URL
-  let currentPage = browser && $page && $page.url ? (() => {
-    const urlParams = parseUrlParams($page.url);
-    const pagina = urlParams.pagina;
-    return pagina !== null && pagina > 0 ? pagina : 1;
-  })() : 1;
+  let currentPage = 1;
   let pageInput = '1';
   let itemsPerPageMenuOpen = false;
   /**
@@ -296,10 +291,17 @@
   let louvoresContainer = null;
   
   // Flags para evitar loops infinitos na sincronização URL
-  let isUpdatingFromUrl = false;
+  let urlSyncInitialized = false;
   let isUpdatingSortFromUrl = false;
   let isUpdatingItemsPerPageFromUrl = false;
   let isUpdatingPageFromUrl = false;
+  
+  // Rastrear último estado conhecido da URL para evitar loops
+  let lastKnownUrlState = {
+    ordenar: null,
+    itensPorPagina: null,
+    pagina: null
+  };
 
   function scrollToLouvores() {
     if (!browser) return;
@@ -319,16 +321,16 @@
 
   /**
    * @param {number} page
-   * @param {{ scroll?: boolean }} [options]
+   * @param {{ scroll?: boolean, skipUrlUpdate?: boolean }} [options]
    */
-  function setPage(page, { scroll = true } = {}) {
+  function setPage(page, { scroll = true, skipUrlUpdate = false } = {}) {
     const maxPage = totalPages > 0 ? totalPages : 1;
     const pageNum = Math.max(1, Math.min(maxPage, page));
     currentPage = pageNum;
     pageInput = pageNum.toString();
 
-    // Atualizar URL quando a página mudar (se não estiver vindo da URL)
-    if (browser && !isUpdatingPageFromUrl) {
+    // Atualizar URL quando a página mudar (se não estiver vindo da URL e sincronização inicializada)
+    if (browser && !skipUrlUpdate && !isUpdatingPageFromUrl && urlSyncInitialized) {
       updateUrlParams({ pagina: pageNum });
     }
 
@@ -346,7 +348,7 @@
   
   // Reset to page 1 when items per page changes
   $: {
-    if (itemsPerPage) {
+    if (itemsPerPage && urlSyncInitialized) {
       const newTotalPages = Math.ceil(sortedLouvores.length / itemsPerPage);
       if (currentPage > newTotalPages && newTotalPages > 0) {
         setPage(1, { scroll: false });
@@ -357,93 +359,100 @@
   // Reset to page 1 when filters change or when current page exceeds total pages
   let previousFilteredCount = 0;
   $: {
-    const currentFilteredCount = filteredLouvores.length;
-    // Reset to page 1 if filtered results count changed significantly or current page is invalid
-    if (previousFilteredCount !== currentFilteredCount || (currentPage > totalPages && totalPages > 0)) {
-      setPage(1, { scroll: false });
-    }
-    previousFilteredCount = currentFilteredCount;
-  }
-  
-  // Sincronizar bibliotecaSort com URL
-  $: if (browser && !isUpdatingSortFromUrl && $page && $page.url) {
-    const urlParams = parseUrlParams($page.url);
-    const urlOrdenar = urlParams.ordenar;
-    const currentSort = $bibliotecaSort;
-    
-    // Se URL tem ordenar e é diferente do atual, atualizar store
-    if (urlOrdenar && (urlOrdenar === 'numero' || urlOrdenar === 'nome') && urlOrdenar !== currentSort) {
-      isUpdatingSortFromUrl = true;
-      bibliotecaSort.set(urlOrdenar);
-      setTimeout(() => {
-        isUpdatingSortFromUrl = false;
-      }, 0);
-    } else if (!urlOrdenar && currentSort !== 'numero') {
-      // Se URL não tem ordenar e o atual não é o padrão, resetar para padrão
-      isUpdatingSortFromUrl = true;
-      bibliotecaSort.set('numero');
-      setTimeout(() => {
-        isUpdatingSortFromUrl = false;
-      }, 0);
+    if (urlSyncInitialized) {
+      const currentFilteredCount = filteredLouvores.length;
+      // Reset to page 1 if filtered results count changed significantly or current page is invalid
+      if (previousFilteredCount !== currentFilteredCount || (currentPage > totalPages && totalPages > 0)) {
+        setPage(1, { scroll: false });
+      }
+      previousFilteredCount = currentFilteredCount;
     }
   }
   
-  // Atualizar URL quando bibliotecaSort mudar (se não estiver vindo da URL)
-  $: if (browser && !isUpdatingSortFromUrl && $bibliotecaSort && $page && $page.url) {
+  // Sincronizar URL -> Stores (apenas quando URL mudar externamente, não quando atualizamos nós mesmos)
+  $: if (browser && urlSyncInitialized && !isUpdatingSortFromUrl && !isUpdatingItemsPerPageFromUrl && !isUpdatingPageFromUrl && $page && $page.url) {
     const urlParams = parseUrlParams($page.url);
     const urlOrdenar = urlParams.ordenar || 'numero';
-    // Só atualizar se o valor na URL for diferente
+    const urlItensPorPagina = urlParams.itensPorPagina || 10;
+    const urlPagina = urlParams.pagina;
+    const urlPageNum = urlPagina !== null && urlPagina > 0 ? urlPagina : 1;
+    
+    // Verificar se a URL realmente mudou (navegação back/forward ou mudança externa)
+    // Comparar com o último estado conhecido para evitar loops
+    const urlChanged = 
+      lastKnownUrlState.ordenar !== urlOrdenar ||
+      lastKnownUrlState.itensPorPagina !== urlItensPorPagina ||
+      lastKnownUrlState.pagina !== urlPageNum;
+    
+    if (urlChanged) {
+      // Verificar se os stores já estão com os valores corretos (evita sincronização desnecessária)
+      const currentSort = $bibliotecaSort;
+      const currentItemsPerPage = $bibliotecaItemsPerPage;
+      const storesMatchUrl = 
+        (urlOrdenar === currentSort || (!urlOrdenar && currentSort === 'numero')) &&
+        (urlItensPorPagina === currentItemsPerPage || (!urlItensPorPagina && currentItemsPerPage === 10)) &&
+        (urlPageNum === currentPage);
+      
+      // Se os stores já estão corretos, apenas atualizar último estado conhecido
+      if (storesMatchUrl) {
+        lastKnownUrlState = {
+          ordenar: urlOrdenar,
+          itensPorPagina: urlItensPorPagina,
+          pagina: urlPageNum
+        };
+      } else {
+        // Atualizar último estado conhecido ANTES de fazer qualquer mudança
+        lastKnownUrlState = {
+          ordenar: urlOrdenar,
+          itensPorPagina: urlItensPorPagina,
+          pagina: urlPageNum
+        };
+        
+        // Sincronizar ordenar
+        if (urlOrdenar !== currentSort && (urlOrdenar === 'numero' || urlOrdenar === 'nome')) {
+          isUpdatingSortFromUrl = true;
+          bibliotecaSort.set(urlOrdenar);
+          setTimeout(() => {
+            isUpdatingSortFromUrl = false;
+          }, 100);
+        }
+        
+        // Sincronizar itensPorPagina
+        if (urlItensPorPagina !== currentItemsPerPage && VALID_OPTIONS.includes(urlItensPorPagina)) {
+          isUpdatingItemsPerPageFromUrl = true;
+          bibliotecaItemsPerPage.set(urlItensPorPagina);
+          setTimeout(() => {
+            isUpdatingItemsPerPageFromUrl = false;
+          }, 100);
+        }
+        
+        // Sincronizar pagina
+        if (urlPageNum !== currentPage) {
+          isUpdatingPageFromUrl = true;
+          setPage(urlPageNum, { scroll: false, skipUrlUpdate: true });
+          setTimeout(() => {
+            isUpdatingPageFromUrl = false;
+          }, 100);
+        }
+      }
+    }
+  }
+  
+  // Atualizar URL quando bibliotecaSort mudar (apenas se não estiver vindo da URL)
+  $: if (browser && urlSyncInitialized && !isUpdatingSortFromUrl && $bibliotecaSort && $page && $page.url) {
+    const urlParams = parseUrlParams($page.url);
+    const urlOrdenar = urlParams.ordenar || 'numero';
     if (urlOrdenar !== $bibliotecaSort) {
       updateUrlParams({ ordenar: $bibliotecaSort });
     }
   }
   
-  // Sincronizar bibliotecaItemsPerPage com URL
-  $: if (browser && !isUpdatingItemsPerPageFromUrl && $page && $page.url) {
-    const urlParams = parseUrlParams($page.url);
-    const urlItensPorPagina = urlParams.itensPorPagina;
-    const currentItemsPerPage = $bibliotecaItemsPerPage;
-    
-    // Se URL tem itensPorPagina e é diferente do atual, atualizar store
-    if (urlItensPorPagina !== null && VALID_OPTIONS.includes(urlItensPorPagina) && urlItensPorPagina !== currentItemsPerPage) {
-      isUpdatingItemsPerPageFromUrl = true;
-      bibliotecaItemsPerPage.set(urlItensPorPagina);
-      setTimeout(() => {
-        isUpdatingItemsPerPageFromUrl = false;
-      }, 0);
-    } else if (urlItensPorPagina === null && currentItemsPerPage !== 10) {
-      // Se URL não tem itensPorPagina e o atual não é o padrão, resetar para padrão
-      isUpdatingItemsPerPageFromUrl = true;
-      bibliotecaItemsPerPage.set(10);
-      setTimeout(() => {
-        isUpdatingItemsPerPageFromUrl = false;
-      }, 0);
-    }
-  }
-  
-  // Atualizar URL quando bibliotecaItemsPerPage mudar (se não estiver vindo da URL)
-  $: if (browser && !isUpdatingItemsPerPageFromUrl && $bibliotecaItemsPerPage && $page && $page.url) {
+  // Atualizar URL quando bibliotecaItemsPerPage mudar (apenas se não estiver vindo da URL)
+  $: if (browser && urlSyncInitialized && !isUpdatingItemsPerPageFromUrl && $bibliotecaItemsPerPage && $page && $page.url) {
     const urlParams = parseUrlParams($page.url);
     const urlItensPorPagina = urlParams.itensPorPagina || 10;
-    // Só atualizar se o valor na URL for diferente
     if (urlItensPorPagina !== $bibliotecaItemsPerPage) {
       updateUrlParams({ itensPorPagina: $bibliotecaItemsPerPage });
-    }
-  }
-  
-  // Sincronizar currentPage com URL
-  $: if (browser && !isUpdatingPageFromUrl && $page && $page.url) {
-    const urlParams = parseUrlParams($page.url);
-    const urlPagina = urlParams.pagina;
-    const urlPageNum = urlPagina !== null && urlPagina > 0 ? urlPagina : 1;
-    
-    // Se URL tem página e é diferente da atual, atualizar
-    if (urlPageNum !== currentPage) {
-      isUpdatingPageFromUrl = true;
-      setPage(urlPageNum, { scroll: false });
-      setTimeout(() => {
-        isUpdatingPageFromUrl = false;
-      }, 0);
     }
   }
   
@@ -561,18 +570,49 @@
     if (browser) {
       document.addEventListener('click', handleClickOutside);
       
-      // Inicializar currentPage da URL
+      // Inicializar valores da URL uma única vez
       if ($page && $page.url) {
         const urlParams = parseUrlParams($page.url);
-        const urlPagina = urlParams.pagina;
-        if (urlPagina !== null && urlPagina > 0) {
-          isUpdatingPageFromUrl = true;
-          currentPage = urlPagina;
-          pageInput = urlPagina.toString();
-          setTimeout(() => {
-            isUpdatingPageFromUrl = false;
-          }, 0);
+        
+        // Inicializar ordenar da URL
+        const urlOrdenar = urlParams.ordenar;
+        if (urlOrdenar && (urlOrdenar === 'numero' || urlOrdenar === 'nome')) {
+          isUpdatingSortFromUrl = true;
+          bibliotecaSort.set(urlOrdenar);
         }
+        
+        // Inicializar itensPorPagina da URL
+        const urlItensPorPagina = urlParams.itensPorPagina;
+        if (urlItensPorPagina !== null && VALID_OPTIONS.includes(urlItensPorPagina)) {
+          isUpdatingItemsPerPageFromUrl = true;
+          bibliotecaItemsPerPage.set(urlItensPorPagina);
+        }
+        
+        // Inicializar pagina da URL
+        const urlPagina = urlParams.pagina;
+        const urlPageNum = urlPagina !== null && urlPagina > 0 ? urlPagina : 1;
+        if (urlPageNum !== 1) {
+          isUpdatingPageFromUrl = true;
+          currentPage = urlPageNum;
+          pageInput = urlPageNum.toString();
+        }
+        
+        // Inicializar último estado conhecido
+        lastKnownUrlState = {
+          ordenar: urlOrdenar || 'numero',
+          itensPorPagina: urlItensPorPagina !== null ? urlItensPorPagina : 10,
+          pagina: urlPageNum
+        };
+        
+        // Aguardar um pouco antes de habilitar sincronização bidirecional
+        setTimeout(() => {
+          isUpdatingSortFromUrl = false;
+          isUpdatingItemsPerPageFromUrl = false;
+          isUpdatingPageFromUrl = false;
+          urlSyncInitialized = true;
+        }, 100);
+      } else {
+        urlSyncInitialized = true;
       }
       
       // Aguardar até que os louvores estejam realmente carregados e processados
