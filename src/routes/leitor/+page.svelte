@@ -804,7 +804,7 @@
     const tituloParam = encodeURIComponent(louvor.nome || '');
     const subtituloText = `${louvor.categoria || ''} | ${louvor.classificacao || ''}`.trim();
     const subtituloParam = encodeURIComponent(subtituloText);
-    goto(`/leitor?file=${fileParam}&titulo=${tituloParam}&subtitulo=${subtituloParam}&validated=true`);
+    goto(`/leitor?file=${fileParam}&titulo=${tituloParam}&subtitulo=${subtituloParam}&validated=true`, { replaceState: true });
   }
   
   // Função para toggle da barra superior (fullscreen)
