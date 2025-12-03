@@ -65,15 +65,7 @@
     max-width: 56rem; /* max-w-4xl = 56rem */
     position: relative;
     margin: 2.5rem 0;
-    padding: 0.75rem;
-    background: linear-gradient(135deg, rgba(212, 175, 55, 0.05) 0%, rgba(212, 175, 55, 0.02) 100%);
-    border-radius: 0.75rem;
-    transform: translateY(0);
-    transition: transform 0.3s ease;
-  }
-  
-  .search-bar-container:hover {
-    transform: translateY(-2px);
+    padding: 0;
   }
   
   .container-tag {
@@ -96,27 +88,27 @@
     display: flex;
     align-items: center;
     width: 100%;
-    background: linear-gradient(135deg, var(--card-color) 0%, #FFF9E6 100%);
-    border: 2.5px solid var(--gold-color);
+    padding: 1rem; /* p-4 - padronizado com PdfViewerSelector */
+    background-color: var(--card-color);
+    border: 2px solid var(--gold-color);
     border-radius: 0.5rem; /* rounded-lg - padronizado com outros containers */
-    box-shadow: 0 6px 20px rgba(212, 175, 55, 0.25), 0 2px 6px rgba(0, 0, 0, 0.1);
-    transition: all 0.3s ease;
+    transition: border-color 0.3s ease;
+    animation: goldenHeatWave 2s ease-in-out infinite;
   }
   
   .search-input-wrapper:focus-within {
     border-color: var(--gold-light) !important;
-    box-shadow: 0 8px 24px rgba(244, 208, 63, 0.35), 0 0 0 4px rgba(244, 208, 63, 0.15) !important;
-    transform: translateY(-2px);
     outline: none !important;
+    animation: goldenHeatWave 2s ease-in-out infinite;
   }
   
   .search-icon {
     position: absolute;
-    left: 0.75rem;
+    left: 1rem;
     top: 50%;
     transform: translateY(-50%);
-    width: 1.5rem;
-    height: 1.5rem;
+    width: 1.25rem;
+    height: 1.25rem;
     color: var(--gold-color);
     opacity: 0.7;
     z-index: 5;
@@ -125,10 +117,10 @@
   
   .search-input {
     width: 100%;
-    height: 4.5rem;
-    padding: 0 1.5rem;
-    padding-left: 1.5rem;
-    font-size: 1.125rem;
+    height: 2.75rem;
+    padding: 0 1rem;
+    padding-left: 1rem;
+    font-size: 1rem;
     font-family: inherit;
     color: var(--text-dark) !important;
     background-color: transparent;
@@ -139,7 +131,7 @@
   }
   
   .search-input.has-icon {
-    padding-left: 3.5rem;
+    padding-left: 2.75rem;
   }
   
   .search-input::-webkit-input-placeholder {
@@ -168,7 +160,7 @@
   }
   
   .search-input.has-text {
-    padding-left: 3.5rem;
+    padding-left: 2.75rem;
   }
   
   .search-input::placeholder {
@@ -179,14 +171,14 @@
   
   .clear-button {
     position: absolute;
-    left: 0.75rem;
+    left: 1rem;
     top: 50%;
     transform: translateY(-50%);
     display: flex;
     align-items: center;
     justify-content: center;
-    width: 2.5rem;
-    height: 2.5rem;
+    width: 2rem;
+    height: 2rem;
     background-color: var(--btn-background-color);
     color: var(--text-light);
     border: none;
@@ -218,6 +210,37 @@
     }
   }
   
+  @keyframes goldenHeatWave {
+    0%, 100% {
+      box-shadow: 
+        0 0 8px rgba(212, 175, 55, 0.4),
+        0 0 16px rgba(212, 175, 55, 0.3),
+        0 0 24px rgba(244, 208, 63, 0.2);
+      transform: translateX(0);
+    }
+    25% {
+      box-shadow: 
+        0 0 12px rgba(212, 175, 55, 0.5),
+        0 0 24px rgba(212, 175, 55, 0.4),
+        0 0 36px rgba(244, 208, 63, 0.3);
+      transform: translateX(0.5px);
+    }
+    50% {
+      box-shadow: 
+        0 0 16px rgba(212, 175, 55, 0.6),
+        0 0 32px rgba(212, 175, 55, 0.5),
+        0 0 48px rgba(244, 208, 63, 0.4);
+      transform: translateX(0);
+    }
+    75% {
+      box-shadow: 
+        0 0 12px rgba(212, 175, 55, 0.5),
+        0 0 24px rgba(212, 175, 55, 0.4),
+        0 0 36px rgba(244, 208, 63, 0.3);
+      transform: translateX(-0.5px);
+    }
+  }
+  
   .clear-icon {
     width: 1.25rem;
     height: 1.25rem;
@@ -227,34 +250,37 @@
   @media (max-width: 640px) {
     .search-bar-container {
       margin: 2rem 0;
-      padding: 0.5rem;
+    }
+    
+    .search-input-wrapper {
+      padding: 0.75rem;
     }
     
     .search-input {
-      height: 3.75rem;
-      font-size: 1rem;
-      padding: 0 1.25rem;
-      padding-left: 1.25rem;
+      height: 2.5rem;
+      font-size: 0.9375rem;
+      padding: 0 0.875rem;
+      padding-left: 0.875rem;
     }
     
     .search-input.has-icon {
-      padding-left: 3rem;
+      padding-left: 2.5rem;
     }
     
     .search-input.has-text {
-      padding-left: 3rem;
+      padding-left: 2.5rem;
     }
     
     .search-icon {
-      width: 1.25rem;
-      height: 1.25rem;
-      left: 0.625rem;
+      width: 1.125rem;
+      height: 1.125rem;
+      left: 0.875rem;
     }
     
     .clear-button {
-      width: 2.25rem;
-      height: 2.25rem;
-      left: 0.625rem;
+      width: 1.875rem;
+      height: 1.875rem;
+      left: 0.875rem;
     }
     
     .clear-icon {
