@@ -353,6 +353,9 @@
     savedPdfIds = hash;
     savedPlaylistName = newPlaylist ? newPlaylist.nome : null;
     
+    // Navegar para a página de listas com editId para colocar a playlist em modo de edição
+    goto(`/listas?editId=${playlistId}`);
+    
     // Reset flag de forma assíncrona para não bloquear a UI
     // A reatividade do Svelte vai atualizar isPlaylistSaved automaticamente
     setTimeout(() => {

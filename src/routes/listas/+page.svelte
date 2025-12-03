@@ -1,6 +1,7 @@
 <script>
-  import { afterUpdate, onMount } from 'svelte';
+  import { afterUpdate, onMount, tick } from 'svelte';
   import { browser } from '$app/environment';
+  import { page } from '$app/stores';
   import { savedPlaylists } from '$lib/stores/savedPlaylists';
   import { carousel } from '$lib/stores/carousel';
   import { louvores, loadLouvores } from '$lib/stores/louvores';
@@ -171,7 +172,9 @@
   }
 
   function startEdit(playlist, event) {
-    event.stopPropagation();
+    if (event) {
+      event.stopPropagation();
+    }
     editingId = playlist.id;
     editingName = playlist.nome;
     originalName = playlist.nome; // Store original name for cancel
@@ -183,6 +186,13 @@
         input.select();
       }
     }, 10);
+  }
+  
+  function startEditById(playlistId) {
+    const playlist = allPlaylists.find(p => p.id === playlistId);
+    if (playlist) {
+      startEdit(playlist);
+    }
   }
   
   function selectAllText(event) {
@@ -256,6 +266,24 @@
     // Carregar louvores se ainda não foram carregados
     if (browser && $louvores.length === 0) {
       await loadLouvores();
+    }
+    
+    // Verificar se há editId na URL para colocar a playlist em modo de edição
+    if (browser && $page.url.searchParams.has('editId')) {
+      const editId = $page.url.searchParams.get('editId');
+      if (editId) {
+        // Aguardar um tick para garantir que as playlists estejam carregadas
+        await tick();
+        
+        // Encontrar a playlist e colocá-la em modo de edição
+        const playlist = $savedPlaylists.find(p => p.id === editId);
+        if (playlist) {
+          startEdit(playlist);
+        }
+        
+        // Remover o parâmetro editId da URL
+        goto('/listas', { replaceState: true, noScroll: true });
+      }
     }
   });
 </script>
