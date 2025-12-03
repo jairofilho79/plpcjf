@@ -1,12 +1,13 @@
 <script>
-  import { afterUpdate } from 'svelte';
+  import { afterUpdate, onMount } from 'svelte';
   import { browser } from '$app/environment';
   import { savedPlaylists } from '$lib/stores/savedPlaylists';
   import { carousel } from '$lib/stores/carousel';
-  import { louvores } from '$lib/stores/louvores';
+  import { louvores, loadLouvores } from '$lib/stores/louvores';
   import { goto } from '$app/navigation';
-  import { Play, Trash2, Share2, Edit2, Check, X, Star } from 'lucide-svelte';
+  import { Play, Trash2, Share2, Edit2, Check, X, Star, Eye } from 'lucide-svelte';
   import { sharePlaylistLink, generatePlaylistShareUrl } from '$lib/utils/playlistUtils';
+  import LouvorCard from '$lib/components/LouvorCard.svelte';
 
   let editingId = null;
   let editingName = '';
@@ -22,6 +23,7 @@
    * @type {HTMLElement | null}
    */
   let filterButtonElement = null;
+  let viewingPlaylistId = null;
 
   $: allPlaylists = $savedPlaylists;
   $: filteredByFavorite = showOnlyFavorites 
@@ -32,6 +34,28 @@
     ? filteredByFavorite.filter((p) => normalizeText(p?.nome ?? '').includes(normalizedSearchTerm))
     : filteredByFavorite;
   $: hasActiveSearch = normalizedSearchTerm.length > 0;
+  
+  // Mapear pdfIds da playlist para objetos louvor
+  $: viewingPlaylist = viewingPlaylistId 
+    ? allPlaylists.find(p => p.id === viewingPlaylistId)
+    : null;
+  
+  $: viewingPlaylistLouvores = (() => {
+    if (!viewingPlaylist || !$louvores.length) return [];
+    
+    // Criar um Map para busca rápida
+    const louvoresMap = new Map();
+    $louvores.forEach(louvor => {
+      if (louvor.pdfId) {
+        louvoresMap.set(louvor.pdfId, louvor);
+      }
+    });
+    
+    // Construir array de louvores na ordem dos pdfIds
+    return viewingPlaylist.pdfIds
+      .map(pdfId => louvoresMap.get(pdfId))
+      .filter(louvor => louvor !== undefined);
+  })();
 
   /**
    * Update SVG star attributes directly
@@ -218,6 +242,22 @@
       cancelEdit();
     }
   }
+
+  function handleView(playlist, event) {
+    event.stopPropagation();
+    viewingPlaylistId = playlist.id;
+  }
+
+  function closeView() {
+    viewingPlaylistId = null;
+  }
+
+  onMount(async () => {
+    // Carregar louvores se ainda não foram carregados
+    if (browser && $louvores.length === 0) {
+      await loadLouvores();
+    }
+  });
 </script>
 
 <svelte:head>
@@ -226,161 +266,193 @@
 
   <div class="max-w-4xl mx-auto">
   <div class="page-body">
-    <div class="page-header">
-      <h1 class="page-title">Minhas Playlists</h1>
-      <button
-        class="favorite-filter-button"
-        class:active={showOnlyFavorites}
-        on:click={() => showOnlyFavorites = !showOnlyFavorites}
-        title={showOnlyFavorites ? 'Mostrar todas as playlists' : 'Mostrar apenas favoritas'}
-        bind:this={filterButtonElement}
-      >
-        <Star class="star-icon" />
-      </button>
-    </div>
-
-    <div class="search-section">
-      <label class="search-label" for="playlist-search">Pesquisar playlists</label>
-      <div class="search-input-wrapper">
-        <input
-          id="playlist-search"
-          type="text"
-          placeholder="Buscar por nome..."
-          bind:value={searchTerm}
-          class:has-text={hasActiveSearch}
-        />
-        {#if hasActiveSearch}
-          <button
-            type="button"
-            class="clear-search"
-            on:click={() => (searchTerm = '')}
-            title="Limpar pesquisa"
-          >
-            <X class="w-4 h-4" />
+    {#if viewingPlaylistId && viewingPlaylist}
+      <!-- Seção de Visualização -->
+      <div class="view-section">
+        <div class="view-header">
+          <h2 class="view-title">{viewingPlaylist.nome}</h2>
+          <button class="close-view-button" on:click={closeView} title="Fechar visualização">
+            <X class="w-5 h-5" />
           </button>
-        {/if}
+        </div>
+        <div class="view-louvores-grid">
+          {#if viewingPlaylistLouvores.length === 0}
+            <div class="empty-view-state">
+              <p>Nenhum louvor encontrado nesta playlist.</p>
+            </div>
+          {:else}
+            {#each viewingPlaylistLouvores as louvor (louvor.pdfId)}
+              <LouvorCard {louvor} />
+            {/each}
+          {/if}
+        </div>
       </div>
-    </div>
-    
-    {#if showCopiedMessage}
-      <div class="copied-notification">Link copiado!</div>
-    {/if}
+    {:else}
+      <!-- Conteúdo Normal da Página -->
+      <div class="page-header">
+        <h1 class="page-title">Minhas Playlists</h1>
+        <button
+          class="favorite-filter-button"
+          class:active={showOnlyFavorites}
+          on:click={() => showOnlyFavorites = !showOnlyFavorites}
+          title={showOnlyFavorites ? 'Mostrar todas as playlists' : 'Mostrar apenas favoritas'}
+          bind:this={filterButtonElement}
+        >
+          <Star class="star-icon" />
+        </button>
+      </div>
 
-    {#if playlists.length === 0}
-      <div class="empty-state">
-        {#if filteredByFavorite.length === 0}
-          {#if showOnlyFavorites}
+      <div class="search-section">
+        <label class="search-label" for="playlist-search">Pesquisar playlists</label>
+        <div class="search-input-wrapper">
+          <input
+            id="playlist-search"
+            type="text"
+            placeholder="Buscar por nome..."
+            bind:value={searchTerm}
+            class:has-text={hasActiveSearch}
+          />
+          {#if hasActiveSearch}
+            <button
+              type="button"
+              class="clear-search"
+              on:click={() => (searchTerm = '')}
+              title="Limpar pesquisa"
+            >
+              <X class="w-4 h-4" />
+            </button>
+          {/if}
+        </div>
+      </div>
+      
+      {#if showCopiedMessage}
+        <div class="copied-notification">Link copiado!</div>
+      {/if}
+
+      {#if playlists.length === 0}
+        <div class="empty-state">
+          {#if filteredByFavorite.length === 0}
+            {#if showOnlyFavorites}
+              <p>Você ainda não tem playlists favoritas.</p>
+              <p class="empty-hint">Clique na estrela de uma playlist para adicioná-la aos favoritos.</p>
+            {:else}
+              <p>Você ainda não tem playlists salvas.</p>
+              <p class="empty-hint">Crie uma playlist na página inicial e clique em "Salvar" para começar.</p>
+            {/if}
+          {:else if hasActiveSearch}
+            <p>Nenhuma playlist encontrada para "{searchTerm.trim()}".</p>
+            <p class="empty-hint">Tente buscar por outro nome ou limpe a pesquisa.</p>
+          {:else if showOnlyFavorites}
             <p>Você ainda não tem playlists favoritas.</p>
             <p class="empty-hint">Clique na estrela de uma playlist para adicioná-la aos favoritos.</p>
           {:else}
             <p>Você ainda não tem playlists salvas.</p>
             <p class="empty-hint">Crie uma playlist na página inicial e clique em "Salvar" para começar.</p>
           {/if}
-        {:else if hasActiveSearch}
-          <p>Nenhuma playlist encontrada para "{searchTerm.trim()}".</p>
-          <p class="empty-hint">Tente buscar por outro nome ou limpe a pesquisa.</p>
-        {:else if showOnlyFavorites}
-          <p>Você ainda não tem playlists favoritas.</p>
-          <p class="empty-hint">Clique na estrela de uma playlist para adicioná-la aos favoritos.</p>
-        {:else}
-          <p>Você ainda não tem playlists salvas.</p>
-          <p class="empty-hint">Crie uma playlist na página inicial e clique em "Salvar" para começar.</p>
-        {/if}
-      </div>
-    {:else}
-      <div class="playlists-grid">
-        {#each playlists as playlist (playlist.id)}
-          <div class="playlist-card">
-            <div class="playlist-header">
-              {#if editingId === playlist.id}
-                <input
-                  type="text"
-                  class="playlist-name-input"
-                  bind:value={editingName}
-                  on:keydown={(e) => handleEditKeydown(e, playlist.id)}
-                  on:blur={cancelEdit}
-                  on:focus={selectAllText}
-                  autofocus
-                />
-                <div class="edit-actions">
-                  <button
-                    class="edit-button save-button"
-                    on:mousedown|preventDefault={(e) => {
-                      e.preventDefault();
-                      saveEdit(playlist.id, e);
-                    }}
-                    title="Salvar"
-                  >
-                    <Check class="w-4 h-4" />
-                  </button>
-                  <button
-                    class="edit-button cancel-button"
-                    on:mousedown|preventDefault={handleCancelClick}
-                    title="Cancelar"
-                  >
-                    <X class="w-4 h-4" />
-                  </button>
-                </div>
-              {:else}
-                <h2 class="playlist-name" on:click={(e) => startEdit(playlist, e)}>
-                  {playlist.nome}
-                </h2>
-                <div class="header-actions">
-                  <button
-                    class="favorite-button"
-                    class:favorited={playlist.favorita}
-                    on:click={(e) => {
-                      e.stopPropagation();
-                      savedPlaylists.toggleFavorite(playlist.id);
-                    }}
-                    title={playlist.favorita ? 'Remover dos favoritos' : 'Adicionar aos favoritos'}
-                  >
-                    <Star class="star-icon-small" data-playlist-id={playlist.id} />
-                  </button>
-                  <button
-                    class="edit-icon-button"
-                    on:click={(e) => startEdit(playlist, e)}
-                    title="Editar nome"
-                  >
-                    <Edit2 class="w-4 h-4" />
-                  </button>
-                </div>
-              {/if}
+        </div>
+      {:else}
+        <div class="playlists-grid">
+          {#each playlists as playlist (playlist.id)}
+            <div class="playlist-card">
+              <div class="playlist-header">
+                {#if editingId === playlist.id}
+                  <input
+                    type="text"
+                    class="playlist-name-input"
+                    bind:value={editingName}
+                    on:keydown={(e) => handleEditKeydown(e, playlist.id)}
+                    on:blur={cancelEdit}
+                    on:focus={selectAllText}
+                    autofocus
+                  />
+                  <div class="edit-actions">
+                    <button
+                      class="edit-button save-button"
+                      on:mousedown|preventDefault={(e) => {
+                        e.preventDefault();
+                        saveEdit(playlist.id, e);
+                      }}
+                      title="Salvar"
+                    >
+                      <Check class="w-4 h-4" />
+                    </button>
+                    <button
+                      class="edit-button cancel-button"
+                      on:mousedown|preventDefault={handleCancelClick}
+                      title="Cancelar"
+                    >
+                      <X class="w-4 h-4" />
+                    </button>
+                  </div>
+                {:else}
+                  <h2 class="playlist-name" on:click={(e) => startEdit(playlist, e)}>
+                    {playlist.nome}
+                  </h2>
+                  <div class="header-actions">
+                    <button
+                      class="favorite-button"
+                      class:favorited={playlist.favorita}
+                      on:click={(e) => {
+                        e.stopPropagation();
+                        savedPlaylists.toggleFavorite(playlist.id);
+                      }}
+                      title={playlist.favorita ? 'Remover dos favoritos' : 'Adicionar aos favoritos'}
+                    >
+                      <Star class="star-icon-small" data-playlist-id={playlist.id} />
+                    </button>
+                    <button
+                      class="edit-icon-button"
+                      on:click={(e) => startEdit(playlist, e)}
+                      title="Editar nome"
+                    >
+                      <Edit2 class="w-4 h-4" />
+                    </button>
+                  </div>
+                {/if}
+              </div>
+              
+              <div class="playlist-info">
+                <span class="playlist-count">{playlist.pdfIds.length} {playlist.pdfIds.length === 1 ? 'documento' : 'documentos'}</span>
+              </div>
+              
+              <div class="playlist-actions">
+                <button
+                  class="action-button play-button"
+                  on:click={() => handlePlay(playlist)}
+                  title="Reproduzir playlist"
+                >
+                  <Play class="w-4 h-4" />
+                  <span>Reproduzir</span>
+                </button>
+                <button
+                  class="action-button view-button"
+                  on:click={(e) => handleView(playlist, e)}
+                  title="Ver louvores da playlist"
+                >
+                  <Eye class="w-4 h-4" />
+                  <span>Ver</span>
+                </button>
+                <button
+                  class="action-button share-button"
+                  on:click={(e) => handleShare(playlist, e)}
+                  title="Compartilhar playlist"
+                >
+                  <Share2 class="w-4 h-4" />
+                  <span>Compartilhar</span>
+                </button>
+                <button
+                  class="action-button remove-button"
+                  on:click={(e) => handleRemove(playlist, e)}
+                  title="Remover playlist"
+                >
+                  <Trash2 class="w-4 h-4" />
+                  <span>Remover</span>
+                </button>
+              </div>
             </div>
-            
-            <div class="playlist-info">
-              <span class="playlist-count">{playlist.pdfIds.length} {playlist.pdfIds.length === 1 ? 'documento' : 'documentos'}</span>
-            </div>
-            
-            <div class="playlist-actions">
-              <button
-                class="action-button play-button"
-                on:click={() => handlePlay(playlist)}
-                title="Reproduzir playlist"
-              >
-                <Play class="w-4 h-4" />
-                <span>Reproduzir</span>
-              </button>
-              <button
-                class="action-button share-button"
-                on:click={(e) => handleShare(playlist, e)}
-                title="Compartilhar playlist"
-              >
-                <Share2 class="w-4 h-4" />
-                <span>Compartilhar</span>
-              </button>
-              <button
-                class="action-button remove-button"
-                on:click={(e) => handleRemove(playlist, e)}
-                title="Remover playlist"
-              >
-                <Trash2 class="w-4 h-4" />
-                <span>Remover</span>
-              </button>
-            </div>
-          </div>
-        {/each}
-      </div>
+          {/each}
+        </div>
+      {/if}
     {/if}
   </div>
 </div>
@@ -805,6 +877,17 @@
     transform: translateY(-1px);
   }
 
+  .view-button {
+    background-color: var(--card-color);
+    color: var(--text-dark);
+    border-color: var(--gold-color);
+  }
+
+  .view-button:hover {
+    background-color: var(--placeholder-color);
+    transform: translateY(-1px);
+  }
+
   .remove-button {
     background-color: transparent;
     color: #dc3545;
@@ -936,6 +1019,138 @@
 
     .modal-button {
       width: 100%;
+    }
+  }
+
+  /* View Section Styles */
+  .view-section {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    animation: fadeIn 0.3s ease;
+  }
+
+  @keyframes fadeIn {
+    from {
+      opacity: 0;
+      transform: translateY(-10px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  .view-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 1.5rem;
+    padding-bottom: 0.75rem;
+    border-bottom: 2px solid var(--gold-color);
+  }
+
+  .view-title {
+    font-size: 1.75rem;
+    font-weight: 700;
+    color: var(--text-light);
+    margin: 0;
+    flex: 1;
+    word-break: break-word;
+  }
+
+  .close-view-button {
+    background: none;
+    border: none;
+    color: var(--text-light);
+    cursor: pointer;
+    padding: 0.5rem;
+    border-radius: 0.5rem;
+    transition: all 0.2s ease;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    margin-left: 1rem;
+  }
+
+  .close-view-button:hover {
+    background-color: rgba(212, 175, 55, 0.2);
+    transform: scale(1.1);
+  }
+
+  .view-louvores-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 1rem;
+    max-height: calc(100vh - 250px);
+    overflow-y: auto;
+    overflow-x: hidden;
+    padding-right: 0.5rem;
+  }
+
+  /* Custom scrollbar for view-louvores-grid */
+  .view-louvores-grid::-webkit-scrollbar {
+    width: 8px;
+  }
+
+  .view-louvores-grid::-webkit-scrollbar-track {
+    background: var(--card-color);
+    border-radius: 4px;
+  }
+
+  .view-louvores-grid::-webkit-scrollbar-thumb {
+    background: var(--gold-color);
+    border-radius: 4px;
+  }
+
+  .view-louvores-grid::-webkit-scrollbar-thumb:hover {
+    background: #c9962e;
+  }
+
+  .empty-view-state {
+    grid-column: 1 / -1;
+    text-align: center;
+    padding: 3rem 1rem;
+    color: var(--text-light);
+  }
+
+  .empty-view-state p {
+    margin: 0;
+    font-size: 1.125rem;
+    font-weight: 500;
+    opacity: 0.9;
+  }
+
+  @media (max-width: 1024px) {
+    .view-louvores-grid {
+      grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+    }
+  }
+
+  @media (max-width: 768px) {
+    .view-title {
+      font-size: 1.5rem;
+    }
+
+    .view-louvores-grid {
+      grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+      gap: 0.75rem;
+    }
+  }
+
+  @media (max-width: 640px) {
+    .view-title {
+      font-size: 1.25rem;
+    }
+
+    .view-louvores-grid {
+      grid-template-columns: 1fr;
+      max-height: calc(100vh - 220px);
+    }
+
+    .view-header {
+      margin-bottom: 1rem;
     }
   }
 </style>
