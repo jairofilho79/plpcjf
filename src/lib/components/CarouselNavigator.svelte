@@ -116,11 +116,12 @@
   }
   
   .carousel-control {
+    height: 48px;
     display: flex;
     align-items: center;
     justify-content: center;
     gap: 0.375rem;
-    padding: 10px 12px;
+    padding: 0 12px;
     border-radius: 6px;
     background: var(--btn-background-color);
     border: 1px solid rgba(255, 255, 255, 0.12);
@@ -131,6 +132,9 @@
     -moz-user-select: none;
     -ms-user-select: none;
     transition: filter 0.2s ease, opacity 0.2s ease;
+    box-sizing: border-box;
+    width: fit-content;
+    max-width: 120px;
   }
   
   .carousel-control:hover {

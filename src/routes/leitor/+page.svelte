@@ -1185,25 +1185,40 @@
     .toolbar {
       grid-template-columns: auto 1fr max-content repeat(6, max-content);
     }
-    .brand { grid-column: 1; grid-row: 1 / 4; align-self: center; }
-    .title-wrap { grid-column: 2; grid-row: 1 / 4; }
+    .brand { grid-column: 1; grid-row: auto; align-self: center; }
+    .title-wrap { grid-column: 2; grid-row: auto; }
     /* Carousel navigator in column 3 - after title-wrap */
     :global(.toolbar > :global(.carousel-navigator)) {
       grid-column: 3;
+      grid-row: auto;
     }
     /* Show prev/next buttons on tablet+ */
     .page-nav-prev { 
-      grid-column: 4; 
+      grid-column: 4;
+      grid-row: auto;
       display: flex; /* Show on tablet+ */
     }
-    .indicator { grid-column: 5; }
+    .indicator { 
+      grid-column: 5;
+      grid-row: auto;
+    }
     .page-nav-next { 
-      grid-column: 6; 
+      grid-column: 6;
+      grid-row: auto;
       display: flex; /* Show on tablet+ */
     }
-    .btn.zoom-minus { grid-column: 7; }
-    .btn.zoom-fit { grid-column: 8; }
-    .btn.zoom-plus { grid-column: 9; }
+    .btn.zoom-minus { 
+      grid-column: 7;
+      grid-row: auto;
+    }
+    .btn.zoom-fit { 
+      grid-column: 8;
+      grid-row: auto;
+    }
+    .btn.zoom-plus { 
+      grid-column: 9;
+      grid-row: auto;
+    }
   }
 
   /* Compact screens: stack title under PLPC, stack indicator, hide +/- */
