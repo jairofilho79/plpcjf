@@ -1,37 +1,39 @@
 import { writable } from 'svelte/store';
 import { browser } from '$app/environment';
+import { page } from '$app/stores';
+import { get } from 'svelte/store';
+import { parseUrlParams } from '$lib/utils/urlSync';
 
-const SORT_STORAGE_KEY = 'bibliotecaSortBy';
+const DEFAULT_SORT = 'numero';
 
-function loadSortFromStorage() {
-  if (!browser) return 'numero';
+function loadSortFromUrl() {
+  if (!browser) return DEFAULT_SORT;
   
   try {
-    const saved = localStorage.getItem(SORT_STORAGE_KEY);
-    if (saved === 'numero' || saved === 'nome') {
-      return saved;
+    const currentPage = get(page);
+    if (!currentPage || !currentPage.url) return DEFAULT_SORT;
+    
+    const urlParams = parseUrlParams(currentPage.url);
+    const ordenar = urlParams.ordenar;
+    
+    if (ordenar === 'numero' || ordenar === 'nome') {
+      return ordenar;
     }
   } catch (e) {
-    console.warn('Não foi possível ler a ordenação do localStorage:', e);
+    console.warn('Erro ao ler ordenação da URL:', e);
   }
-  return 'numero';
+  
+  return DEFAULT_SORT;
 }
 
 function createBibliotecaSortStore() {
-  const { subscribe, set } = writable(loadSortFromStorage());
+  const { subscribe, set } = writable(loadSortFromUrl());
 
   return {
     subscribe,
     set: (value) => {
       if (value === 'numero' || value === 'nome') {
         set(value);
-        if (browser) {
-          try {
-            localStorage.setItem(SORT_STORAGE_KEY, value);
-          } catch (e) {
-            console.warn('Não foi possível salvar a ordenação no localStorage:', e);
-          }
-        }
       }
     }
   };

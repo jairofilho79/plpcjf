@@ -282,13 +282,24 @@
   })();
   
   // Pagination
-  let currentPage = 1;
+  // Inicializar currentPage da URL
+  let currentPage = browser && $page && $page.url ? (() => {
+    const urlParams = parseUrlParams($page.url);
+    const pagina = urlParams.pagina;
+    return pagina !== null && pagina > 0 ? pagina : 1;
+  })() : 1;
   let pageInput = '1';
   let itemsPerPageMenuOpen = false;
   /**
    * @type {HTMLElement | null}
    */
   let louvoresContainer = null;
+  
+  // Flags para evitar loops infinitos na sincronização URL
+  let isUpdatingFromUrl = false;
+  let isUpdatingSortFromUrl = false;
+  let isUpdatingItemsPerPageFromUrl = false;
+  let isUpdatingPageFromUrl = false;
 
   function scrollToLouvores() {
     if (!browser) return;
@@ -315,6 +326,11 @@
     const pageNum = Math.max(1, Math.min(maxPage, page));
     currentPage = pageNum;
     pageInput = pageNum.toString();
+
+    // Atualizar URL quando a página mudar (se não estiver vindo da URL)
+    if (browser && !isUpdatingPageFromUrl) {
+      updateUrlParams({ pagina: pageNum });
+    }
 
     if (scroll && totalPages > 0) {
       scrollToLouvores();
@@ -347,6 +363,88 @@
       setPage(1, { scroll: false });
     }
     previousFilteredCount = currentFilteredCount;
+  }
+  
+  // Sincronizar bibliotecaSort com URL
+  $: if (browser && !isUpdatingSortFromUrl && $page && $page.url) {
+    const urlParams = parseUrlParams($page.url);
+    const urlOrdenar = urlParams.ordenar;
+    const currentSort = $bibliotecaSort;
+    
+    // Se URL tem ordenar e é diferente do atual, atualizar store
+    if (urlOrdenar && (urlOrdenar === 'numero' || urlOrdenar === 'nome') && urlOrdenar !== currentSort) {
+      isUpdatingSortFromUrl = true;
+      bibliotecaSort.set(urlOrdenar);
+      setTimeout(() => {
+        isUpdatingSortFromUrl = false;
+      }, 0);
+    } else if (!urlOrdenar && currentSort !== 'numero') {
+      // Se URL não tem ordenar e o atual não é o padrão, resetar para padrão
+      isUpdatingSortFromUrl = true;
+      bibliotecaSort.set('numero');
+      setTimeout(() => {
+        isUpdatingSortFromUrl = false;
+      }, 0);
+    }
+  }
+  
+  // Atualizar URL quando bibliotecaSort mudar (se não estiver vindo da URL)
+  $: if (browser && !isUpdatingSortFromUrl && $bibliotecaSort && $page && $page.url) {
+    const urlParams = parseUrlParams($page.url);
+    const urlOrdenar = urlParams.ordenar || 'numero';
+    // Só atualizar se o valor na URL for diferente
+    if (urlOrdenar !== $bibliotecaSort) {
+      updateUrlParams({ ordenar: $bibliotecaSort });
+    }
+  }
+  
+  // Sincronizar bibliotecaItemsPerPage com URL
+  $: if (browser && !isUpdatingItemsPerPageFromUrl && $page && $page.url) {
+    const urlParams = parseUrlParams($page.url);
+    const urlItensPorPagina = urlParams.itensPorPagina;
+    const currentItemsPerPage = $bibliotecaItemsPerPage;
+    
+    // Se URL tem itensPorPagina e é diferente do atual, atualizar store
+    if (urlItensPorPagina !== null && VALID_OPTIONS.includes(urlItensPorPagina) && urlItensPorPagina !== currentItemsPerPage) {
+      isUpdatingItemsPerPageFromUrl = true;
+      bibliotecaItemsPerPage.set(urlItensPorPagina);
+      setTimeout(() => {
+        isUpdatingItemsPerPageFromUrl = false;
+      }, 0);
+    } else if (urlItensPorPagina === null && currentItemsPerPage !== 10) {
+      // Se URL não tem itensPorPagina e o atual não é o padrão, resetar para padrão
+      isUpdatingItemsPerPageFromUrl = true;
+      bibliotecaItemsPerPage.set(10);
+      setTimeout(() => {
+        isUpdatingItemsPerPageFromUrl = false;
+      }, 0);
+    }
+  }
+  
+  // Atualizar URL quando bibliotecaItemsPerPage mudar (se não estiver vindo da URL)
+  $: if (browser && !isUpdatingItemsPerPageFromUrl && $bibliotecaItemsPerPage && $page && $page.url) {
+    const urlParams = parseUrlParams($page.url);
+    const urlItensPorPagina = urlParams.itensPorPagina || 10;
+    // Só atualizar se o valor na URL for diferente
+    if (urlItensPorPagina !== $bibliotecaItemsPerPage) {
+      updateUrlParams({ itensPorPagina: $bibliotecaItemsPerPage });
+    }
+  }
+  
+  // Sincronizar currentPage com URL
+  $: if (browser && !isUpdatingPageFromUrl && $page && $page.url) {
+    const urlParams = parseUrlParams($page.url);
+    const urlPagina = urlParams.pagina;
+    const urlPageNum = urlPagina !== null && urlPagina > 0 ? urlPagina : 1;
+    
+    // Se URL tem página e é diferente da atual, atualizar
+    if (urlPageNum !== currentPage) {
+      isUpdatingPageFromUrl = true;
+      setPage(urlPageNum, { scroll: false });
+      setTimeout(() => {
+        isUpdatingPageFromUrl = false;
+      }, 0);
+    }
   }
   
   /**
@@ -462,6 +560,20 @@
     
     if (browser) {
       document.addEventListener('click', handleClickOutside);
+      
+      // Inicializar currentPage da URL
+      if ($page && $page.url) {
+        const urlParams = parseUrlParams($page.url);
+        const urlPagina = urlParams.pagina;
+        if (urlPagina !== null && urlPagina > 0) {
+          isUpdatingPageFromUrl = true;
+          currentPage = urlPagina;
+          pageInput = urlPagina.toString();
+          setTimeout(() => {
+            isUpdatingPageFromUrl = false;
+          }, 0);
+        }
+      }
       
       // Aguardar até que os louvores estejam realmente carregados e processados
       const initFilters = () => {

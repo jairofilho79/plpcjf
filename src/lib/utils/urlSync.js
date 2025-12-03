@@ -38,12 +38,19 @@ export function parseUrlParams(url) {
   const comoAbrirParam = params.get('comoAbrir');
   const pesquisaParam = params.get('pesquisa');
   
+  const ordenarParam = params.get('ordenar');
+  const itensPorPaginaParam = params.get('itensPorPagina');
+  const paginaParam = params.get('pagina');
+  
   return {
     materiais: deserializeArrayParam(params.get('materiais') || ''),
     arranjo: deserializeArrayParam(params.get('arranjo') || ''),
     arranjoEspecial: deserializeArrayParam(params.get('arranjoEspecial') || ''),
     comoAbrir: comoAbrirParam ? decodeURIComponent(comoAbrirParam) : '',
-    pesquisa: pesquisaParam ? decodeURIComponent(pesquisaParam) : ''
+    pesquisa: pesquisaParam ? decodeURIComponent(pesquisaParam) : '',
+    ordenar: ordenarParam ? decodeURIComponent(ordenarParam) : '',
+    itensPorPagina: itensPorPaginaParam ? parseInt(itensPorPaginaParam, 10) : null,
+    pagina: paginaParam ? parseInt(paginaParam, 10) : null
   };
 }
 
@@ -135,6 +142,36 @@ export function updateUrlParams(newParams, options = {}) {
       currentParams.delete('pesquisa');
     } else {
       currentParams.set('pesquisa', encodeURIComponent(pesquisa));
+    }
+  }
+  
+  if (newParams.ordenar !== undefined) {
+    const ordenar = (newParams.ordenar || '').trim();
+    // Se é o valor padrão ('numero'), remover param
+    if (ordenar === 'numero' || !ordenar) {
+      currentParams.delete('ordenar');
+    } else {
+      currentParams.set('ordenar', encodeURIComponent(ordenar));
+    }
+  }
+  
+  if (newParams.itensPorPagina !== undefined) {
+    const itensPorPagina = parseInt(newParams.itensPorPagina, 10);
+    // Se é o valor padrão (10) ou inválido, remover param
+    if (isNaN(itensPorPagina) || itensPorPagina === 10) {
+      currentParams.delete('itensPorPagina');
+    } else {
+      currentParams.set('itensPorPagina', itensPorPagina.toString());
+    }
+  }
+  
+  if (newParams.pagina !== undefined) {
+    const pagina = parseInt(newParams.pagina, 10);
+    // Se é o valor padrão (1) ou inválido, remover param
+    if (isNaN(pagina) || pagina <= 1) {
+      currentParams.delete('pagina');
+    } else {
+      currentParams.set('pagina', pagina.toString());
     }
   }
   

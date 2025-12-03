@@ -1,29 +1,34 @@
 import { writable } from 'svelte/store';
 import { browser } from '$app/environment';
+import { page } from '$app/stores';
+import { get } from 'svelte/store';
+import { parseUrlParams } from '$lib/utils/urlSync';
 
-const ITEMS_PER_PAGE_STORAGE_KEY = 'bibliotecaItemsPerPage';
 const DEFAULT_ITEMS_PER_PAGE = 10;
 const VALID_OPTIONS = [10, 25, 50];
 
-function loadItemsPerPageFromStorage() {
+function loadItemsPerPageFromUrl() {
   if (!browser) return DEFAULT_ITEMS_PER_PAGE;
   
   try {
-    const saved = localStorage.getItem(ITEMS_PER_PAGE_STORAGE_KEY);
-    if (saved) {
-      const parsed = parseInt(saved, 10);
-      if (VALID_OPTIONS.includes(parsed)) {
-        return parsed;
-      }
+    const currentPage = get(page);
+    if (!currentPage || !currentPage.url) return DEFAULT_ITEMS_PER_PAGE;
+    
+    const urlParams = parseUrlParams(currentPage.url);
+    const itensPorPagina = urlParams.itensPorPagina;
+    
+    if (itensPorPagina !== null && VALID_OPTIONS.includes(itensPorPagina)) {
+      return itensPorPagina;
     }
   } catch (e) {
-    console.warn('Não foi possível ler os itens por página do localStorage:', e);
+    console.warn('Erro ao ler itens por página da URL:', e);
   }
+  
   return DEFAULT_ITEMS_PER_PAGE;
 }
 
 function createItemsPerPageStore() {
-  const { subscribe, set } = writable(loadItemsPerPageFromStorage());
+  const { subscribe, set } = writable(loadItemsPerPageFromUrl());
 
   return {
     subscribe,
@@ -31,13 +36,6 @@ function createItemsPerPageStore() {
       const numValue = parseInt(value, 10);
       if (VALID_OPTIONS.includes(numValue)) {
         set(numValue);
-        if (browser) {
-          try {
-            localStorage.setItem(ITEMS_PER_PAGE_STORAGE_KEY, numValue.toString());
-          } catch (e) {
-            console.warn('Não foi possível salvar os itens por página no localStorage:', e);
-          }
-        }
       }
     }
   };
