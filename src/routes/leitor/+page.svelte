@@ -1169,6 +1169,17 @@
     .title-main { font-size: 1rem; }
   }
 
+  /* Mobile screens: limit PLPCG button to half toolbar height */
+  @media (max-width: 767px) {
+    .brand {
+      max-height: 24px; /* Ajustado para 24px considerando os paddings */
+      align-self: start; /* Alinhar ao topo da célula do grid */
+      margin-bottom: 12px;
+      padding: 4px 22px 4px 30px; /* Padding-top restaurado para 4px */
+      font-size: 1.25rem; /* Reduzir ligeiramente o tamanho da fonte */
+    }
+  }
+
   /* Tablet+ layout: brand in its own column, title/subtitle to the right */
   @media (min-width: 768px) {
     .toolbar {
