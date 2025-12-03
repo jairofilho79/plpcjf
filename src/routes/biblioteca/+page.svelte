@@ -348,7 +348,7 @@
   
   // Reset to page 1 when items per page changes
   $: {
-    if (itemsPerPage && urlSyncInitialized) {
+    if (itemsPerPage && urlSyncInitialized && !pageInitializedFromUrl) {
       const newTotalPages = Math.ceil(sortedLouvores.length / itemsPerPage);
       if (currentPage > newTotalPages && newTotalPages > 0) {
         setPage(1, { scroll: false });
@@ -358,11 +358,28 @@
   
   // Reset to page 1 when filters change or when current page exceeds total pages
   let previousFilteredCount = 0;
+  let pageInitializedFromUrl = false;
   $: {
-    if (urlSyncInitialized) {
+    if (urlSyncInitialized && totalPages > 0) {
       const currentFilteredCount = filteredLouvores.length;
+      // Se ainda não inicializamos previousFilteredCount, fazer isso agora (primeira execução)
+      if (previousFilteredCount === 0 && currentFilteredCount > 0) {
+        previousFilteredCount = currentFilteredCount;
+        // Se a página foi inicializada da URL, verificar se é válida antes de resetar
+        if (pageInitializedFromUrl) {
+          // Se a página da URL é válida, manter; caso contrário, ajustar
+          if (currentPage > totalPages) {
+            setPage(totalPages, { scroll: false });
+          }
+          return;
+        }
+      }
       // Reset to page 1 if filtered results count changed significantly or current page is invalid
-      if (previousFilteredCount !== currentFilteredCount || (currentPage > totalPages && totalPages > 0)) {
+      // Mas não resetar se a página foi inicializada da URL e ainda é válida
+      if (currentPage > totalPages) {
+        setPage(totalPages, { scroll: false });
+      } else if (previousFilteredCount !== 0 && previousFilteredCount !== currentFilteredCount && !pageInitializedFromUrl) {
+        // Só resetar se não foi inicializado da URL e a contagem mudou significativamente
         setPage(1, { scroll: false });
       }
       previousFilteredCount = currentFilteredCount;
@@ -429,7 +446,10 @@
         // Sincronizar pagina
         if (urlPageNum !== currentPage) {
           isUpdatingPageFromUrl = true;
-          setPage(urlPageNum, { scroll: false, skipUrlUpdate: true });
+          // Atualizar diretamente sem usar setPage para evitar limitação por totalPages
+          // O setPage limita ao maxPage, mas quando sincronizando da URL, queremos o valor exato
+          currentPage = urlPageNum;
+          pageInput = urlPageNum.toString();
           setTimeout(() => {
             isUpdatingPageFromUrl = false;
           }, 100);
@@ -591,11 +611,14 @@
         // Inicializar pagina da URL
         const urlPagina = urlParams.pagina;
         const urlPageNum = urlPagina !== null && urlPagina > 0 ? urlPagina : 1;
+        // Sempre inicializar da URL, mesmo se for página 1, para garantir consistência
+        isUpdatingPageFromUrl = true;
         if (urlPageNum !== 1) {
-          isUpdatingPageFromUrl = true;
-          currentPage = urlPageNum;
-          pageInput = urlPageNum.toString();
+          pageInitializedFromUrl = true;
         }
+        // Atualizar diretamente sem usar setPage para evitar limitação por totalPages ainda não calculado
+        currentPage = urlPageNum;
+        pageInput = urlPageNum.toString();
         
         // Inicializar último estado conhecido
         lastKnownUrlState = {
@@ -610,6 +633,10 @@
           isUpdatingItemsPerPageFromUrl = false;
           isUpdatingPageFromUrl = false;
           urlSyncInitialized = true;
+          // Após um tempo, permitir que a lógica de reset funcione normalmente
+          setTimeout(() => {
+            pageInitializedFromUrl = false;
+          }, 500);
         }, 100);
       } else {
         urlSyncInitialized = true;
