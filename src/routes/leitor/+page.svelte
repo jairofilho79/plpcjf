@@ -18,6 +18,8 @@
   let containerEl: HTMLDivElement | null = null;
   let viewerEl: HTMLDivElement | null = null;
   let keyboardFocusEl: HTMLTextAreaElement | null = null;
+  let keyboardActivatorEl: HTMLInputElement | null = null;
+  let keyboardActivated = false;
 
   let eventBus: any;
   let linkService: any;
@@ -657,23 +659,94 @@
       }
     };
     
+    // Ativar sistema de eventos de teclado no iOS através de um elemento de input visível
+    // Isso simula o comportamento da barra de pesquisa que "ativa" os eventos de teclado
+    const activateKeyboard = () => {
+      if (keyboardActivated) {
+        maintainFocus();
+        return;
+      }
+      
+      if (keyboardActivatorEl) {
+        try {
+          // Focar o elemento de input visível temporário
+          keyboardActivatorEl.focus();
+          keyboardActivated = true;
+          console.log('[Leitor] Sistema de teclado ativado via elemento de input');
+          
+          // Após um pequeno delay, transferir o foco para o elemento invisível
+          setTimeout(() => {
+            if (keyboardFocusEl) {
+              keyboardFocusEl.focus();
+              // Esconder o elemento temporário após ativação
+              if (keyboardActivatorEl) {
+                keyboardActivatorEl.style.display = 'none';
+              }
+            }
+          }, 100);
+        } catch (err) {
+          console.warn('[Leitor] Erro ao ativar teclado:', err);
+        }
+      }
+    };
+    
     // Wrapper para touchstart que mantém foco antes de processar o evento
     const touchStartWrapper = (e: TouchEvent) => {
-      maintainFocus();
+      // Na primeira interação, ativar o sistema de teclado através do elemento visível
+      if (!keyboardActivated) {
+        activateKeyboard();
+      } else {
+        maintainFocus();
+      }
       onTouchStart(e);
+    };
+    
+    // Handler para click que também ativa o teclado na primeira interação
+    const clickWrapper = (e: MouseEvent) => {
+      // Na primeira interação, ativar o sistema de teclado através do elemento visível
+      if (!keyboardActivated) {
+        activateKeyboard();
+      } else {
+        maintainFocus();
+      }
     };
     
     // Adicionar listeners para manter foco
     if (containerEl) {
-      containerEl.addEventListener('click', maintainFocus, { passive: true });
+      containerEl.addEventListener('click', clickWrapper, { passive: true });
       containerEl.addEventListener('touchstart', touchStartWrapper, { passive: false });
       containerEl.addEventListener('touchmove', onTouchMove, { passive: false });
       containerEl.addEventListener('touchend', onTouchEnd, { passive: false });
       containerEl.addEventListener('touchcancel', onTouchEnd, { passive: false });
     }
     
+    // Listeners de captura no document para interceptar qualquer interação ANTES de outros handlers
+    const documentClickCapture = (e: MouseEvent) => {
+      if (!keyboardActivated && keyboardActivatorEl) {
+        activateKeyboard();
+      }
+    };
+    
+    const documentTouchCapture = (e: TouchEvent) => {
+      if (!keyboardActivated && keyboardActivatorEl) {
+        activateKeyboard();
+      }
+    };
+    
+    document.addEventListener('click', documentClickCapture, { capture: true, passive: true });
+    document.addEventListener('touchstart', documentTouchCapture, { capture: true, passive: true });
+    
     // Também manter foco quando a janela receber foco novamente
     window.addEventListener('focus', maintainFocus, { passive: true });
+    
+    // Resetar estado quando navegar de volta (popstate)
+    const popstateHandler = () => {
+      keyboardActivated = false;
+      if (keyboardActivatorEl) {
+        keyboardActivatorEl.style.display = 'block';
+      }
+    };
+    window.addEventListener('popstate', popstateHandler);
 
     // Define escala inicial e sincroniza estados
     eventBus.on('pagesinit', () => {
@@ -737,6 +810,7 @@
       window.removeEventListener('keydown', onKeyDown, true);
       window.removeEventListener('keyup', onKeyUp, true);
       window.removeEventListener('focus', maintainFocus);
+      window.removeEventListener('popstate', popstateHandler);
       // Remover listener do document para PageUp/PageDown
       document.removeEventListener('keydown', documentPageKeyHandler, true);
       if (keyboardFocusEl) {
@@ -746,8 +820,10 @@
       if (storageHandler) {
         window.removeEventListener('storage', storageHandler);
       }
+      document.removeEventListener('click', documentClickCapture, true);
+      document.removeEventListener('touchstart', documentTouchCapture, true);
       if (containerEl) {
-        containerEl.removeEventListener('click', maintainFocus);
+        containerEl.removeEventListener('click', clickWrapper);
         containerEl.removeEventListener('touchstart', touchStartWrapper);
         containerEl.removeEventListener('touchmove', onTouchMove);
         containerEl.removeEventListener('touchend', onTouchEnd);
@@ -1563,6 +1639,33 @@
     background: rgba(212, 175, 55, 0.1); /* Gold color com opacidade */
   }
 
+  /* Elemento de input visível temporário para ativar sistema de teclado no iOS */
+  .keyboard-activator-input {
+    position: fixed;
+    top: 10px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 2px;
+    height: 2px;
+    opacity: 0.01; /* Quase invisível mas ainda visível o suficiente para iOS reconhecer */
+    pointer-events: auto;
+    border: none;
+    outline: none;
+    padding: 0;
+    margin: 0;
+    z-index: 9999; /* Colocar acima de tudo para garantir que possa receber foco */
+    background: transparent;
+    color: transparent;
+    caret-color: transparent;
+    font-size: 1px;
+  }
+  
+  .keyboard-activator-input:focus {
+    outline: none;
+    border: none;
+    box-shadow: none;
+  }
+  
   /* Elemento focável invisível para capturar eventos de teclado no iPad/iOS */
   .keyboard-focus-input {
     position: fixed;
@@ -1729,6 +1832,21 @@
 {/if}
 
 <div id="viewerContainer" bind:this={containerEl} class="container {containerClass}" class:hidden={pdfLoading || pdfError}>
+  <!-- Elemento de input visível temporário para ativar sistema de teclado no iOS -->
+  <!-- Simula o comportamento da barra de pesquisa que "ativa" os eventos de teclado -->
+  <input
+    bind:this={keyboardActivatorEl}
+    type="text"
+    class="keyboard-activator-input"
+    tabindex="0"
+    aria-label="Ativar teclado"
+    autocomplete="off"
+    autocorrect="off"
+    autocapitalize="off"
+    spellcheck="false"
+    data-testid="keyboard-activator"
+  />
+  
   <!-- Elemento focável invisível para capturar eventos de teclado no iPad/iOS -->
   <!-- Usar textarea com readonly para melhor compatibilidade com iOS -->
   <textarea
