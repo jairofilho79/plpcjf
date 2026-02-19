@@ -367,18 +367,21 @@
   }
 
   // Handler específico para PageUp/PageDown que sempre previne scroll padrão
+  // Handler específico para PageUp/PageDown - simples e direto
   function handlePageKeys(e: KeyboardEvent) {
-    if (!viewer) return;
+    if (!viewer) return false;
     
-    // Capturar PageUp e PageDown em qualquer situação e prevenir comportamento padrão (scroll)
+    // Capturar PageUp e PageDown e prevenir comportamento padrão (scroll)
     if (e.key === 'PageDown') {
       e.preventDefault();
       e.stopPropagation();
+      e.stopImmediatePropagation();
       nextPage();
       return true;
     } else if (e.key === 'PageUp') {
       e.preventDefault();
       e.stopPropagation();
+      e.stopImmediatePropagation();
       prevPage();
       return true;
     }
@@ -388,13 +391,14 @@
   function onKeyDown(e: KeyboardEvent) {
     if (!viewer) return;
     
-    // Primeiro, tratar PageUp/PageDown (sempre prevenir scroll padrão)
-    if (handlePageKeys(e)) {
+    // PageUp/PageDown são tratados pelo listener do document com maior prioridade
+    // Não processar aqui para evitar duplicação
+    if (e.key === 'PageDown' || e.key === 'PageUp') {
       return;
     }
     
     // Debug log para investigar eventos de teclado (especialmente no iPad)
-    if (e.key.startsWith('Arrow') || e.key === 'PageDown' || e.key === 'PageUp') {
+    if (e.key.startsWith('Arrow')) {
       console.log('[Leitor] KeyDown capturado:', {
         key: e.key,
         code: e.code,
@@ -434,13 +438,13 @@
   function onKeyUp(e: KeyboardEvent) {
     if (!viewer) return;
     
-    // Primeiro, tratar PageUp/PageDown (sempre prevenir scroll padrão)
-    if (handlePageKeys(e)) {
+    // PageUp/PageDown são tratados pelo listener do document - não processar aqui
+    if (e.key === 'PageDown' || e.key === 'PageUp') {
       return;
     }
     
     // Debug log para investigar eventos de teclado
-    if (e.key.startsWith('Arrow') || e.key === 'PageDown' || e.key === 'PageUp') {
+    if (e.key.startsWith('Arrow')) {
       console.log('[Leitor] KeyUp capturado (fallback):', {
         key: e.key,
         code: e.code,
@@ -451,8 +455,7 @@
       });
     }
     
-    // Processar apenas se não foi processado no keydown
-    // Verificar se é uma tecla de navegação
+    // Processar apenas setas (não PageUp/PageDown)
     if (e.key === 'ArrowDown' || e.key === 'ArrowRight') {
       e.preventDefault();
       nextPage();
@@ -580,22 +583,21 @@
     // Fallback com keyup para eventos que não foram capturados no keydown
     window.addEventListener('keyup', onKeyUp, true);
     
-    // Listener específico para PageUp/PageDown no document para sempre prevenir scroll padrão
-    // Isso funciona mesmo sem foco em elementos específicos e previne o comportamento de scroll
-    const documentKeyDownHandler = (e: KeyboardEvent) => {
+    // Listener específico para PageUp/PageDown no document
+    // Usar apenas um listener no document com capture phase para máxima prioridade
+    const documentPageKeyHandler = (e: KeyboardEvent) => {
       if (e.key === 'PageDown' || e.key === 'PageUp') {
-        handlePageKeys(e);
+        const handled = handlePageKeys(e);
+        if (handled) {
+          // Se foi tratado, não propagar para outros listeners
+          return;
+        }
       }
     };
     
-    const documentKeyUpHandler = (e: KeyboardEvent) => {
-      if (e.key === 'PageDown' || e.key === 'PageUp') {
-        handlePageKeys(e);
-      }
-    };
-    
-    document.addEventListener('keydown', documentKeyDownHandler, true);
-    document.addEventListener('keyup', documentKeyUpHandler, true);
+    // Adicionar apenas no keydown com capture phase (máxima prioridade)
+    // Não adicionar no keyup para evitar duplicação
+    document.addEventListener('keydown', documentPageKeyHandler, { capture: true, passive: false });
 
     // Adicionar listeners também no elemento focável invisível (necessário para iPad/iOS)
     if (keyboardFocusEl) {
@@ -735,9 +737,8 @@
       window.removeEventListener('keydown', onKeyDown, true);
       window.removeEventListener('keyup', onKeyUp, true);
       window.removeEventListener('focus', maintainFocus);
-      // Remover listeners do document para PageUp/PageDown
-      document.removeEventListener('keydown', documentKeyDownHandler, true);
-      document.removeEventListener('keyup', documentKeyUpHandler, true);
+      // Remover listener do document para PageUp/PageDown
+      document.removeEventListener('keydown', documentPageKeyHandler, true);
       if (keyboardFocusEl) {
         keyboardFocusEl.removeEventListener('keydown', onKeyDown, true);
         keyboardFocusEl.removeEventListener('keyup', onKeyUp, true);
