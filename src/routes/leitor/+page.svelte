@@ -17,6 +17,7 @@
 
   let containerEl: HTMLDivElement | null = null;
   let viewerEl: HTMLDivElement | null = null;
+  let keyboardFocusEl: HTMLInputElement | null = null;
 
   let eventBus: any;
   let linkService: any;
@@ -367,6 +368,19 @@
 
   function onKeyDown(e: KeyboardEvent) {
     if (!viewer) return;
+    
+    // Debug log para investigar eventos de teclado (especialmente no iPad)
+    if (e.key.startsWith('Arrow') || e.key === 'PageDown' || e.key === 'PageUp') {
+      console.log('[Leitor] KeyDown capturado:', {
+        key: e.key,
+        code: e.code,
+        keyCode: e.keyCode,
+        target: e.target,
+        currentTarget: e.currentTarget,
+        isTrusted: e.isTrusted
+      });
+    }
+    
     // Basic shortcuts
     if ((e.ctrlKey || e.metaKey) && (e.key === '+' || e.key === '=')) {
       e.preventDefault();
@@ -381,6 +395,39 @@
       e.preventDefault();
       nextPage();
     } else if (e.key === 'ArrowUp' || e.key === 'PageUp') {
+      e.preventDefault();
+      prevPage();
+    } else if (e.key === 'ArrowRight') {
+      e.preventDefault();
+      nextPage();
+    } else if (e.key === 'ArrowLeft') {
+      e.preventDefault();
+      prevPage();
+    }
+  }
+
+  // Fallback com keyup para eventos que não foram capturados no keydown (especialmente no iPad)
+  function onKeyUp(e: KeyboardEvent) {
+    if (!viewer) return;
+    
+    // Debug log para investigar eventos de teclado
+    if (e.key.startsWith('Arrow') || e.key === 'PageDown' || e.key === 'PageUp') {
+      console.log('[Leitor] KeyUp capturado (fallback):', {
+        key: e.key,
+        code: e.code,
+        keyCode: e.keyCode,
+        target: e.target,
+        currentTarget: e.currentTarget,
+        isTrusted: e.isTrusted
+      });
+    }
+    
+    // Processar apenas se não foi processado no keydown
+    // Verificar se é uma tecla de navegação
+    if (e.key === 'ArrowDown' || e.key === 'PageDown' || e.key === 'ArrowRight') {
+      e.preventDefault();
+      nextPage();
+    } else if (e.key === 'ArrowUp' || e.key === 'PageUp' || e.key === 'ArrowLeft') {
       e.preventDefault();
       prevPage();
     }
@@ -499,15 +546,48 @@
       }
     };
     window.addEventListener('resize', resize);
-    window.addEventListener('keydown', onKeyDown);
+    // Usar fase de captura para tentar capturar eventos antes que sejam interceptados (especialmente no iPad)
+    window.addEventListener('keydown', onKeyDown, true);
+    // Fallback com keyup para eventos que não foram capturados no keydown
+    window.addEventListener('keyup', onKeyUp, true);
 
-    // Add touch gesture handlers
+    // Adicionar listeners também no elemento focável invisível (necessário para iPad/iOS)
+    if (keyboardFocusEl) {
+      keyboardFocusEl.addEventListener('keydown', onKeyDown, true);
+      keyboardFocusEl.addEventListener('keyup', onKeyUp, true);
+      // Garantir que o elemento receba foco quando a página carregar (especialmente no iPad)
+      // Usar setTimeout para garantir que o DOM esteja pronto
+      setTimeout(() => {
+        if (keyboardFocusEl) {
+          keyboardFocusEl.focus();
+        }
+      }, 100);
+    }
+
+    // Manter elemento focável com foco quando usuário interagir com a página (importante para iPad/iOS)
+    const maintainFocus = () => {
+      if (keyboardFocusEl && document.activeElement !== keyboardFocusEl) {
+        keyboardFocusEl.focus();
+      }
+    };
+    
+    // Wrapper para touchstart que mantém foco antes de processar o evento
+    const touchStartWrapper = (e: TouchEvent) => {
+      maintainFocus();
+      onTouchStart(e);
+    };
+    
+    // Adicionar listeners para manter foco
     if (containerEl) {
-      containerEl.addEventListener('touchstart', onTouchStart, { passive: false });
+      containerEl.addEventListener('click', maintainFocus, { passive: true });
+      containerEl.addEventListener('touchstart', touchStartWrapper, { passive: false });
       containerEl.addEventListener('touchmove', onTouchMove, { passive: false });
       containerEl.addEventListener('touchend', onTouchEnd, { passive: false });
       containerEl.addEventListener('touchcancel', onTouchEnd, { passive: false });
     }
+    
+    // Também manter foco quando a janela receber foco novamente
+    window.addEventListener('focus', maintainFocus, { passive: true });
 
     // Define escala inicial e sincroniza estados
     eventBus.on('pagesinit', () => {
@@ -568,12 +648,19 @@
 
     cleanup = () => {
       window.removeEventListener('resize', resize);
-      window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('keydown', onKeyDown, true);
+      window.removeEventListener('keyup', onKeyUp, true);
+      window.removeEventListener('focus', maintainFocus);
+      if (keyboardFocusEl) {
+        keyboardFocusEl.removeEventListener('keydown', onKeyDown, true);
+        keyboardFocusEl.removeEventListener('keyup', onKeyUp, true);
+      }
       if (storageHandler) {
         window.removeEventListener('storage', storageHandler);
       }
       if (containerEl) {
-        containerEl.removeEventListener('touchstart', onTouchStart);
+        containerEl.removeEventListener('click', maintainFocus);
+        containerEl.removeEventListener('touchstart', touchStartWrapper);
         containerEl.removeEventListener('touchmove', onTouchMove);
         containerEl.removeEventListener('touchend', onTouchEnd);
         containerEl.removeEventListener('touchcancel', onTouchEnd);
@@ -1387,6 +1474,22 @@
   :global(.navigation-zone .gesture-button-wrapper.long-pressing .touch-zone) {
     background: rgba(212, 175, 55, 0.1); /* Gold color com opacidade */
   }
+
+  /* Elemento focável invisível para capturar eventos de teclado no iPad/iOS */
+  .keyboard-focus-input {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 1px;
+    height: 1px;
+    opacity: 0;
+    pointer-events: none;
+    border: none;
+    outline: none;
+    padding: 0;
+    margin: 0;
+    z-index: -1;
+  }
 </style>
 
 <div class="toolbar" bind:this={toolbarEl} class:hidden={!isToolbarVisible}>
@@ -1526,6 +1629,19 @@
 {/if}
 
 <div id="viewerContainer" bind:this={containerEl} class="container {containerClass}" class:hidden={pdfLoading || pdfError}>
+  <!-- Elemento focável invisível para capturar eventos de teclado no iPad/iOS -->
+  <input
+    type="text"
+    bind:this={keyboardFocusEl}
+    class="keyboard-focus-input"
+    tabindex="-1"
+    aria-hidden="true"
+    autocomplete="off"
+    autocorrect="off"
+    autocapitalize="off"
+    spellcheck="false"
+  />
+  
   <!-- Zona de navegação esquerda -->
   <div class="navigation-zone left">
     <GestureButton
