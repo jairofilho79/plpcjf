@@ -17,6 +17,8 @@
 
   let containerEl: HTMLDivElement | null = null;
   let viewerEl: HTMLDivElement | null = null;
+  let keyboardFocusEl: HTMLTextAreaElement | null = null;
+  let keyboardActivated = false;
 
   let eventBus: any;
   let linkService: any;
@@ -383,6 +385,12 @@
     } else if (e.key === 'ArrowUp' || e.key === 'PageUp') {
       e.preventDefault();
       prevPage();
+    } else if (e.key === 'ArrowRight') {
+      e.preventDefault();
+      nextPage();
+    } else if (e.key === 'ArrowLeft') {
+      e.preventDefault();
+      prevPage();
     }
   }
 
@@ -501,13 +509,45 @@
     window.addEventListener('resize', resize);
     window.addEventListener('keydown', onKeyDown);
 
+    // Ativar sistema de eventos de teclado no iOS focando elemento invisível na primeira interação
+    // Isso simula o comportamento de clicar em um botão que tem tabindex="0"
+    const activateKeyboard = () => {
+      if (keyboardActivated || !keyboardFocusEl) return;
+      
+      try {
+        keyboardFocusEl.focus();
+        keyboardActivated = true;
+        console.log('[Leitor] Sistema de teclado ativado');
+      } catch (err) {
+        console.warn('[Leitor] Erro ao ativar teclado:', err);
+      }
+    };
+    
+    // Handler para primeira interação do usuário
+    const handleFirstInteraction = () => {
+      if (!keyboardActivated) {
+        activateKeyboard();
+      }
+    };
+    
+    // Wrapper para touchstart que também ativa o teclado
+    const touchStartWrapper = (e: TouchEvent) => {
+      handleFirstInteraction();
+      onTouchStart(e);
+    };
+    
     // Add touch gesture handlers
     if (containerEl) {
-      containerEl.addEventListener('touchstart', onTouchStart, { passive: false });
+      containerEl.addEventListener('touchstart', touchStartWrapper, { passive: false });
       containerEl.addEventListener('touchmove', onTouchMove, { passive: false });
       containerEl.addEventListener('touchend', onTouchEnd, { passive: false });
       containerEl.addEventListener('touchcancel', onTouchEnd, { passive: false });
+      containerEl.addEventListener('click', handleFirstInteraction, { passive: true, capture: true });
     }
+    
+    // Também ativar em qualquer clique na página
+    document.addEventListener('click', handleFirstInteraction, { passive: true, capture: true });
+    document.addEventListener('touchstart', handleFirstInteraction, { passive: true, capture: true });
 
     // Define escala inicial e sincroniza estados
     eventBus.on('pagesinit', () => {
@@ -569,14 +609,17 @@
     cleanup = () => {
       window.removeEventListener('resize', resize);
       window.removeEventListener('keydown', onKeyDown);
+      document.removeEventListener('click', handleFirstInteraction, true);
+      document.removeEventListener('touchstart', handleFirstInteraction, true);
       if (storageHandler) {
         window.removeEventListener('storage', storageHandler);
       }
       if (containerEl) {
-        containerEl.removeEventListener('touchstart', onTouchStart);
+        containerEl.removeEventListener('touchstart', touchStartWrapper);
         containerEl.removeEventListener('touchmove', onTouchMove);
         containerEl.removeEventListener('touchend', onTouchEnd);
         containerEl.removeEventListener('touchcancel', onTouchEnd);
+        containerEl.removeEventListener('click', handleFirstInteraction, true);
       }
       try { if (toolbarEl) ro.unobserve(toolbarEl); } catch {}
       // No explicit destroy API; let GC collect. Clear container contents.
@@ -1387,6 +1430,26 @@
   :global(.navigation-zone .gesture-button-wrapper.long-pressing .touch-zone) {
     background: rgba(212, 175, 55, 0.1); /* Gold color com opacidade */
   }
+  /* Elemento focável invisível para ativar sistema de eventos de teclado no iOS */
+  .keyboard-focus-input {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 1px;
+    height: 1px;
+    opacity: 0;
+    pointer-events: none;
+    border: none;
+    outline: none;
+    padding: 0;
+    margin: 0;
+    z-index: -1;
+    resize: none;
+    overflow: hidden;
+    background: transparent;
+    color: transparent;
+    caret-color: transparent;
+  }
 </style>
 
 <div class="toolbar" bind:this={toolbarEl} class:hidden={!isToolbarVisible}>
@@ -1526,6 +1589,20 @@
 {/if}
 
 <div id="viewerContainer" bind:this={containerEl} class="container {containerClass}" class:hidden={pdfLoading || pdfError}>
+  <!-- Elemento focável invisível para ativar sistema de eventos de teclado no iOS -->
+  <textarea
+    bind:this={keyboardFocusEl}
+    class="keyboard-focus-input"
+    tabindex="0"
+    aria-hidden="true"
+    readonly
+    inputmode="none"
+    autocomplete="off"
+    autocorrect="off"
+    autocapitalize="off"
+    spellcheck="false"
+  ></textarea>
+  
   <!-- Zona de navegação esquerda -->
   <div class="navigation-zone left">
     <GestureButton
