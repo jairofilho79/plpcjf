@@ -17,7 +17,7 @@
 
   let containerEl: HTMLDivElement | null = null;
   let viewerEl: HTMLDivElement | null = null;
-  let keyboardFocusEl: HTMLInputElement | null = null;
+  let keyboardFocusEl: HTMLTextAreaElement | null = null;
 
   let eventBus: any;
   let linkService: any;
@@ -366,8 +366,32 @@
     }
   }
 
+  // Handler específico para PageUp/PageDown que sempre previne scroll padrão
+  function handlePageKeys(e: KeyboardEvent) {
+    if (!viewer) return;
+    
+    // Capturar PageUp e PageDown em qualquer situação e prevenir comportamento padrão (scroll)
+    if (e.key === 'PageDown') {
+      e.preventDefault();
+      e.stopPropagation();
+      nextPage();
+      return true;
+    } else if (e.key === 'PageUp') {
+      e.preventDefault();
+      e.stopPropagation();
+      prevPage();
+      return true;
+    }
+    return false;
+  }
+
   function onKeyDown(e: KeyboardEvent) {
     if (!viewer) return;
+    
+    // Primeiro, tratar PageUp/PageDown (sempre prevenir scroll padrão)
+    if (handlePageKeys(e)) {
+      return;
+    }
     
     // Debug log para investigar eventos de teclado (especialmente no iPad)
     if (e.key.startsWith('Arrow') || e.key === 'PageDown' || e.key === 'PageUp') {
@@ -391,10 +415,10 @@
     } else if ((e.ctrlKey || e.metaKey) && (e.key === '0')) {
       e.preventDefault();
       viewer.currentScaleValue = 'page-fit';
-    } else if (e.key === 'ArrowDown' || e.key === 'PageDown') {
+    } else if (e.key === 'ArrowDown') {
       e.preventDefault();
       nextPage();
-    } else if (e.key === 'ArrowUp' || e.key === 'PageUp') {
+    } else if (e.key === 'ArrowUp') {
       e.preventDefault();
       prevPage();
     } else if (e.key === 'ArrowRight') {
@@ -410,6 +434,11 @@
   function onKeyUp(e: KeyboardEvent) {
     if (!viewer) return;
     
+    // Primeiro, tratar PageUp/PageDown (sempre prevenir scroll padrão)
+    if (handlePageKeys(e)) {
+      return;
+    }
+    
     // Debug log para investigar eventos de teclado
     if (e.key.startsWith('Arrow') || e.key === 'PageDown' || e.key === 'PageUp') {
       console.log('[Leitor] KeyUp capturado (fallback):', {
@@ -424,10 +453,10 @@
     
     // Processar apenas se não foi processado no keydown
     // Verificar se é uma tecla de navegação
-    if (e.key === 'ArrowDown' || e.key === 'PageDown' || e.key === 'ArrowRight') {
+    if (e.key === 'ArrowDown' || e.key === 'ArrowRight') {
       e.preventDefault();
       nextPage();
-    } else if (e.key === 'ArrowUp' || e.key === 'PageUp' || e.key === 'ArrowLeft') {
+    } else if (e.key === 'ArrowUp' || e.key === 'ArrowLeft') {
       e.preventDefault();
       prevPage();
     }
@@ -550,24 +579,79 @@
     window.addEventListener('keydown', onKeyDown, true);
     // Fallback com keyup para eventos que não foram capturados no keydown
     window.addEventListener('keyup', onKeyUp, true);
+    
+    // Listener específico para PageUp/PageDown no document para sempre prevenir scroll padrão
+    // Isso funciona mesmo sem foco em elementos específicos e previne o comportamento de scroll
+    const documentKeyDownHandler = (e: KeyboardEvent) => {
+      if (e.key === 'PageDown' || e.key === 'PageUp') {
+        handlePageKeys(e);
+      }
+    };
+    
+    const documentKeyUpHandler = (e: KeyboardEvent) => {
+      if (e.key === 'PageDown' || e.key === 'PageUp') {
+        handlePageKeys(e);
+      }
+    };
+    
+    document.addEventListener('keydown', documentKeyDownHandler, true);
+    document.addEventListener('keyup', documentKeyUpHandler, true);
 
     // Adicionar listeners também no elemento focável invisível (necessário para iPad/iOS)
     if (keyboardFocusEl) {
       keyboardFocusEl.addEventListener('keydown', onKeyDown, true);
       keyboardFocusEl.addEventListener('keyup', onKeyUp, true);
-      // Garantir que o elemento receba foco quando a página carregar (especialmente no iPad)
-      // Usar setTimeout para garantir que o DOM esteja pronto
-      setTimeout(() => {
-        if (keyboardFocusEl) {
-          keyboardFocusEl.focus();
+      
+      // No iOS, eventos de teclado só funcionam se o foco foi iniciado por interação do usuário
+      // Tentar múltiplas estratégias para garantir que o elemento receba foco
+      const attemptFocus = () => {
+        if (keyboardFocusEl && document.activeElement !== keyboardFocusEl) {
+          try {
+            keyboardFocusEl.focus();
+            // Verificar se realmente recebeu foco
+            setTimeout(() => {
+              if (keyboardFocusEl && document.activeElement === keyboardFocusEl) {
+                console.log('[Leitor] Elemento focável recebeu foco com sucesso');
+              } else {
+                console.warn('[Leitor] Falha ao receber foco no elemento focável');
+              }
+            }, 50);
+          } catch (err) {
+            console.warn('[Leitor] Erro ao focar elemento:', err);
+          }
         }
-      }, 100);
+      };
+      
+      // Tentar focar após múltiplos delays para garantir que funcione
+      setTimeout(attemptFocus, 100);
+      setTimeout(attemptFocus, 500);
+      setTimeout(attemptFocus, 1000);
+      
+      // Adicionar listener de focus para debug
+      keyboardFocusEl.addEventListener('focus', () => {
+        console.log('[Leitor] Elemento focável recebeu foco');
+      });
+      
+      keyboardFocusEl.addEventListener('blur', () => {
+        console.warn('[Leitor] Elemento focável perdeu foco');
+      });
     }
 
     // Manter elemento focável com foco quando usuário interagir com a página (importante para iPad/iOS)
+    // No iOS, é crítico que o foco seja mantido através de interação do usuário
     const maintainFocus = () => {
       if (keyboardFocusEl && document.activeElement !== keyboardFocusEl) {
-        keyboardFocusEl.focus();
+        try {
+          keyboardFocusEl.focus();
+          // Forçar foco novamente após um pequeno delay para garantir
+          setTimeout(() => {
+            if (keyboardFocusEl && document.activeElement !== keyboardFocusEl) {
+              keyboardFocusEl.focus();
+            }
+          }, 50);
+        } catch (err) {
+          console.warn('[Leitor] Erro ao manter foco:', err);
+        }
       }
     };
     
@@ -651,6 +735,9 @@
       window.removeEventListener('keydown', onKeyDown, true);
       window.removeEventListener('keyup', onKeyUp, true);
       window.removeEventListener('focus', maintainFocus);
+      // Remover listeners do document para PageUp/PageDown
+      document.removeEventListener('keydown', documentKeyDownHandler, true);
+      document.removeEventListener('keyup', documentKeyUpHandler, true);
       if (keyboardFocusEl) {
         keyboardFocusEl.removeEventListener('keydown', onKeyDown, true);
         keyboardFocusEl.removeEventListener('keyup', onKeyUp, true);
@@ -1483,12 +1570,24 @@
     width: 1px;
     height: 1px;
     opacity: 0;
-    pointer-events: none;
+    pointer-events: auto; /* Permitir interação para que iOS reconheça o elemento */
     border: none;
     outline: none;
     padding: 0;
     margin: 0;
-    z-index: -1;
+    z-index: 1; /* Colocar acima de outros elementos para garantir que possa receber foco */
+    resize: none;
+    overflow: hidden;
+    background: transparent;
+    color: transparent;
+    caret-color: transparent;
+  }
+  
+  /* Garantir que o elemento não interfira visualmente mesmo quando focado */
+  .keyboard-focus-input:focus {
+    outline: none;
+    border: none;
+    box-shadow: none;
   }
 </style>
 
@@ -1630,17 +1729,19 @@
 
 <div id="viewerContainer" bind:this={containerEl} class="container {containerClass}" class:hidden={pdfLoading || pdfError}>
   <!-- Elemento focável invisível para capturar eventos de teclado no iPad/iOS -->
-  <input
-    type="text"
+  <!-- Usar textarea com readonly para melhor compatibilidade com iOS -->
+  <textarea
     bind:this={keyboardFocusEl}
     class="keyboard-focus-input"
-    tabindex="-1"
+    tabindex="0"
     aria-hidden="true"
     autocomplete="off"
     autocorrect="off"
     autocapitalize="off"
     spellcheck="false"
-  />
+    readonly
+    data-testid="keyboard-focus"
+  ></textarea>
   
   <!-- Zona de navegação esquerda -->
   <div class="navigation-zone left">
