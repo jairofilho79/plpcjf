@@ -17,6 +17,8 @@
   import { ensurePdfAvailable, validatePdfWithStrategies, validatePdfAvailability, getCachedValidation } from '$lib/utils/pdfValidation';
   
   export let louvor;
+  /** Ex.: posição na lista guardada: "1)" */
+  export let titlePrefix = '';
   
   $: pdfPath = getPdfRelPath(louvor);
   $: isInCarousel = $carousel.some(item => 
@@ -200,6 +202,7 @@
     class:processing={isSharing || isSaving}
   >
     <div class="louvor-title">
+      {#if titlePrefix}<span class="louvor-title-prefix">{titlePrefix} </span>{/if}
       <strong>#{louvor.numero || 'N/A'}</strong> - {louvor.nome || 'Sem título'}
       {#if isSharing}
         <span class="processing-indicator">Compartilhando...</span>
@@ -264,6 +267,12 @@
     min-width: 0;
   }
   
+  .louvor-title-prefix {
+    font-weight: 600;
+    opacity: 0.95;
+    margin-right: 0.125rem;
+  }
+
   .louvor-title {
     font-size: 1rem;
     font-family: 'Garamond', serif;

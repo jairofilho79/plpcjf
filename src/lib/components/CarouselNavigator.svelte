@@ -1,12 +1,34 @@
 <script>
-  import { createEventDispatcher } from 'svelte';
+  import { createEventDispatcher, onMount } from 'svelte';
+  import { browser } from '$app/environment';
+  import { goto } from '$app/navigation';
   import GestureButton from '$lib/components/GestureButton.svelte';
   import { getPdfRelPath } from '$lib/utils/pathUtils';
-  
+  import { savedPlaylists } from '$lib/stores/savedPlaylists';
+
   export let currentFile = '';
   export let carousel = [];
-  
+
   const dispatch = createEventDispatcher();
+
+  let listasMenuOpen = false;
+
+  function closeListasMenu() {
+    listasMenuOpen = false;
+  }
+
+  function openListasMenu() {
+    listasMenuOpen = true;
+  }
+
+  onMount(() => {
+    if (!browser) return;
+    const onEscape = (e) => {
+      if (e.key === 'Escape') closeListasMenu();
+    };
+    window.addEventListener('keydown', onEscape);
+    return () => window.removeEventListener('keydown', onEscape);
+  });
   
   // Normalize file path for comparison (remove leading slash)
   function normalizeFilePath(file) {
@@ -60,36 +82,34 @@
     }
   }
   
-  // Função para abrir página de listas em nova aba
-  // Funciona mesmo quando o botão está desabilitado
-  function handleOpenListas() {
-    // Tentar abrir em nova aba usando window.open
-    const newWindow = window.open('/listas', '_blank');
-    
-    // Se window.open foi bloqueado (comum em Safari mobile quando não é ação direta do usuário),
-    // criar um link temporário e clicar nele
-    if (!newWindow || newWindow.closed || typeof newWindow.closed === 'undefined') {
-      const link = document.createElement('a');
-      link.href = '/listas';
-      link.target = '_blank';
-      link.rel = 'noopener noreferrer';
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-    }
+  function handleVerListaFromMenu() {
+    const pdfIds = (carousel || []).map((l) => l.pdfId).filter(Boolean);
+    if (pdfIds.length === 0) return;
+
+    const existing = savedPlaylists.findPlaylistByPdfIds(pdfIds);
+    const id = existing ? existing.id : savedPlaylists.savePlaylist(pdfIds);
+    closeListasMenu();
+    goto(`/listas?viewId=${encodeURIComponent(id)}`);
+  }
+
+  function handleIrParaListasFromMenu() {
+    closeListasMenu();
+    goto('/listas');
   }
 </script>
 
 <div class="carousel-navigator">
-  <GestureButton
-    on:click={handleNext}
-    on:longpress={handleOpenListas}
-    longPressDuration={500}
-    visualFeedback={true}
-    hapticFeedback={true}
-    preventDefault={true}
-  >
-    <div class="carousel-control" class:disabled={isDisabled}>
+  <div class="carousel-navigator-inner">
+    <GestureButton
+      on:click={handleNext}
+      on:longpress={openListasMenu}
+      longPressDuration={500}
+      visualFeedback={true}
+      hapticFeedback={true}
+      preventDefault={true}
+      ariaLabel="Lista: avançar para o próximo PDF. Toque longo abre o menu."
+    >
+      <div class="carousel-control" class:disabled={isDisabled}>
       <svg 
         xmlns="http://www.w3.org/2000/svg" 
         fill="none" 
@@ -106,13 +126,113 @@
         />
       </svg>
       <span class="carousel-label">Lista</span>
-    </div>
-  </GestureButton>
+      </div>
+    </GestureButton>
+    {#if listasMenuOpen}
+      <button
+        type="button"
+        class="listas-menu-backdrop"
+        aria-label="Fechar menu"
+        tabindex="-1"
+        on:pointerdown|stopPropagation={closeListasMenu}
+      ></button>
+      <div class="listas-menu" role="menu" aria-label="Ações da lista">
+        <button
+          type="button"
+          class="listas-menu-item"
+          class:listas-menu-item-disabled={!carousel || carousel.length === 0}
+          role="menuitem"
+          disabled={!carousel || carousel.length === 0}
+          on:click={handleVerListaFromMenu}
+        >
+          Ver Lista
+        </button>
+        <div class="listas-menu-divider" role="separator"></div>
+        <button
+          type="button"
+          class="listas-menu-item"
+          role="menuitem"
+          on:click={handleIrParaListasFromMenu}
+        >
+          Ir para listas
+        </button>
+      </div>
+    {/if}
+  </div>
 </div>
 
 <style>
   .carousel-navigator {
-    display: contents;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+    height: 100%;
+  }
+
+  .carousel-navigator-inner {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+  }
+
+  .listas-menu-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 1001;
+    margin: 0;
+    padding: 0;
+    border: none;
+    background: transparent;
+    cursor: default;
+  }
+
+  .listas-menu {
+    position: absolute;
+    top: calc(100% + 6px);
+    right: 0;
+    z-index: 1002;
+    min-width: 11rem;
+    padding: 0.35rem 0;
+    margin: 0;
+    background-color: var(--btn-background-color);
+    border: 2px solid var(--gold-color);
+    border-radius: 0.375rem;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  }
+
+  .listas-menu-item {
+    display: block;
+    width: 100%;
+    margin: 0;
+    padding: 0.65rem 1rem;
+    border: none;
+    background: transparent;
+    color: var(--text-light);
+    font-size: 0.875rem;
+    font-weight: 600;
+    text-align: left;
+    cursor: pointer;
+    transition: background-color 0.15s ease, filter 0.15s ease;
+  }
+
+  .listas-menu-item:hover:not(:disabled) {
+    background-color: var(--title-color);
+    filter: brightness(1.08);
+  }
+
+  .listas-menu-item-disabled,
+  .listas-menu-item:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+    filter: none;
+  }
+
+  .listas-menu-divider {
+    height: 0;
+    margin: 0.25rem 0;
+    border: none;
+    border-top: 2px solid var(--gold-color);
   }
   
   .carousel-control {

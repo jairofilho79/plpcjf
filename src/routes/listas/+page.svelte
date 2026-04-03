@@ -6,8 +6,9 @@
   import { carousel } from '$lib/stores/carousel';
   import { louvores, loadLouvores } from '$lib/stores/louvores';
   import { goto } from '$app/navigation';
-  import { Play, Trash2, Share2, Edit2, Check, X, Star, Eye } from 'lucide-svelte';
+  import { Play, Trash2, Share2, Edit2, Check, X, Star, Eye, BookOpen } from 'lucide-svelte';
   import { sharePlaylistLink, generatePlaylistShareUrl } from '$lib/utils/playlistUtils';
+  import { navigateLouvorToLeitor } from '$lib/utils/navigateLouvorToLeitor';
   import LouvorCard from '$lib/components/LouvorCard.svelte';
 
   let editingId = null;
@@ -24,7 +25,13 @@
    * @type {HTMLElement | null}
    */
   let filterButtonElement = null;
+  /**
+   * @type {HTMLElement | null}
+   */
+  let viewFavoriteButtonElement = null;
   let viewingPlaylistId = null;
+  let viewLeitorError = null;
+  let openingLeitor = false;
 
   $: allPlaylists = $savedPlaylists;
   $: filteredByFavorite = showOnlyFavorites 
@@ -99,12 +106,20 @@
     updateStarSVG(filterButtonElement, showOnlyFavorites);
   }
 
+  $: if (viewFavoriteButtonElement && browser && viewingPlaylist) {
+    updateStarSVG(viewFavoriteButtonElement, viewingPlaylist.favorita);
+  }
+
   // Update SVG attributes for favorite buttons in cards
   afterUpdate(() => {
     if (browser) {
       // Update filter button
       if (filterButtonElement) {
         updateStarSVG(filterButtonElement, showOnlyFavorites);
+      }
+
+      if (viewFavoriteButtonElement && viewingPlaylist) {
+        updateStarSVG(viewFavoriteButtonElement, viewingPlaylist.favorita);
       }
       
       // Find all favorite buttons by data attribute and update them
@@ -132,6 +147,37 @@
     goto('/');
   }
 
+  function firstResolvedLouvorFromPlaylist(playlist) {
+    if (!$louvores.length || !playlist?.pdfIds?.length) return null;
+    const map = new Map();
+    $louvores.forEach((l) => {
+      if (l.pdfId) map.set(l.pdfId, l);
+    });
+    return playlist.pdfIds.map((id) => map.get(id)).find((l) => l !== undefined) ?? null;
+  }
+
+  async function handlePlayOpenLeitor(playlist) {
+    viewLeitorError = null;
+    if (!browser || $louvores.length === 0) return;
+
+    openingLeitor = true;
+    try {
+      carousel.clearCarousel();
+      carousel.loadPlaylist(playlist.pdfIds, $louvores);
+      const firstLouvor = firstResolvedLouvorFromPlaylist(playlist);
+      if (!firstLouvor) {
+        viewLeitorError = 'Nenhum louvor disponível para abrir no leitor.';
+        return;
+      }
+      const result = await navigateLouvorToLeitor(firstLouvor);
+      if (!result.navigated && result.error) {
+        viewLeitorError = result.error;
+      }
+    } finally {
+      openingLeitor = false;
+    }
+  }
+
   function handleRemove(playlist, event) {
     event.stopPropagation();
     playlistToDelete = playlist;
@@ -140,7 +186,11 @@
   
   function confirmDelete() {
     if (playlistToDelete) {
-      savedPlaylists.removePlaylist(playlistToDelete.id);
+      const deletedId = playlistToDelete.id;
+      savedPlaylists.removePlaylist(deletedId);
+      if (viewingPlaylistId === deletedId) {
+        closeView();
+      }
       playlistToDelete = null;
     }
     showDeleteModal = false;
@@ -260,6 +310,7 @@
 
   function closeView() {
     viewingPlaylistId = null;
+    viewLeitorError = null;
   }
 
   onMount(async () => {
@@ -268,20 +319,33 @@
       await loadLouvores();
     }
     
+    await tick();
+
+    // Leitor (Lista → Ver Lista): viewId tem prioridade sobre editId
+    if (browser && $page.url.searchParams.has('viewId')) {
+      const viewId = $page.url.searchParams.get('viewId');
+      if (viewId) {
+        await tick();
+        const playlist = $savedPlaylists.find((p) => p.id === viewId);
+        if (playlist) {
+          viewingPlaylistId = viewId;
+        }
+        goto('/listas', { replaceState: true, noScroll: true });
+        return;
+      }
+    }
+
     // Verificar se há editId na URL para colocar a playlist em modo de edição
     if (browser && $page.url.searchParams.has('editId')) {
       const editId = $page.url.searchParams.get('editId');
       if (editId) {
-        // Aguardar um tick para garantir que as playlists estejam carregadas
         await tick();
-        
-        // Encontrar a playlist e colocá-la em modo de edição
-        const playlist = $savedPlaylists.find(p => p.id === editId);
+
+        const playlist = $savedPlaylists.find((p) => p.id === editId);
         if (playlist) {
           startEdit(playlist);
         }
-        
-        // Remover o parâmetro editId da URL
+
         goto('/listas', { replaceState: true, noScroll: true });
       }
     }
@@ -298,19 +362,131 @@
       <!-- Seção de Visualização -->
       <div class="view-section">
         <div class="view-header">
-          <h2 class="view-title">{viewingPlaylist.nome}</h2>
-          <button class="close-view-button" on:click={closeView} title="Fechar visualização">
-            <X class="w-5 h-5" />
+          <div class="view-header-main">
+            {#if editingId === viewingPlaylist.id}
+              <input
+                type="text"
+                class="playlist-name-input view-title-input"
+                bind:value={editingName}
+                on:keydown={(e) => handleEditKeydown(e, viewingPlaylist.id)}
+                on:blur={cancelEdit}
+                on:focus={selectAllText}
+                autofocus
+              />
+              <div class="edit-actions view-title-edit-actions">
+                <button
+                  class="edit-button save-button"
+                  on:mousedown|preventDefault={(e) => {
+                    e.preventDefault();
+                    saveEdit(viewingPlaylist.id, e);
+                  }}
+                  title="Salvar"
+                >
+                  <Check class="w-4 h-4" />
+                </button>
+                <button
+                  class="edit-button cancel-button"
+                  on:mousedown|preventDefault={handleCancelClick}
+                  title="Cancelar"
+                >
+                  <X class="w-4 h-4" />
+                </button>
+              </div>
+            {:else}
+              <h2
+                class="view-title playlist-name"
+                on:click={(e) => startEdit(viewingPlaylist, e)}
+                title="Clique para editar o nome"
+              >
+                {viewingPlaylist.nome}
+              </h2>
+            {/if}
+          </div>
+          <div class="view-header-toolbar">
+            <button
+              type="button"
+              class="view-icon-danger-button"
+              on:click={(e) => handleRemove(viewingPlaylist, e)}
+              title="Apagar esta lista"
+            >
+              <Trash2 class="w-5 h-5" />
+            </button>
+            <button
+              type="button"
+              class="favorite-filter-button"
+              class:active={viewingPlaylist.favorita}
+              on:click={(e) => {
+                e.stopPropagation();
+                savedPlaylists.toggleFavorite(viewingPlaylist.id);
+              }}
+              title={viewingPlaylist.favorita ? 'Remover dos favoritos' : 'Adicionar aos favoritos'}
+              bind:this={viewFavoriteButtonElement}
+            >
+              <Star class="star-icon" />
+            </button>
+            <button type="button" class="close-view-button" on:click={closeView} title="Fechar visualização">
+              <X class="w-5 h-5" />
+            </button>
+          </div>
+        </div>
+
+        <div class="view-playlist-actions">
+          <button
+            type="button"
+            class="action-button leitor-button"
+            disabled={openingLeitor || viewingPlaylistLouvores.length === 0}
+            on:click={() => handlePlayOpenLeitor(viewingPlaylist)}
+            title="Carregar a lista, abrir o primeiro louvor no leitor"
+          >
+            <BookOpen class="w-4 h-4" />
+            <span>{openingLeitor ? 'A abrir…' : 'Abrir no leitor'}</span>
+          </button>
+          <button
+            type="button"
+            class="action-button share-button"
+            on:click={(e) => handleShare(viewingPlaylist, e)}
+            title="Compartilhar playlist"
+          >
+            <Share2 class="w-4 h-4" />
+            <span>Compartilhar</span>
+          </button>
+          <button
+            type="button"
+            class="action-button play-button"
+            on:click={() => handlePlay(viewingPlaylist)}
+            title="Carregar lista e ir para a página inicial"
+          >
+            <Play class="w-4 h-4" />
+            <span>Ir para início</span>
           </button>
         </div>
-        <div class="view-louvores-grid">
+
+        {#if viewLeitorError}
+          <p class="view-leitor-error" role="alert">{viewLeitorError}</p>
+        {/if}
+
+        <div class="view-louvores-list">
           {#if viewingPlaylistLouvores.length === 0}
             <div class="empty-view-state">
               <p>Nenhum louvor encontrado nesta playlist.</p>
             </div>
           {:else}
-            {#each viewingPlaylistLouvores as louvor (louvor.pdfId)}
-              <LouvorCard {louvor} />
+            {#each viewingPlaylistLouvores as louvor, i (louvor.pdfId)}
+              <div class="view-louvor-row">
+                <div class="view-louvor-card-wrap">
+                  <LouvorCard {louvor} titlePrefix={`${i + 1})`} />
+                </div>
+                <button
+                  type="button"
+                  class="view-remove-louvor-button"
+                  title="Remover desta lista"
+                  aria-label="Remover louvor desta lista"
+                  on:click|stopPropagation={() =>
+                    savedPlaylists.removePdfFromPlaylist(viewingPlaylist.id, louvor.pdfId)}
+                >
+                  <X class="w-4 h-4" />
+                </button>
+              </div>
             {/each}
           {/if}
         </div>
@@ -1071,11 +1247,56 @@
 
   .view-header {
     display: flex;
-    align-items: center;
+    flex-wrap: wrap;
+    align-items: flex-start;
     justify-content: space-between;
-    margin-bottom: 1.5rem;
+    gap: 0.75rem;
+    margin-bottom: 1rem;
     padding-bottom: 0.75rem;
     border-bottom: 2px solid var(--gold-color);
+  }
+
+  .view-header-main {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex: 1;
+    min-width: min(100%, 12rem);
+  }
+
+  .view-title-input {
+    width: 100%;
+    min-width: 0;
+    font-size: 1.5rem;
+  }
+
+  .view-title-edit-actions {
+    flex-shrink: 0;
+  }
+
+  .view-header-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+    flex-shrink: 0;
+  }
+
+  .view-icon-danger-button {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 2.5rem;
+    height: 2.5rem;
+    background: none;
+    border: none;
+    color: #dc3545;
+    cursor: pointer;
+    border-radius: 0.5rem;
+    transition: background-color 0.2s ease, color 0.2s ease;
+  }
+
+  .view-icon-danger-button:hover {
+    background-color: rgba(220, 53, 69, 0.15);
   }
 
   .view-title {
@@ -1085,6 +1306,100 @@
     margin: 0;
     flex: 1;
     word-break: break-word;
+  }
+
+  .view-header .playlist-name {
+    color: var(--text-light);
+  }
+
+  .view-header .playlist-name:hover {
+    color: var(--gold-color);
+  }
+
+  .view-playlist-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    margin-bottom: 1rem;
+  }
+
+  .view-playlist-actions .action-button {
+    width: auto;
+    min-width: 10rem;
+    flex: 1 1 10rem;
+  }
+
+  .leitor-button {
+    background-color: var(--card-color);
+    color: var(--text-dark);
+    border-color: var(--gold-color);
+  }
+
+  .leitor-button:hover:not(:disabled) {
+    background-color: var(--placeholder-color);
+    transform: translateY(-1px);
+  }
+
+  .leitor-button:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+    transform: none;
+  }
+
+  .view-leitor-error {
+    margin: 0 0 1rem 0;
+    padding: 0.75rem 1rem;
+    border-radius: 0.5rem;
+    border: 2px solid #dc3545;
+    color: #f8d7da;
+    background-color: rgba(220, 53, 69, 0.2);
+    font-size: 0.9375rem;
+  }
+
+  .view-louvores-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    max-height: calc(100vh - 380px);
+    overflow-y: auto;
+    overflow-x: hidden;
+    padding-right: 0.5rem;
+  }
+
+  .view-louvor-row {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 0.5rem;
+    align-items: stretch;
+  }
+
+  .view-louvor-card-wrap {
+    min-width: 0;
+  }
+
+  .view-remove-louvor-button {
+    align-self: stretch;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 2.75rem;
+    padding: 0;
+    border: 2px solid #dc3545;
+    border-radius: 0.5rem;
+    background: transparent;
+    color: #dc3545;
+    cursor: pointer;
+    transition: background-color 0.2s ease, color 0.2s ease;
+    flex-shrink: 0;
+  }
+
+  .view-remove-louvor-button:hover {
+    background-color: #dc3545;
+    color: white;
+  }
+
+  .view-header-toolbar .close-view-button {
+    margin-left: 0;
   }
 
   .close-view-button {
@@ -1107,37 +1422,26 @@
     transform: scale(1.1);
   }
 
-  .view-louvores-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-    gap: 1rem;
-    max-height: calc(100vh - 250px);
-    overflow-y: auto;
-    overflow-x: hidden;
-    padding-right: 0.5rem;
-  }
-
-  /* Custom scrollbar for view-louvores-grid */
-  .view-louvores-grid::-webkit-scrollbar {
+  /* Custom scrollbar for view louvores list */
+  .view-louvores-list::-webkit-scrollbar {
     width: 8px;
   }
 
-  .view-louvores-grid::-webkit-scrollbar-track {
+  .view-louvores-list::-webkit-scrollbar-track {
     background: var(--card-color);
     border-radius: 4px;
   }
 
-  .view-louvores-grid::-webkit-scrollbar-thumb {
+  .view-louvores-list::-webkit-scrollbar-thumb {
     background: var(--gold-color);
     border-radius: 4px;
   }
 
-  .view-louvores-grid::-webkit-scrollbar-thumb:hover {
+  .view-louvores-list::-webkit-scrollbar-thumb:hover {
     background: #c9962e;
   }
 
   .empty-view-state {
-    grid-column: 1 / -1;
     text-align: center;
     padding: 3rem 1rem;
     color: var(--text-light);
@@ -1150,20 +1454,13 @@
     opacity: 0.9;
   }
 
-  @media (max-width: 1024px) {
-    .view-louvores-grid {
-      grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
-    }
-  }
-
   @media (max-width: 768px) {
     .view-title {
       font-size: 1.5rem;
     }
 
-    .view-louvores-grid {
-      grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-      gap: 0.75rem;
+    .view-title-input {
+      font-size: 1.25rem;
     }
   }
 
@@ -1172,9 +1469,12 @@
       font-size: 1.25rem;
     }
 
-    .view-louvores-grid {
-      grid-template-columns: 1fr;
-      max-height: calc(100vh - 220px);
+    .view-louvores-list {
+      max-height: calc(100vh - 340px);
+    }
+
+    .view-playlist-actions .action-button {
+      min-width: 100%;
     }
 
     .view-header {
