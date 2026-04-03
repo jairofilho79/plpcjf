@@ -166,8 +166,13 @@
   }
 
   // Gesture state for pinch to zoom
+  const ENABLE_PINCH_FOCAL_FIX = true;
   let pinchInitialDistance = 0;
   let pinchInitialScale = 1;
+  let pinchStartFocalX = 0;
+  let pinchStartFocalY = 0;
+  let pinchStartContentX = 0;
+  let pinchStartContentY = 0;
   let isPinching = false;
   
   // Gesture state for single touch navigation
@@ -769,6 +774,19 @@
       swipePageGestureValid = false;
       pinchInitialDistance = getTouchDistance(touches[0], touches[1]);
       pinchInitialScale = viewer.currentScale;
+      if (ENABLE_PINCH_FOCAL_FIX) {
+        const containerRect = containerEl.getBoundingClientRect();
+        pinchStartFocalX =
+          (touches[0].clientX + touches[1].clientX) / 2 - containerRect.left;
+        pinchStartFocalY =
+          (touches[0].clientY + touches[1].clientY) / 2 - containerRect.top;
+
+        // Mapear o ponto focal para coordenadas de conteúdo na escala inicial.
+        pinchStartContentX =
+          (containerEl.scrollLeft + pinchStartFocalX) / Math.max(pinchInitialScale, 0.0001);
+        pinchStartContentY =
+          (containerEl.scrollTop + pinchStartFocalY) / Math.max(pinchInitialScale, 0.0001);
+      }
       e.preventDefault();
       return; // Não processar GestureButton quando em pinch
     }
@@ -810,12 +828,24 @@
     // Pinch to zoom: 2 touches
     if (touches.length === 2 && isPinching) {
       const currentDistance = getTouchDistance(touches[0], touches[1]);
+      if (!currentDistance || !pinchInitialDistance) {
+        e.preventDefault();
+        return;
+      }
       const scaleRatio = currentDistance / pinchInitialDistance;
       const newScale = pinchInitialScale * scaleRatio;
       
       // Clamp scale to reasonable bounds (0.25x to 4x)
       const clampedScale = Math.max(0.25, Math.min(4, newScale));
       viewer.currentScale = clampedScale;
+
+      if (ENABLE_PINCH_FOCAL_FIX) {
+        // Reaplica o ponto de conteúdo inicial sob o centro dos dedos.
+        const targetScrollLeft = pinchStartContentX * clampedScale - pinchStartFocalX;
+        const targetScrollTop = pinchStartContentY * clampedScale - pinchStartFocalY;
+        containerEl.scrollLeft = Math.max(0, targetScrollLeft);
+        containerEl.scrollTop = Math.max(0, targetScrollTop);
+      }
       
       e.preventDefault();
       return;
@@ -843,6 +873,10 @@
       isPinching = false;
       pinchInitialDistance = 0;
       pinchInitialScale = 1;
+      pinchStartFocalX = 0;
+      pinchStartFocalY = 0;
+      pinchStartContentX = 0;
+      pinchStartContentY = 0;
       swipePageGestureValid = false;
       e.preventDefault();
       touchStartX = 0;
@@ -1683,7 +1717,7 @@
       on:longpress={goToFirstPage}
       longPressDuration={500}
       hapticFeedback={true}
-      preventDefault={true}
+      preventDefault={false}
     >
       <div class="touch-zone left"></div>
     </GestureButton>
@@ -1695,7 +1729,7 @@
       on:longpress={toggleToolbar}
       longPressDuration={500}
       hapticFeedback={true}
-      preventDefault={true}
+      preventDefault={false}
     >
       <div class="touch-zone center"></div>
     </GestureButton>
@@ -1708,7 +1742,7 @@
       on:longpress={goToLastPage}
       longPressDuration={500}
       hapticFeedback={true}
-      preventDefault={true}
+      preventDefault={false}
     >
       <div class="touch-zone right"></div>
     </GestureButton>
