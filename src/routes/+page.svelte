@@ -11,6 +11,7 @@
   import { carousel } from '$lib/stores/carousel';
   import { savedPlaylists } from '$lib/stores/savedPlaylists';
   import { parseUrlParams, updateUrlParams } from '$lib/utils/urlSync';
+  import { louvorNomeMatchesSearch } from '$lib/utils/louvorSearch';
   import SearchBar from '$lib/components/SearchBar.svelte';
   import CategoryFilters from '$lib/components/CategoryFilters.svelte';
   import ClassificationFilters from '$lib/components/ClassificationFilters.svelte';
@@ -164,13 +165,6 @@
     }
   }
   
-  /**
-   * @param {string} str
-   */
-  function normalizeSearchString(str) {
-    return str.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-zA-Z0-9\s]/g, '');
-  }
-  
   // Normalize classification by removing content in parentheses
   /**
    * @param {string} classification
@@ -284,11 +278,9 @@
       return;
     }
     
-    const searchNormalized = normalizeSearchString(searchQuery);
-    filteredResults = classificationFiltered.filter(louvor => {
-      const titulo = normalizeSearchString(louvor.nome);
-      return titulo.includes(searchNormalized);
-    });
+    filteredResults = classificationFiltered.filter((louvor) =>
+      louvorNomeMatchesSearch(louvor.nome, searchQuery, louvor._searchContentTokens)
+    );
   }
   
   // Debounce: Aguarda 300ms após o usuário parar de digitar antes de pesquisar

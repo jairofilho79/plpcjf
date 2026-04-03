@@ -1,6 +1,22 @@
 import { writable, get } from 'svelte/store';
 import { browser } from '$app/environment';
 import { clearLouvoresManifestFromSwCache } from '$lib/utils/swRegistration';
+import { tokensContent } from '$lib/utils/louvorSearch';
+
+/**
+ * Enrich manifest rows with precomputed title tokens and replace store contents.
+ * @param {any[]} data
+ * @returns {any[]}
+ */
+function applyLouvoresManifest(data) {
+  const list = Array.isArray(data) ? data : [];
+  const enriched = list.map((item) => ({
+    ...item,
+    _searchContentTokens: tokensContent(item?.nome ?? '')
+  }));
+  louvores.set(enriched);
+  return enriched;
+}
 
 /** Persisted when a manifest response has been successfully applied for a given server version. */
 export const LOUVORES_MANIFEST_VERSION_KEY = 'LOUVORES_MANIFEST_VERSION';
@@ -87,9 +103,9 @@ function scheduleBackgroundRefresh(remoteVersion, scheduleGen) {
       if (scheduleGen !== louvoresLoadGeneration) return;
       const data = await fetchAndParseLouvoresManifest({ cache: 'no-store' });
       if (scheduleGen !== louvoresLoadGeneration) return;
-      louvores.set(data);
+      const enriched = applyLouvoresManifest(data);
       localStorage.setItem(LOUVORES_MANIFEST_VERSION_KEY, String(remoteVersion));
-      await afterManifestLoaded(data);
+      await afterManifestLoaded(enriched);
       try {
         const { offline } = await import('$lib/stores/offline.js');
         await offline.checkForNewPDFs();
@@ -117,9 +133,9 @@ export async function loadLouvores() {
         return;
       }
       const data = await fetchAndParseLouvoresManifest();
-      louvores.set(data);
+      const enriched = applyLouvoresManifest(data);
       louvoresLoaded.set(true);
-      await afterManifestLoaded(data);
+      await afterManifestLoaded(enriched);
       return;
     }
 
@@ -130,10 +146,10 @@ export async function loadLouvores() {
 
     if (remoteVersion === null) {
       const data = await fetchAndParseLouvoresManifest();
-      louvores.set(data);
+      const enriched = applyLouvoresManifest(data);
       louvoresLoaded.set(true);
-      console.log(`Loaded ${data.length} louvores (degraded, no version endpoint)`);
-      await afterManifestLoaded(data);
+      console.log(`Loaded ${enriched.length} louvores (degraded, no version endpoint)`);
+      await afterManifestLoaded(enriched);
       return;
     }
 
@@ -147,11 +163,11 @@ export async function loadLouvores() {
 
     if (!versionMismatch && !hasMemory) {
       const data = await fetchAndParseLouvoresManifest();
-      louvores.set(data);
+      const enriched = applyLouvoresManifest(data);
       louvoresLoaded.set(true);
       localStorage.setItem(LOUVORES_MANIFEST_VERSION_KEY, String(remoteVersion));
-      console.log(`Loaded ${data.length} louvores from manifest`);
-      await afterManifestLoaded(data);
+      console.log(`Loaded ${enriched.length} louvores from manifest`);
+      await afterManifestLoaded(enriched);
       return;
     }
 
@@ -164,19 +180,19 @@ export async function loadLouvores() {
 
     if (localVersion === null) {
       const data = await fetchAndParseLouvoresManifest({ cache: 'no-store' });
-      louvores.set(data);
+      const enriched = applyLouvoresManifest(data);
       louvoresLoaded.set(true);
       localStorage.setItem(LOUVORES_MANIFEST_VERSION_KEY, String(remoteVersion));
-      console.log(`Loaded ${data.length} louvores from manifest (first sync)`);
-      await afterManifestLoaded(data);
+      console.log(`Loaded ${enriched.length} louvores from manifest (first sync)`);
+      await afterManifestLoaded(enriched);
       return;
     }
 
     const data = await fetchAndParseLouvoresManifest();
-    louvores.set(data);
+    const enriched = applyLouvoresManifest(data);
     louvoresLoaded.set(true);
-    console.log(`Loaded ${data.length} louvores from manifest (stale until background refresh)`);
-    await afterManifestLoaded(data);
+    console.log(`Loaded ${enriched.length} louvores from manifest (stale until background refresh)`);
+    await afterManifestLoaded(enriched);
     scheduleBackgroundRefresh(remoteVersion, gen);
   } catch (error) {
     console.error('Error loading louvores:', error);
