@@ -52,6 +52,7 @@
       bind:this={searchInput}
       bind:value={searchQuery}
       on:keydown={handleKeydown}
+      on:blur={() => dispatch('blur')}
       placeholder="Pesquisar louvor..."
       class="search-input"
       class:has-text={searchQuery.trim()}

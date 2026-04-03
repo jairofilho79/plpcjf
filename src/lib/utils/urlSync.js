@@ -132,7 +132,8 @@ export function updateUrlParams(newParams, options = {}) {
     if (comoAbrir === defaultComoAbrir || !comoAbrir) {
       currentParams.delete('comoAbrir');
     } else {
-      currentParams.set('comoAbrir', encodeURIComponent(comoAbrir));
+      // URLSearchParams.set já aplica percent-encoding
+      currentParams.set('comoAbrir', comoAbrir);
     }
   }
   
@@ -141,7 +142,7 @@ export function updateUrlParams(newParams, options = {}) {
     if (!pesquisa) {
       currentParams.delete('pesquisa');
     } else {
-      currentParams.set('pesquisa', encodeURIComponent(pesquisa));
+      currentParams.set('pesquisa', pesquisa);
     }
   }
   
@@ -151,7 +152,7 @@ export function updateUrlParams(newParams, options = {}) {
     if (ordenar === 'numero' || !ordenar) {
       currentParams.delete('ordenar');
     } else {
-      currentParams.set('ordenar', encodeURIComponent(ordenar));
+      currentParams.set('ordenar', ordenar);
     }
   }
   

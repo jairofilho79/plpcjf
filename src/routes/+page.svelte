@@ -308,6 +308,28 @@
     filterLouvores();
   }
   
+  /**
+   * Ao sair do campo de pesquisa, sincroniza a URL imediatamente.
+   * Evita que o bloco reativo URL → searchQuery aplique `pesquisa` vazio da URL
+   * enquanto o debounce de 500ms ainda não gravou o texto digitado.
+   */
+  function flushSearchToUrlOnBlur() {
+    if (!browser || !$page?.url || $page.url.pathname !== '/') return;
+    if (searchUrlUpdateTimer) {
+      clearTimeout(searchUrlUpdateTimer);
+      searchUrlUpdateTimer = null;
+    }
+    const urlParams = parseUrlParams($page.url);
+    const urlPesquisa = (urlParams.pesquisa || '').trim();
+    const currentPesquisa = (searchQuery || '').trim();
+    if (urlPesquisa === currentPesquisa) return;
+    isUpdatingFromUrl = true;
+    updateUrlParams({ pesquisa: searchQuery });
+    setTimeout(() => {
+      isUpdatingFromUrl = false;
+    }, 0);
+  }
+
   function handleClear() {
     // Limpar o debounce timer se existir
     if (debounceTimer) {
@@ -545,7 +567,7 @@
     
     <CarouselChips />
     
-    <SearchBar bind:searchQuery on:clear={handleClear} />
+    <SearchBar bind:searchQuery on:clear={handleClear} on:blur={flushSearchToUrlOnBlur} />
   </div>
   
   <div id="home-louvores-results" class="mt-8 flex justify-center">
