@@ -104,8 +104,9 @@
       on:click={handleNext}
       on:longpress={openListasMenu}
       longPressDuration={500}
-      maxMovement={24}
+      maxMovement={28}
       cancelLongPressOnVerticalScroll={false}
+      usePointerCaptureWhilePressed={true}
       visualFeedback={true}
       hapticFeedback={true}
       preventDefault={true}
@@ -176,6 +177,11 @@
     position: relative;
     display: inline-flex;
     align-items: center;
+  }
+
+  /* Evita o browser tratar o toque como scroll da página antes do long-press */
+  .carousel-navigator-inner :global(.gesture-button-wrapper) {
+    touch-action: none;
   }
 
   .listas-menu-backdrop {

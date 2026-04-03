@@ -13,10 +13,20 @@
   export let maxMovement = 10; // pixels
   /** Se false, não cancela o long-press só porque o movimento parece scroll vertical (útil em botões pequenos na toolbar). */
   export let cancelLongPressOnVerticalScroll = true;
+  /**
+   * Captura o pointer enquanto o dedo/cursor está em baixo (Pointer Events).
+   * Evita perder o gesto quando o cursor sai um pouco da área ou com micro-movimentos fora do botão.
+   */
+  export let usePointerCaptureWhilePressed = false;
   /** @type {string | undefined} */
   export let ariaLabel = undefined;
 
   const dispatch = createEventDispatcher();
+
+  /** @type {HTMLElement | null} */
+  let wrapperEl = null;
+  /** @type {number | null} */
+  let capturedPointerId = null;
   
   // Inicializar detector de gestos com estratégias
   let gestureDetector;
@@ -61,6 +71,22 @@
     }
   }
   
+  function tryReleasePointerCapture(/** @type {EventTarget | null} */ target) {
+    const el = target && 'releasePointerCapture' in target ? /** @type {HTMLElement} */ (target) : wrapperEl;
+    if (capturedPointerId == null || !el) {
+      capturedPointerId = null;
+      return;
+    }
+    try {
+      if (typeof el.hasPointerCapture === 'function' && el.hasPointerCapture(capturedPointerId)) {
+        el.releasePointerCapture(capturedPointerId);
+      }
+    } catch (_) {
+      /* ignore */
+    }
+    capturedPointerId = null;
+  }
+
   function resetGestureState() {
     cancelLongPress();
     gestureStartTime = 0;
@@ -68,6 +94,17 @@
     maxMovementDistance = 0;
     gestureCancelled = false;
     currentGestureType = null;
+  }
+
+  function handlePointerDownForCapture(/** @type {PointerEvent & { currentTarget: HTMLElement }} */ e) {
+    if (disabled || !usePointerCaptureWhilePressed) return;
+    tryReleasePointerCapture(e.currentTarget);
+    try {
+      e.currentTarget.setPointerCapture(e.pointerId);
+      capturedPointerId = e.pointerId;
+    } catch (_) {
+      capturedPointerId = null;
+    }
   }
   
   function calculateMovement(currentPosition) {
@@ -84,10 +121,12 @@
     const movement = maxMovementDistance;
     
     // Preparar dados do gesto para validação
+    // Inclui duração suficiente: evita falhar se o timer de 500ms atrasar (main thread ocupado)
+    const holdMeetsLongPress = duration >= longPressDuration && !gestureCancelled;
     const gestureData = {
       duration,
       movement,
-      hasLongPressStarted: isLongPressing,
+      hasLongPressStarted: isLongPressing || holdMeetsLongPress,
       wasCancelled: gestureCancelled
     };
     
@@ -194,17 +233,21 @@
       maxMovementDistance = Math.max(maxMovementDistance, finalMovement);
     }
     
-    // Detectar e disparar gesto válido
     detectAndDispatchGesture(event, endPosition);
-    
-    // Limpar estado
+
     resetGestureState();
+    tryReleasePointerCapture(
+      event.currentTarget instanceof HTMLElement ? event.currentTarget : wrapperEl
+    );
   }
-  
+
   function handleTouchCancel(event) {
     if (disabled) return;
     gestureCancelled = true;
     resetGestureState();
+    tryReleasePointerCapture(
+      event.currentTarget instanceof HTMLElement ? event.currentTarget : wrapperEl
+    );
     dispatch('gesturecancel', event);
   }
   
@@ -268,17 +311,22 @@
     const finalMovement = calculateMovement(endPosition);
     maxMovementDistance = Math.max(maxMovementDistance, finalMovement);
     
-    // Detectar e disparar gesto válido
     detectAndDispatchGesture(event, endPosition);
-    
-    // Limpar estado
+
     resetGestureState();
+    tryReleasePointerCapture(
+      event.currentTarget instanceof HTMLElement ? event.currentTarget : wrapperEl
+    );
   }
-  
+
   function handleMouseLeave(event) {
     if (disabled) return;
+    if (usePointerCaptureWhilePressed && gestureStartTime !== 0) return;
     gestureCancelled = true;
     resetGestureState();
+    tryReleasePointerCapture(
+      event.currentTarget instanceof HTMLElement ? event.currentTarget : wrapperEl
+    );
   }
   
   function handleClick(event) {
@@ -310,13 +358,16 @@
   
   onDestroy(() => {
     cancelLongPress();
+    tryReleasePointerCapture(wrapperEl);
   });
 </script>
 
 <div
+  bind:this={wrapperEl}
   class="gesture-button-wrapper"
   class:long-pressing={isLongPressing && visualFeedback}
   class:disabled={disabled}
+  on:pointerdown={handlePointerDownForCapture}
   on:touchstart={handleTouchStart}
   on:touchmove={handleTouchMove}
   on:touchend={handleTouchEnd}
