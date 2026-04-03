@@ -47,6 +47,10 @@
   let lastKnownHomeUrl = { itensPorPagina: 10, pagina: 1 };
   let pageInitializedFromUrl = false;
 
+  /** Última pesquisa aplicada em filterLouvores; mudança explícita de texto zera paginação de deep link. */
+  /** @type {string | null} */
+  let lastSearchAppliedInFilter = null;
+
   /** @type {any[]} */
   let paginatedResults = [];
 
@@ -192,9 +196,6 @@
         }
         currentPage = urlPag;
         pageInput = String(urlPag);
-        setTimeout(() => {
-          pageInitializedFromUrl = false;
-        }, 600);
       }
       homeUrlSyncInitialized = true;
 
@@ -330,6 +331,12 @@
   }
   
   function filterLouvores() {
+    const qNow = (searchQuery || '').trim();
+    if (lastSearchAppliedInFilter !== null && qNow !== lastSearchAppliedInFilter) {
+      pageInitializedFromUrl = false;
+    }
+    lastSearchAppliedInFilter = qNow;
+
     if (!$louvores || $louvores.length === 0) {
       finalizeFilteredResults([]);
       return;

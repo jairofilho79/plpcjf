@@ -42,12 +42,7 @@
    * @param {Event & { currentTarget: EventTarget & HTMLInputElement }} event
    */
   function handlePageInput(event) {
-    const value = event.currentTarget.value;
-    pageInput = value;
-    const pageNum = parseInt(value, 10);
-    if (!isNaN(pageNum) && pageNum >= 1 && pageNum <= totalPages) {
-      dispatch('gotoPage', { page: pageNum, scroll: false });
-    }
+    pageInput = event.currentTarget.value;
   }
 
   /**
@@ -58,11 +53,22 @@
       event.currentTarget.blur();
       const pageNum = parseInt(pageInput, 10);
       if (!isNaN(pageNum)) {
-        dispatch('gotoPage', { page: pageNum, scroll: true });
+        const p = Math.max(1, Math.min(totalPages, pageNum));
+        dispatch('gotoPage', { page: p, scroll: true });
+        pageInput = String(p);
       } else {
         pageInput = currentPage.toString();
       }
     }
+  }
+
+  function commitPageFromInput() {
+    const pageNum = parseInt(pageInput, 10);
+    if (isNaN(pageNum) || pageNum < 1 || pageNum > totalPages) {
+      pageInput = currentPage.toString();
+      return;
+    }
+    dispatch('gotoPage', { page: pageNum, scroll: false });
   }
 </script>
 
@@ -112,20 +118,21 @@
 
     <div class="pagination-input-group">
       <GestureButton
+        disabled={currentPage === 1}
+        ariaLabel="Página anterior (toque longo para a primeira página)"
         on:click={() => dispatch('previous')}
         on:longpress={() => dispatch('first')}
         longPressDuration={500}
         hapticFeedback={true}
         preventDefault={true}
       >
-        <button
-          type="button"
+        <div
           class="pagination-button"
-          disabled={currentPage === 1}
+          class:pagination-button-disabled={currentPage === 1}
           title="Página anterior (long press para primeira página)"
         >
           <ChevronLeft class="w-5 h-5" />
-        </button>
+        </div>
       </GestureButton>
 
       <input
@@ -134,32 +141,28 @@
         bind:value={pageInput}
         on:input={handlePageInput}
         on:keydown={handlePageInputKeydown}
-        on:blur={() => {
-          const pageNum = parseInt(pageInput, 10);
-          if (isNaN(pageNum) || pageNum < 1 || pageNum > totalPages) {
-            pageInput = currentPage.toString();
-          }
-        }}
+        on:blur={commitPageFromInput}
         min="1"
         max={totalPages}
         aria-label="Número da página"
       />
 
       <GestureButton
+        disabled={currentPage === totalPages}
+        ariaLabel="Próxima página (toque longo para a última página)"
         on:click={() => dispatch('next')}
         on:longpress={() => dispatch('last')}
         longPressDuration={500}
         hapticFeedback={true}
         preventDefault={true}
       >
-        <button
-          type="button"
+        <div
           class="pagination-button"
-          disabled={currentPage === totalPages}
+          class:pagination-button-disabled={currentPage === totalPages}
           title="Próxima página (long press para última página)"
         >
           <ChevronRight class="w-5 h-5" />
-        </button>
+        </div>
       </GestureButton>
     </div>
   </div>
@@ -312,6 +315,12 @@
   }
 
   .pagination-button:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+    background-color: var(--badge-gray-bg);
+  }
+
+  .pagination-button.pagination-button-disabled {
     opacity: 0.5;
     cursor: not-allowed;
     background-color: var(--badge-gray-bg);

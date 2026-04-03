@@ -11,7 +11,9 @@
   export let clickDelay = 0;
   export let preventDefault = true;
   export let maxMovement = 10; // pixels
-  
+  /** @type {string | undefined} */
+  export let ariaLabel = undefined;
+
   const dispatch = createEventDispatcher();
   
   // Inicializar detector de gestos com estratégias
@@ -328,6 +330,7 @@
   role="button"
   tabindex={disabled ? -1 : 0}
   aria-disabled={disabled}
+  aria-label={ariaLabel}
   on:keydown={(e) => {
     if (e.key === 'Enter' || e.key === ' ') {
       e.preventDefault();
