@@ -104,6 +104,8 @@
       on:click={handleNext}
       on:longpress={openListasMenu}
       longPressDuration={500}
+      maxMovement={24}
+      cancelLongPressOnVerticalScroll={false}
       visualFeedback={true}
       hapticFeedback={true}
       preventDefault={true}

@@ -11,6 +11,8 @@
   export let clickDelay = 0;
   export let preventDefault = true;
   export let maxMovement = 10; // pixels
+  /** Se false, não cancela o long-press só porque o movimento parece scroll vertical (útil em botões pequenos na toolbar). */
+  export let cancelLongPressOnVerticalScroll = true;
   /** @type {string | undefined} */
   export let ariaLabel = undefined;
 
@@ -169,13 +171,12 @@
     // Atualizar movimento máximo
     maxMovementDistance = Math.max(maxMovementDistance, movement);
     
-    // Se movimento foi principalmente vertical (scroll), cancelar gesto
     const dx = Math.abs(currentPosition.x - gestureStartPosition.x);
     const dy = Math.abs(currentPosition.y - gestureStartPosition.y);
-    const isVerticalScroll = dy > dx * 1.5; // 50% mais vertical que horizontal
-    
-    // Se moveu muito ou foi scroll vertical, cancelar gesto
-    if (isVerticalScroll || movement > maxMovement) {
+    const isVerticalScroll = dy > dx * 1.5;
+
+    const cancelForScroll = cancelLongPressOnVerticalScroll && isVerticalScroll;
+    if (cancelForScroll || movement > maxMovement) {
       gestureCancelled = true;
       cancelLongPress();
     }
