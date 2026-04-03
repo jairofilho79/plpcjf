@@ -552,47 +552,6 @@
     // Use pdfId as the unique identifier
     return louvor.pdfId || '';
   }
-
-  /**
-   * @param {string[]} selectedCategories
-   */
-  function getMaterialSummary(selectedCategories) {
-    if (selectedCategories.length === 0) return 'Nenhum';
-    const allSelected =
-      selectedCategories.length === CATEGORY_OPTIONS.length &&
-      CATEGORY_OPTIONS.every((category) => selectedCategories.includes(category));
-    if (allSelected) return 'Todos';
-
-    const ordered = CATEGORY_OPTIONS.filter((category) => selectedCategories.includes(category));
-    const extras = selectedCategories.filter((category) => !CATEGORY_OPTIONS.includes(category));
-    return [...ordered, ...extras].join(', ');
-  }
-
-  /**
-   * @param {string[]} selectedClassifications
-   * @param {string[]} availableClassifications
-   */
-  function getArranjoSummary(selectedClassifications, availableClassifications) {
-    if (availableClassifications.length === 0) return 'Sem opções';
-    if (selectedClassifications.length === 0) return 'Nenhum';
-
-    const allSelected =
-      selectedClassifications.length === availableClassifications.length &&
-      availableClassifications.every((classification) => selectedClassifications.includes(classification));
-    if (allSelected) return 'Todos';
-
-    const ordered = availableClassifications.filter((classification) =>
-      selectedClassifications.includes(classification)
-    );
-    const extras = selectedClassifications.filter(
-      (classification) => !availableClassifications.includes(classification)
-    );
-    const visibleValues = [...ordered, ...extras];
-    return visibleValues.length > 0 ? visibleValues.join(', ') : 'Nenhum';
-  }
-
-  $: materialSummary = getMaterialSummary($filters);
-  $: arranjoSummary = getArranjoSummary($classificationFilters, uniqueNormalizedClassifications);
 </script>
 
 <svelte:head>
@@ -606,25 +565,14 @@
         type="button"
         class="filter-collapse-trigger"
         aria-expanded={filtersExpanded}
-        aria-controls="home-filters-panel"
+        aria-controls={filtersExpanded ? 'home-filters-panel' : undefined}
         on:click={() => (filtersExpanded = !filtersExpanded)}
       >
         <span class="filter-collapse-title">Filtros</span>
         <span class="filter-collapse-chevron" class:expanded={filtersExpanded} aria-hidden="true">▾</span>
       </button>
 
-      {#if !filtersExpanded}
-        <div class="filter-summary" id="home-filters-panel">
-          <div class="filter-summary-row">
-            <span class="filter-summary-label">Material</span>
-            <span class="filter-summary-value">{materialSummary}</span>
-          </div>
-          <div class="filter-summary-row">
-            <span class="filter-summary-label">Arranjo</span>
-            <span class="filter-summary-value">{arranjoSummary}</span>
-          </div>
-        </div>
-      {:else}
+      {#if filtersExpanded}
         <div id="home-filters-panel" class="filter-expanded-panel">
           <CategoryFilters />
           <ClassificationFilters availableClassifications={$louvores.map(l => l.classificacao).filter(c => c)} />
@@ -762,33 +710,6 @@
 
   .filter-collapse-chevron.expanded {
     transform: rotate(180deg);
-  }
-
-  .filter-summary {
-    margin-top: 0.75rem;
-    display: flex;
-    flex-direction: column;
-    gap: 0.5rem;
-  }
-
-  .filter-summary-row {
-    border: 1px solid var(--gold-color);
-    border-radius: 0.375rem;
-    background-color: var(--input-bg);
-    padding: 0.5rem 0.625rem;
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.375rem;
-  }
-
-  .filter-summary-label {
-    font-weight: 700;
-    color: var(--text-dark);
-  }
-
-  .filter-summary-value {
-    color: var(--text-light);
-    opacity: 0.95;
   }
 
   .filter-expanded-panel {
