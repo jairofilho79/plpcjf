@@ -1,7 +1,7 @@
 <script>
   import { onMount } from 'svelte';
   import { browser } from '$app/environment';
-  import { derived } from 'svelte/store';
+  import { get } from 'svelte/store';
   import { page } from '$app/stores';
   import { goto } from '$app/navigation';
   import { louvores, loadLouvores, louvoresLoaded } from '$lib/stores/louvores';
@@ -10,14 +10,19 @@
   import { pdfViewer } from '$lib/stores/pdfViewer';
   import { carousel } from '$lib/stores/carousel';
   import { savedPlaylists } from '$lib/stores/savedPlaylists';
+  import { bibliotecaItemsPerPage, VALID_OPTIONS } from '$lib/stores/bibliotecaItemsPerPage';
   import { parseUrlParams, updateUrlParams } from '$lib/utils/urlSync';
-  import { louvorNomeMatchesSearch } from '$lib/utils/louvorSearch';
+  import { prepareSearchQuery, louvorRowMatchesPreparedSearch } from '$lib/utils/louvorSearch';
   import SearchBar from '$lib/components/SearchBar.svelte';
   import CategoryFilters from '$lib/components/CategoryFilters.svelte';
   import ClassificationFilters from '$lib/components/ClassificationFilters.svelte';
   import PdfViewerSelector from '$lib/components/PdfViewerSelector.svelte';
   import LouvorCard from '$lib/components/LouvorCard.svelte';
   import CarouselChips from '$lib/components/CarouselChips.svelte';
+  import LouvorPaginationControls from '$lib/components/LouvorPaginationControls.svelte';
+
+  /** Em conjunto com `id` em SearchBar.svelte — só esse input bloqueia sync URL → pesquisa */
+  const LOUVOR_SEARCH_INPUT_ID = 'louvor-search-input';
   
   // Inicializar searchQuery da URL
   let searchQuery = browser && $page && $page.url ? (parseUrlParams($page.url).pesquisa || '') : '';
@@ -32,20 +37,82 @@
   let searchUrlUpdateTimer = null;
   let isUpdatingFromUrl = false;
   let sharedLinkProcessed = false;
+
+  let currentPage = 1;
+  let pageInput = '1';
+  let isUpdatingPageFromUrl = false;
+  let isUpdatingItemsPerPageFromUrl = false;
+  let homeUrlSyncInitialized = false;
+  /** @type {{ itensPorPagina: number; pagina: number }} */
+  let lastKnownHomeUrl = { itensPorPagina: 10, pagina: 1 };
+  let pageInitializedFromUrl = false;
+
+  /** @type {any[]} */
+  let paginatedResults = [];
+
+  /**
+   * @param {any[]} results
+   */
+  function finalizeFilteredResults(results) {
+    filteredResults = results;
+    const ipp = get(bibliotecaItemsPerPage);
+    const maxP = results.length === 0 ? 1 : Math.max(1, Math.ceil(results.length / ipp));
+    if (!pageInitializedFromUrl) {
+      currentPage = 1;
+      pageInput = '1';
+      if (browser && homeUrlSyncInitialized && $page?.url?.pathname === '/' && !isUpdatingFromUrl) {
+        updateUrlParams({ pagina: 1 });
+        lastKnownHomeUrl = { ...lastKnownHomeUrl, pagina: 1 };
+      }
+    } else if (currentPage > maxP) {
+      currentPage = maxP;
+      pageInput = String(maxP);
+      if (browser && homeUrlSyncInitialized && $page?.url?.pathname === '/' && !isUpdatingFromUrl) {
+        updateUrlParams({ pagina: maxP });
+        lastKnownHomeUrl = { ...lastKnownHomeUrl, pagina: maxP };
+      }
+    }
+  }
+
+  /**
+   * @param {number} p
+   * @param {{ scroll?: boolean; skipUrlUpdate?: boolean }} [opts]
+   */
+  function setPage(p, { scroll = true, skipUrlUpdate = false } = {}) {
+    const ipp = get(bibliotecaItemsPerPage);
+    const tp = filteredResults.length === 0 ? 1 : Math.max(1, Math.ceil(filteredResults.length / ipp));
+    const maxPage = tp > 0 ? tp : 1;
+    const pageNum = Math.max(1, Math.min(maxPage, p));
+    currentPage = pageNum;
+    pageInput = pageNum.toString();
+    if (browser && !skipUrlUpdate && !isUpdatingPageFromUrl && homeUrlSyncInitialized && $page?.url?.pathname === '/') {
+      updateUrlParams({ pagina: pageNum });
+      lastKnownHomeUrl = { ...lastKnownHomeUrl, pagina: pageNum };
+    }
+    if (scroll && tp > 0 && browser) {
+      document.getElementById('home-louvores-results')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  }
+
+  function scrollHomeResultsTop() {
+    if (browser) {
+      document.getElementById('home-louvores-results')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  }
   
   // Reagir a mudanças na URL para atualizar searchQuery
   // Só atualiza se o valor da URL for diferente do valor atual (normalizado)
-  // E não atualiza se um input estiver focado (usuário está digitando)
+  // E não atualiza se o campo de pesquisa estiver focado (usuário está digitando)
   $: if (browser && !isUpdatingFromUrl && $page && $page.url) {
     const urlParams = parseUrlParams($page.url);
     const urlPesquisa = (urlParams.pesquisa || '').trim();
     const currentPesquisa = (searchQuery || '').trim();
     
-    // Não atualizar se um input estiver focado (usuário está digitando)
-    const inputFocused = browser && document.activeElement && document.activeElement.tagName === 'INPUT';
+    const el = document.activeElement;
+    const searchInputFocused =
+      el instanceof HTMLInputElement && el.id === LOUVOR_SEARCH_INPUT_ID;
     
-    // Só atualiza se o valor realmente for diferente E nenhum input estiver focado
-    if (urlPesquisa !== currentPesquisa && !inputFocused) {
+    if (urlPesquisa !== currentPesquisa && !searchInputFocused) {
       isUpdatingFromUrl = true;
       searchQuery = urlParams.pesquisa || '';
       // Usar setTimeout para garantir que a flag seja resetada após a atualização
@@ -85,10 +152,52 @@
     }
   }
   
+  /**
+   * @param {CustomEvent<{ value: number }>} e
+   */
+  function handleHomeItemsPerPage(e) {
+    bibliotecaItemsPerPage.set(e.detail.value);
+    setPage(1, { scroll: false });
+    scrollHomeResultsTop();
+  }
+
+  /**
+   * @param {CustomEvent<{ page: number; scroll?: boolean }>} e
+   */
+  function handleHomePaginationPage(e) {
+    setPage(e.detail.page, { scroll: e.detail.scroll !== false });
+  }
+
   onMount(async () => {
     await loadLouvores();
     
     if (browser) {
+      if ($page.url.pathname === '/') {
+        const hp = parseUrlParams($page.url);
+        const urlIpp =
+          hp.itensPorPagina !== null && VALID_OPTIONS.includes(hp.itensPorPagina)
+            ? hp.itensPorPagina
+            : 10;
+        const urlPag = hp.pagina !== null && hp.pagina > 0 ? hp.pagina : 1;
+        lastKnownHomeUrl = { itensPorPagina: urlIpp, pagina: urlPag };
+        if (hp.itensPorPagina !== null && VALID_OPTIONS.includes(hp.itensPorPagina)) {
+          isUpdatingItemsPerPageFromUrl = true;
+          bibliotecaItemsPerPage.set(hp.itensPorPagina);
+          setTimeout(() => {
+            isUpdatingItemsPerPageFromUrl = false;
+          }, 0);
+        }
+        if (urlPag > 1) {
+          pageInitializedFromUrl = true;
+        }
+        currentPage = urlPag;
+        pageInput = String(urlPag);
+        setTimeout(() => {
+          pageInitializedFromUrl = false;
+        }, 600);
+      }
+      homeUrlSyncInitialized = true;
+
       // Aguardar até que os louvores estejam carregados
       const checkAndInit = () => {
         if ($louvoresLoaded && $louvores.length > 0 && !filtersInitialized) {
@@ -210,15 +319,19 @@
     }
     searchQuery = '';
     filteredResults = [];
+    currentPage = 1;
+    pageInput = '1';
+    pageInitializedFromUrl = false;
     // Atualizar URL imediatamente ao limpar
     if (browser && !isUpdatingFromUrl) {
-      updateUrlParams({ pesquisa: '' });
+      updateUrlParams({ pesquisa: '', pagina: 1 });
+      lastKnownHomeUrl = { ...lastKnownHomeUrl, pagina: 1 };
     }
   }
   
   function filterLouvores() {
     if (!$louvores || $louvores.length === 0) {
-      filteredResults = [];
+      finalizeFilteredResults([]);
       return;
     }
     
@@ -228,7 +341,7 @@
     
     // If no categories selected, show nothing (not all)
     if (activeCategories.length === 0) {
-      filteredResults = [];
+      finalizeFilteredResults([]);
       return;
     }
     
@@ -247,7 +360,7 @@
     
     // If no classification filters selected, show nothing (not all)
     if (selectedFilters.length === 0) {
-      filteredResults = [];
+      finalizeFilteredResults([]);
       return;
     }
     
@@ -269,18 +382,86 @@
     
     // Apply search filter
     if (!searchQuery.trim()) {
-      filteredResults = [];
+      finalizeFilteredResults([]);
       return;
     }
     
     if (!isNaN(Number(searchQuery))) {
-      filteredResults = classificationFiltered.filter(louvor => Number(louvor.numero) === Number(searchQuery));
+      finalizeFilteredResults(
+        classificationFiltered.filter(louvor => Number(louvor.numero) === Number(searchQuery))
+      );
       return;
     }
     
-    filteredResults = classificationFiltered.filter((louvor) =>
-      louvorNomeMatchesSearch(louvor.nome, searchQuery, louvor._searchContentTokens)
+    const prepared = prepareSearchQuery(searchQuery);
+    finalizeFilteredResults(
+      classificationFiltered.filter((louvor) => louvorRowMatchesPreparedSearch(louvor, prepared))
     );
+  }
+
+  $: itemsPerPageHome = $bibliotecaItemsPerPage;
+  $: totalPagesHome =
+    filteredResults.length === 0 ? 1 : Math.max(1, Math.ceil(filteredResults.length / itemsPerPageHome));
+  $: paginatedResults = filteredResults.slice(
+    (currentPage - 1) * itemsPerPageHome,
+    currentPage * itemsPerPageHome
+  );
+
+  $: if (
+    browser &&
+    homeUrlSyncInitialized &&
+    !isUpdatingFromUrl &&
+    !isUpdatingItemsPerPageFromUrl &&
+    !isUpdatingPageFromUrl &&
+    $page?.url?.pathname === '/' &&
+    $page?.url
+  ) {
+    const urlParams = parseUrlParams($page.url);
+    const urlIpp =
+      urlParams.itensPorPagina !== null && VALID_OPTIONS.includes(urlParams.itensPorPagina)
+        ? urlParams.itensPorPagina
+        : 10;
+    const urlPag = urlParams.pagina !== null && urlParams.pagina > 0 ? urlParams.pagina : 1;
+    if (lastKnownHomeUrl.itensPorPagina !== urlIpp || lastKnownHomeUrl.pagina !== urlPag) {
+      lastKnownHomeUrl = { itensPorPagina: urlIpp, pagina: urlPag };
+      if (
+        urlParams.itensPorPagina !== null &&
+        VALID_OPTIONS.includes(urlParams.itensPorPagina) &&
+        urlIpp !== get(bibliotecaItemsPerPage)
+      ) {
+        isUpdatingItemsPerPageFromUrl = true;
+        bibliotecaItemsPerPage.set(urlIpp);
+        setTimeout(() => {
+          isUpdatingItemsPerPageFromUrl = false;
+        }, 100);
+      }
+      if (urlPag !== currentPage) {
+        isUpdatingPageFromUrl = true;
+        currentPage = urlPag;
+        pageInput = String(urlPag);
+        setTimeout(() => {
+          isUpdatingPageFromUrl = false;
+        }, 100);
+      }
+    }
+  }
+
+  $: if (
+    browser &&
+    homeUrlSyncInitialized &&
+    !isUpdatingItemsPerPageFromUrl &&
+    $page?.url?.pathname === '/' &&
+    $page?.url
+  ) {
+    const urlParams = parseUrlParams($page.url);
+    const urlIpp =
+      urlParams.itensPorPagina !== null && VALID_OPTIONS.includes(urlParams.itensPorPagina)
+        ? urlParams.itensPorPagina
+        : 10;
+    if (urlIpp !== $bibliotecaItemsPerPage) {
+      updateUrlParams({ itensPorPagina: $bibliotecaItemsPerPage });
+      lastKnownHomeUrl = { ...lastKnownHomeUrl, itensPorPagina: $bibliotecaItemsPerPage };
+    }
   }
   
   // Debounce: Aguarda 300ms após o usuário parar de digitar antes de pesquisar
@@ -360,15 +541,44 @@
     <SearchBar bind:searchQuery on:clear={handleClear} />
   </div>
   
-  <div class="mt-8 flex justify-center">
+  <div id="home-louvores-results" class="mt-8 flex justify-center">
     {#if filteredResults.length > 0}
       <div class="louvores-container w-full max-w-4xl">
         <span class="container-tag">Louvores</span>
+
+        <LouvorPaginationControls
+          variant="top"
+          bind:pageInput
+          currentPage={currentPage}
+          totalPages={totalPagesHome}
+          itemsPerPage={itemsPerPageHome}
+          on:itemsPerPage={handleHomeItemsPerPage}
+          on:gotoPage={handleHomePaginationPage}
+          on:previous={() => currentPage > 1 && setPage(currentPage - 1)}
+          on:next={() => currentPage < totalPagesHome && setPage(currentPage + 1)}
+          on:first={() => setPage(1)}
+          on:last={() => setPage(totalPagesHome)}
+        />
+
         <div class="louvores-list">
-          {#each filteredResults as louvor (getLouvorKey(louvor))}
+          {#each paginatedResults as louvor (getLouvorKey(louvor))}
             <LouvorCard {louvor} />
           {/each}
         </div>
+
+        <LouvorPaginationControls
+          variant="bottom"
+          bind:pageInput
+          currentPage={currentPage}
+          totalPages={totalPagesHome}
+          itemsPerPage={itemsPerPageHome}
+          on:itemsPerPage={handleHomeItemsPerPage}
+          on:gotoPage={handleHomePaginationPage}
+          on:previous={() => currentPage > 1 && setPage(currentPage - 1)}
+          on:next={() => currentPage < totalPagesHome && setPage(currentPage + 1)}
+          on:first={() => setPage(1)}
+          on:last={() => setPage(totalPagesHome)}
+        />
       </div>
     {:else if searchQuery}
       <p class="text-center mt-8 no-results-message">Nenhum resultado encontrado.</p>
@@ -404,6 +614,8 @@
     display: flex;
     flex-direction: column;
     gap: 0.5rem;
+    margin-top: 1.5rem;
+    margin-bottom: 1.5rem;
   }
   
   .no-results-message {

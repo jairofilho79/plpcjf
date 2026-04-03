@@ -1,7 +1,7 @@
 import { writable, get } from 'svelte/store';
 import { browser } from '$app/environment';
 import { clearLouvoresManifestFromSwCache } from '$lib/utils/swRegistration';
-import { tokensContent } from '$lib/utils/louvorSearch';
+import { tokensContent, normalizeForSearch } from '$lib/utils/louvorSearch';
 
 /**
  * Enrich manifest rows with precomputed title tokens and replace store contents.
@@ -12,7 +12,8 @@ function applyLouvoresManifest(data) {
   const list = Array.isArray(data) ? data : [];
   const enriched = list.map((item) => ({
     ...item,
-    _searchContentTokens: tokensContent(item?.nome ?? '')
+    _searchContentTokens: tokensContent(item?.nome ?? ''),
+    _searchTitleNorm: normalizeForSearch(item?.nome ?? '')
   }));
   louvores.set(enriched);
   return enriched;

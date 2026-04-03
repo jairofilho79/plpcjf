@@ -137,21 +137,56 @@ export function isOrderedSubsequence(haystack, needle) {
 }
 
 /**
+ * Parse once per filter pass (call outside per-louvor loop).
+ * @param {string} searchQuery
+ * @returns {{ searchNorm: string; queryTokens: string[] }}
+ */
+export function prepareSearchQuery(searchQuery) {
+  const q = searchQuery ?? '';
+  return {
+    searchNorm: normalizeForSearch(q),
+    queryTokens: tokensContent(q)
+  };
+}
+
+function rowTitleNorm(row) {
+  if (typeof row?._searchTitleNorm === 'string') return row._searchTitleNorm;
+  return normalizeForSearch(row?.nome ?? '');
+}
+
+function rowContentTokens(row) {
+  if (Array.isArray(row?._searchContentTokens)) return row._searchContentTokens;
+  return tokensContent(row?.nome ?? '');
+}
+
+/**
+ * Hybrid: normalized substring includes first, then ordered content-token subsequence.
+ * Empty searchNorm skips includes ("" matches everything in JS).
+ * @param {{ nome?: string; _searchTitleNorm?: string; _searchContentTokens?: string[] }} row
+ * @param {{ searchNorm: string; queryTokens: string[] }} prepared
+ * @returns {boolean}
+ */
+export function louvorRowMatchesPreparedSearch(row, prepared) {
+  const titleNorm = rowTitleNorm(row);
+  if (prepared.searchNorm.length > 0 && titleNorm.includes(prepared.searchNorm)) return true;
+  if (prepared.queryTokens.length === 0) return false;
+  return isOrderedSubsequence(rowContentTokens(row), prepared.queryTokens);
+}
+
+/**
  * @param {string} nome
  * @param {string} searchQuery
  * @param {string[] | undefined} precomputedTitleTokens content tokens for nome (from manifest enrich)
  * @returns {boolean}
  */
 export function louvorNomeMatchesSearch(nome, searchQuery, precomputedTitleTokens) {
-  const searchNorm = normalizeForSearch(searchQuery);
-  const titleNorm = normalizeForSearch(nome ?? '');
-  const queryTokens = tokensContent(searchQuery);
-  const titleTokens = Array.isArray(precomputedTitleTokens)
-    ? precomputedTitleTokens
-    : tokensContent(nome ?? '');
-
-  if (queryTokens.length === 0) {
-    return titleNorm.includes(searchNorm);
-  }
-  return isOrderedSubsequence(titleTokens, queryTokens);
+  const prepared = prepareSearchQuery(searchQuery);
+  return louvorRowMatchesPreparedSearch(
+    {
+      nome,
+      _searchTitleNorm: normalizeForSearch(nome ?? ''),
+      _searchContentTokens: precomputedTitleTokens
+    },
+    prepared
+  );
 }

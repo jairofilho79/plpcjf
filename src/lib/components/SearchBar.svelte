@@ -47,6 +47,7 @@
     {/if}
     
     <input
+      id="louvor-search-input"
       type="text"
       bind:this={searchInput}
       bind:value={searchQuery}
