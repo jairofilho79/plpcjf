@@ -457,7 +457,7 @@
             title="Carregar lista e ir para a página inicial"
           >
             <Play class="w-4 h-4" />
-            <span>Ir para início</span>
+            <span>Editar</span>
           </button>
         </div>
 
