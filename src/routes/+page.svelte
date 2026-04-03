@@ -560,17 +560,37 @@
 
 <div class="max-w-6xl mx-auto">
   <div class="flex flex-col items-center mt-8 space-y-4">
-    <div class="w-full max-w-4xl filter-collapse-container">
-      <button
-        type="button"
-        class="filter-collapse-trigger"
-        aria-expanded={filtersExpanded}
-        aria-controls={filtersExpanded ? 'home-filters-panel' : undefined}
-        on:click={() => (filtersExpanded = !filtersExpanded)}
-      >
-        <span class="filter-collapse-title">Filtros</span>
-        <span class="filter-collapse-chevron" class:expanded={filtersExpanded} aria-hidden="true">▾</span>
-      </button>
+    <div class="w-full max-w-4xl p-4 bg-card-color rounded-lg border-2 filter-collapse-outer">
+      <span class="filter-collapse-tag">Filtros</span>
+      <div class="filter-collapse-select-wrapper">
+        <button
+          type="button"
+          class="filter-collapse-trigger"
+          aria-expanded={filtersExpanded}
+          aria-controls={filtersExpanded ? 'home-filters-panel' : undefined}
+          on:click={() => (filtersExpanded = !filtersExpanded)}
+        >
+          <span class="filter-collapse-title">
+            {filtersExpanded ? 'Toque para ver menos' : 'Toque para ver mais'}
+          </span>
+          <svg
+            class="filter-collapse-chevron-svg"
+            class:expanded={filtersExpanded}
+            xmlns="http://www.w3.org/2000/svg"
+            fill="none"
+            viewBox="0 0 24 24"
+            aria-hidden="true"
+          >
+            <path
+              stroke="var(--gold-color)"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              d="m6 9 6 6 6-6"
+            />
+          </svg>
+        </button>
+      </div>
 
       {#if filtersExpanded}
         <div id="home-filters-panel" class="filter-expanded-panel">
@@ -669,51 +689,83 @@
     opacity: 0.9;
   }
 
-  .filter-collapse-container {
-    border: 2px solid var(--gold-color);
-    border-radius: 0.5rem;
+  /* Mesmo padrão visual de PdfViewerSelector (tag + área interna estilo select) */
+  .filter-collapse-outer {
+    border-color: var(--gold-color);
+    color: var(--text-dark);
+    position: relative;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .filter-collapse-tag {
+    position: absolute;
+    top: -0.875rem;
+    left: 0.75rem;
     background-color: var(--card-color);
-    padding: 0.75rem;
+    color: var(--text-dark);
+    font-size: 0.75rem;
+    font-weight: 600;
+    padding: 0.25rem 0.5rem;
+    border-radius: 0.25rem;
+    border: 2px solid var(--gold-color);
+    z-index: 10;
+    line-height: 1;
+  }
+
+  .filter-collapse-select-wrapper {
+    position: relative;
+    width: 100%;
   }
 
   .filter-collapse-trigger {
     width: 100%;
+    min-height: 2.5rem;
+    padding: 0.5rem 0.875rem;
+    border-radius: 0.75rem;
     border: 2px solid var(--gold-color);
-    border-radius: 0.5rem;
-    background-color: var(--card-color);
-    color: var(--text-dark);
+    background-color: #ffffff;
+    color: var(--title-color);
     display: flex;
     align-items: center;
     justify-content: space-between;
+    gap: 0.5rem;
+    font-size: 0.95rem;
     font-weight: 600;
-    padding: 0.5rem 0.75rem;
-    transition: background-color 0.2s ease, transform 0.2s ease;
+    line-height: 1.2;
+    cursor: pointer;
+    transition: box-shadow 0.2s ease, border-color 0.2s ease;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
   }
 
   .filter-collapse-trigger:hover {
-    background-color: var(--placeholder-color);
-    transform: translateY(-1px);
+    border-color: var(--title-color);
   }
 
   .filter-collapse-trigger:focus-visible {
-    outline: 2px solid var(--title-color);
-    outline-offset: 2px;
+    outline: none;
+    border-color: var(--gold-color);
+    box-shadow: 0 0 0 3px rgba(212, 175, 55, 0.3);
   }
 
   .filter-collapse-title {
-    font-size: 0.95rem;
+    text-align: left;
   }
 
-  .filter-collapse-chevron {
+  .filter-collapse-chevron-svg {
+    flex-shrink: 0;
+    width: 1rem;
+    height: 1rem;
     transition: transform 0.2s ease;
   }
 
-  .filter-collapse-chevron.expanded {
+  .filter-collapse-chevron-svg.expanded {
     transform: rotate(180deg);
   }
 
   .filter-expanded-panel {
-    margin-top: 0.75rem;
+    margin-top: 1rem;
     display: flex;
     flex-direction: column;
     gap: 1rem;
