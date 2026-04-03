@@ -99,19 +99,6 @@
     width: 100%;
   }
 
-  .pdf-viewer-select-wrapper::after {
-    content: '';
-    position: absolute;
-    right: 0.875rem;
-    top: 50%;
-    width: 0.5rem;
-    height: 0.5rem;
-    border-right: 2px solid var(--gold-color);
-    border-bottom: 2px solid var(--gold-color);
-    transform: translateY(-65%) rotate(45deg);
-    pointer-events: none;
-  }
-
   .pdf-viewer-select {
     width: 100%;
     min-height: 2.5rem;
@@ -119,6 +106,11 @@
     border-radius: 0.75rem;
     border: 2px solid var(--gold-color);
     background-color: #ffffff;
+    /* @tailwindcss/forms define uma seta cinza em todo `select`; substituímos por uma só, dourada */
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='%23D4AF37' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 0.75rem center;
+    background-size: 1rem 1rem;
     color: var(--title-color);
     font-size: 0.95rem;
     font-weight: 600;
@@ -127,6 +119,12 @@
     appearance: none;
     -webkit-appearance: none;
     -moz-appearance: none;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  .pdf-viewer-select::-ms-expand {
+    display: none;
   }
 
   .pdf-viewer-select:hover {
