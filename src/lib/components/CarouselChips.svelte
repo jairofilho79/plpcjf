@@ -15,8 +15,7 @@
     openPdfNewTabOfflineFirst 
   } from '$lib/utils/pdfUtils';
   import { sharePlaylistLink, generatePlaylistShareUrl } from '$lib/utils/playlistUtils';
-  import { isPdfAvailableInIndex } from '$lib/utils/pdfIndex';
-  import { ensurePdfAvailable, getCachedValidation } from '$lib/utils/pdfValidation';
+  import { navigateLouvorToLeitor } from '$lib/utils/navigateLouvorToLeitor';
   
   /**
      * @type {number | null}
@@ -121,93 +120,13 @@
     const mode = $pdfViewer;
     
     if (mode === 'leitor') {
-      // FASE 2: Cache de Validação - verificar cache primeiro
       checkingPdfId = louvor.pdfId;
       pdfError = null;
-      
       try {
-        // Verificar cache de validação primeiro (Fase 2)
-        const cached = getCachedValidation(louvor.pdfId);
-        if (cached && cached.available) {
-          // Cache diz que está disponível - usar caminho original do pdfId (NÃO usar cached.url que pode estar normalizado)
-          const fileParam = encodeURIComponent(`/${pdfPath}`);
-          const tituloParam = encodeURIComponent(louvor.nome || '');
-          const subtituloText = `${louvor.categoria || ''} | ${louvor.classificacao || ''}`.trim();
-          const subtituloParam = encodeURIComponent(subtituloText);
-          const url = `/leitor?file=${fileParam}&titulo=${tituloParam}&subtitulo=${subtituloParam}&validated=true`;
-          goto(url);
-          checkingPdfId = null;
-          return;
+        const result = await navigateLouvorToLeitor(louvor);
+        if (!result.navigated && result.error) {
+          pdfError = result.error;
         }
-        
-        // Se não estiver no cache ou cache diz que não está disponível, fazer validação
-        // Quick check via index first (mas não bloqueia se index for null ou desatualizado)
-        const indexCheck = isPdfAvailableInIndex(louvor.pdfId);
-        
-        let shouldProceed = false;
-        
-        if (indexCheck === true) {
-          // Index diz que está disponível - confiar mas fazer validação rápida
-          try {
-            const { validatePdfAvailability } = await import('$lib/utils/pdfValidation');
-            const quickValidation = await validatePdfAvailability(pdfPath, louvor.pdfId);
-            if (quickValidation.available) {
-              shouldProceed = true;
-            } else if (quickValidation.needsDownload && navigator.onLine) {
-              // PDF não está offline mas pode ser baixado - permitir abertura (leitor tentará baixar)
-              shouldProceed = true;
-            }
-          } catch (err) {
-            console.warn('[CarouselChips] Quick validation failed, proceeding anyway:', err);
-            // Se validação falhar por erro técnico, permitir abertura
-            shouldProceed = true;
-          }
-        } else {
-          // Index é false ou null - fazer validação completa
-          const isAvailable = await ensurePdfAvailable(pdfPath);
-          
-          if (isAvailable) {
-            shouldProceed = true;
-          } else {
-            // Verificar se pode ser baixado online
-            const { validatePdfAvailability } = await import('$lib/utils/pdfValidation');
-            const validation = await validatePdfAvailability(pdfPath, louvor.pdfId);
-            if (validation.needsDownload && navigator.onLine) {
-              // PDF não está offline mas pode ser baixado - permitir abertura
-              shouldProceed = true;
-            } else if (!navigator.onLine && validation.available === false) {
-              // Realmente não disponível e offline - mostrar erro
-              pdfError = 'PDF não está disponível offline. Por favor, baixe primeiro na página de configuração offline.';
-              checkingPdfId = null;
-              return;
-            } else {
-              // Se houver dúvida (SW não pronto, erro temporário), permitir abertura
-              // O leitor tentará carregar e mostrará erro apropriado se realmente não estiver disponível
-              console.warn('[CarouselChips] Validation uncertain, allowing navigation - leitor will handle errors');
-              shouldProceed = true;
-            }
-          }
-        }
-        
-        if (shouldProceed) {
-          // PDF está disponível ou pode ser baixado, proceder com navegação
-          // Adicionar flag validated=true para evitar validação dupla no leitor
-          const fileParam = encodeURIComponent(`/${pdfPath}`);
-          const tituloParam = encodeURIComponent(louvor.nome || '');
-          const subtituloText = `${louvor.categoria || ''} | ${louvor.classificacao || ''}`.trim();
-          const subtituloParam = encodeURIComponent(subtituloText);
-          const url = `/leitor?file=${fileParam}&titulo=${tituloParam}&subtitulo=${subtituloParam}&validated=true`;
-          goto(url);
-        }
-      } catch (err) {
-        console.error('Erro ao validar PDF:', err);
-        // Em caso de erro, permitir abertura - leitor tentará carregar
-        const fileParam = encodeURIComponent(`/${pdfPath}`);
-        const tituloParam = encodeURIComponent(louvor.nome || '');
-        const subtituloText = `${louvor.categoria || ''} | ${louvor.classificacao || ''}`.trim();
-        const subtituloParam = encodeURIComponent(subtituloText);
-        const url = `/leitor?file=${fileParam}&titulo=${tituloParam}&subtitulo=${subtituloParam}`;
-        goto(url);
       } finally {
         checkingPdfId = null;
       }

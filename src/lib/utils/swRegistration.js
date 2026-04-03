@@ -351,6 +351,21 @@ export async function clearPdfFromSwCache(pdfPath) {
 }
 
 /**
+ * Remove cached louvores-manifest.json from the app shell cache so the next fetch hits the network.
+ * No-op when there is no controlling service worker.
+ */
+export async function clearLouvoresManifestFromSwCache() {
+  if (!('serviceWorker' in navigator) || !navigator.serviceWorker.controller) {
+    return;
+  }
+  try {
+    await sendMessageToSW({ type: 'CLEAR_LOUVORES_MANIFEST_CACHE', data: {} });
+  } catch (error) {
+    console.warn('[SW Registration] clearLouvoresManifestFromSwCache:', error);
+  }
+}
+
+/**
  * Check if service worker is ready
  * @returns {boolean}
  */

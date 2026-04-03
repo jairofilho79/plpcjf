@@ -1,7 +1,7 @@
 <script>
   import { onMount } from 'svelte';
   import { browser } from '$app/environment';
-  import { derived } from 'svelte/store';
+  import { get } from 'svelte/store';
   import { page } from '$app/stores';
   import { goto } from '$app/navigation';
   import { louvores, loadLouvores, louvoresLoaded } from '$lib/stores/louvores';
@@ -10,13 +10,19 @@
   import { pdfViewer } from '$lib/stores/pdfViewer';
   import { carousel } from '$lib/stores/carousel';
   import { savedPlaylists } from '$lib/stores/savedPlaylists';
+  import { bibliotecaItemsPerPage, VALID_OPTIONS } from '$lib/stores/bibliotecaItemsPerPage';
   import { parseUrlParams, updateUrlParams } from '$lib/utils/urlSync';
+  import { prepareSearchQuery, louvorRowMatchesPreparedSearch } from '$lib/utils/louvorSearch';
   import SearchBar from '$lib/components/SearchBar.svelte';
   import CategoryFilters from '$lib/components/CategoryFilters.svelte';
   import ClassificationFilters from '$lib/components/ClassificationFilters.svelte';
   import PdfViewerSelector from '$lib/components/PdfViewerSelector.svelte';
   import LouvorCard from '$lib/components/LouvorCard.svelte';
   import CarouselChips from '$lib/components/CarouselChips.svelte';
+  import LouvorPaginationControls from '$lib/components/LouvorPaginationControls.svelte';
+
+  /** Em conjunto com `id` em SearchBar.svelte — só esse input bloqueia sync URL → pesquisa */
+  const LOUVOR_SEARCH_INPUT_ID = 'louvor-search-input';
   
   // Inicializar searchQuery da URL
   let searchQuery = browser && $page && $page.url ? (parseUrlParams($page.url).pesquisa || '') : '';
@@ -31,20 +37,87 @@
   let searchUrlUpdateTimer = null;
   let isUpdatingFromUrl = false;
   let sharedLinkProcessed = false;
+
+  let currentPage = 1;
+  let pageInput = '1';
+  let isUpdatingPageFromUrl = false;
+  let isUpdatingItemsPerPageFromUrl = false;
+  let homeUrlSyncInitialized = false;
+  /** @type {{ itensPorPagina: number; pagina: number }} */
+  let lastKnownHomeUrl = { itensPorPagina: 10, pagina: 1 };
+  let pageInitializedFromUrl = false;
+
+  /** Última pesquisa aplicada em filterLouvores; mudança explícita de texto zera paginação de deep link. */
+  /** @type {string | null} */
+  let lastSearchAppliedInFilter = null;
+
+  /** @type {any[]} */
+  let paginatedResults = [];
+  let filtersExpanded = false;
+
+  /**
+   * @param {any[]} results
+   */
+  function finalizeFilteredResults(results) {
+    filteredResults = results;
+    const ipp = get(bibliotecaItemsPerPage);
+    const maxP = results.length === 0 ? 1 : Math.max(1, Math.ceil(results.length / ipp));
+    if (!pageInitializedFromUrl) {
+      currentPage = 1;
+      pageInput = '1';
+      if (browser && homeUrlSyncInitialized && $page?.url?.pathname === '/' && !isUpdatingFromUrl) {
+        updateUrlParams({ pagina: 1 });
+        lastKnownHomeUrl = { ...lastKnownHomeUrl, pagina: 1 };
+      }
+    } else if (currentPage > maxP) {
+      currentPage = maxP;
+      pageInput = String(maxP);
+      if (browser && homeUrlSyncInitialized && $page?.url?.pathname === '/' && !isUpdatingFromUrl) {
+        updateUrlParams({ pagina: maxP });
+        lastKnownHomeUrl = { ...lastKnownHomeUrl, pagina: maxP };
+      }
+    }
+  }
+
+  /**
+   * @param {number} p
+   * @param {{ scroll?: boolean; skipUrlUpdate?: boolean }} [opts]
+   */
+  function setPage(p, { scroll = true, skipUrlUpdate = false } = {}) {
+    const ipp = get(bibliotecaItemsPerPage);
+    const tp = filteredResults.length === 0 ? 1 : Math.max(1, Math.ceil(filteredResults.length / ipp));
+    const maxPage = tp > 0 ? tp : 1;
+    const pageNum = Math.max(1, Math.min(maxPage, p));
+    currentPage = pageNum;
+    pageInput = pageNum.toString();
+    if (browser && !skipUrlUpdate && !isUpdatingPageFromUrl && homeUrlSyncInitialized && $page?.url?.pathname === '/') {
+      updateUrlParams({ pagina: pageNum });
+      lastKnownHomeUrl = { ...lastKnownHomeUrl, pagina: pageNum };
+    }
+    if (scroll && tp > 0 && browser) {
+      document.getElementById('home-louvores-results')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  }
+
+  function scrollHomeResultsTop() {
+    if (browser) {
+      document.getElementById('home-louvores-results')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  }
   
   // Reagir a mudanças na URL para atualizar searchQuery
   // Só atualiza se o valor da URL for diferente do valor atual (normalizado)
-  // E não atualiza se um input estiver focado (usuário está digitando)
+  // E não atualiza se o campo de pesquisa estiver focado (usuário está digitando)
   $: if (browser && !isUpdatingFromUrl && $page && $page.url) {
     const urlParams = parseUrlParams($page.url);
     const urlPesquisa = (urlParams.pesquisa || '').trim();
     const currentPesquisa = (searchQuery || '').trim();
     
-    // Não atualizar se um input estiver focado (usuário está digitando)
-    const inputFocused = browser && document.activeElement && document.activeElement.tagName === 'INPUT';
+    const el = document.activeElement;
+    const searchInputFocused =
+      el instanceof HTMLInputElement && el.id === LOUVOR_SEARCH_INPUT_ID;
     
-    // Só atualiza se o valor realmente for diferente E nenhum input estiver focado
-    if (urlPesquisa !== currentPesquisa && !inputFocused) {
+    if (urlPesquisa !== currentPesquisa && !searchInputFocused) {
       isUpdatingFromUrl = true;
       searchQuery = urlParams.pesquisa || '';
       // Usar setTimeout para garantir que a flag seja resetada após a atualização
@@ -84,10 +157,49 @@
     }
   }
   
+  /**
+   * @param {CustomEvent<{ value: number }>} e
+   */
+  function handleHomeItemsPerPage(e) {
+    bibliotecaItemsPerPage.set(e.detail.value);
+    setPage(1, { scroll: false });
+    scrollHomeResultsTop();
+  }
+
+  /**
+   * @param {CustomEvent<{ page: number; scroll?: boolean }>} e
+   */
+  function handleHomePaginationPage(e) {
+    setPage(e.detail.page, { scroll: e.detail.scroll !== false });
+  }
+
   onMount(async () => {
     await loadLouvores();
     
     if (browser) {
+      if ($page.url.pathname === '/') {
+        const hp = parseUrlParams($page.url);
+        const urlIpp =
+          hp.itensPorPagina !== null && VALID_OPTIONS.includes(hp.itensPorPagina)
+            ? hp.itensPorPagina
+            : 10;
+        const urlPag = hp.pagina !== null && hp.pagina > 0 ? hp.pagina : 1;
+        lastKnownHomeUrl = { itensPorPagina: urlIpp, pagina: urlPag };
+        if (hp.itensPorPagina !== null && VALID_OPTIONS.includes(hp.itensPorPagina)) {
+          isUpdatingItemsPerPageFromUrl = true;
+          bibliotecaItemsPerPage.set(hp.itensPorPagina);
+          setTimeout(() => {
+            isUpdatingItemsPerPageFromUrl = false;
+          }, 0);
+        }
+        if (urlPag > 1) {
+          pageInitializedFromUrl = true;
+        }
+        currentPage = urlPag;
+        pageInput = String(urlPag);
+      }
+      homeUrlSyncInitialized = true;
+
       // Aguardar até que os louvores estejam carregados
       const checkAndInit = () => {
         if ($louvoresLoaded && $louvores.length > 0 && !filtersInitialized) {
@@ -164,13 +276,6 @@
     }
   }
   
-  /**
-   * @param {string} str
-   */
-  function normalizeSearchString(str) {
-    return str.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-zA-Z0-9\s]/g, '');
-  }
-  
   // Normalize classification by removing content in parentheses
   /**
    * @param {string} classification
@@ -204,6 +309,28 @@
     filterLouvores();
   }
   
+  /**
+   * Ao sair do campo de pesquisa, sincroniza a URL imediatamente.
+   * Evita que o bloco reativo URL → searchQuery aplique `pesquisa` vazio da URL
+   * enquanto o debounce de 500ms ainda não gravou o texto digitado.
+   */
+  function flushSearchToUrlOnBlur() {
+    if (!browser || !$page?.url || $page.url.pathname !== '/') return;
+    if (searchUrlUpdateTimer) {
+      clearTimeout(searchUrlUpdateTimer);
+      searchUrlUpdateTimer = null;
+    }
+    const urlParams = parseUrlParams($page.url);
+    const urlPesquisa = (urlParams.pesquisa || '').trim();
+    const currentPesquisa = (searchQuery || '').trim();
+    if (urlPesquisa === currentPesquisa) return;
+    isUpdatingFromUrl = true;
+    updateUrlParams({ pesquisa: searchQuery });
+    setTimeout(() => {
+      isUpdatingFromUrl = false;
+    }, 0);
+  }
+
   function handleClear() {
     // Limpar o debounce timer se existir
     if (debounceTimer) {
@@ -216,15 +343,25 @@
     }
     searchQuery = '';
     filteredResults = [];
+    currentPage = 1;
+    pageInput = '1';
+    pageInitializedFromUrl = false;
     // Atualizar URL imediatamente ao limpar
     if (browser && !isUpdatingFromUrl) {
-      updateUrlParams({ pesquisa: '' });
+      updateUrlParams({ pesquisa: '', pagina: 1 });
+      lastKnownHomeUrl = { ...lastKnownHomeUrl, pagina: 1 };
     }
   }
   
   function filterLouvores() {
+    const qNow = (searchQuery || '').trim();
+    if (lastSearchAppliedInFilter !== null && qNow !== lastSearchAppliedInFilter) {
+      pageInitializedFromUrl = false;
+    }
+    lastSearchAppliedInFilter = qNow;
+
     if (!$louvores || $louvores.length === 0) {
-      filteredResults = [];
+      finalizeFilteredResults([]);
       return;
     }
     
@@ -234,7 +371,7 @@
     
     // If no categories selected, show nothing (not all)
     if (activeCategories.length === 0) {
-      filteredResults = [];
+      finalizeFilteredResults([]);
       return;
     }
     
@@ -253,7 +390,7 @@
     
     // If no classification filters selected, show nothing (not all)
     if (selectedFilters.length === 0) {
-      filteredResults = [];
+      finalizeFilteredResults([]);
       return;
     }
     
@@ -275,20 +412,86 @@
     
     // Apply search filter
     if (!searchQuery.trim()) {
-      filteredResults = [];
+      finalizeFilteredResults([]);
       return;
     }
     
     if (!isNaN(Number(searchQuery))) {
-      filteredResults = classificationFiltered.filter(louvor => Number(louvor.numero) === Number(searchQuery));
+      finalizeFilteredResults(
+        classificationFiltered.filter(louvor => Number(louvor.numero) === Number(searchQuery))
+      );
       return;
     }
     
-    const searchNormalized = normalizeSearchString(searchQuery);
-    filteredResults = classificationFiltered.filter(louvor => {
-      const titulo = normalizeSearchString(louvor.nome);
-      return titulo.includes(searchNormalized);
-    });
+    const prepared = prepareSearchQuery(searchQuery);
+    finalizeFilteredResults(
+      classificationFiltered.filter((louvor) => louvorRowMatchesPreparedSearch(louvor, prepared))
+    );
+  }
+
+  $: itemsPerPageHome = $bibliotecaItemsPerPage;
+  $: totalPagesHome =
+    filteredResults.length === 0 ? 1 : Math.max(1, Math.ceil(filteredResults.length / itemsPerPageHome));
+  $: paginatedResults = filteredResults.slice(
+    (currentPage - 1) * itemsPerPageHome,
+    currentPage * itemsPerPageHome
+  );
+
+  $: if (
+    browser &&
+    homeUrlSyncInitialized &&
+    !isUpdatingFromUrl &&
+    !isUpdatingItemsPerPageFromUrl &&
+    !isUpdatingPageFromUrl &&
+    $page?.url?.pathname === '/' &&
+    $page?.url
+  ) {
+    const urlParams = parseUrlParams($page.url);
+    const urlIpp =
+      urlParams.itensPorPagina !== null && VALID_OPTIONS.includes(urlParams.itensPorPagina)
+        ? urlParams.itensPorPagina
+        : 10;
+    const urlPag = urlParams.pagina !== null && urlParams.pagina > 0 ? urlParams.pagina : 1;
+    if (lastKnownHomeUrl.itensPorPagina !== urlIpp || lastKnownHomeUrl.pagina !== urlPag) {
+      lastKnownHomeUrl = { itensPorPagina: urlIpp, pagina: urlPag };
+      if (
+        urlParams.itensPorPagina !== null &&
+        VALID_OPTIONS.includes(urlParams.itensPorPagina) &&
+        urlIpp !== get(bibliotecaItemsPerPage)
+      ) {
+        isUpdatingItemsPerPageFromUrl = true;
+        bibliotecaItemsPerPage.set(urlIpp);
+        setTimeout(() => {
+          isUpdatingItemsPerPageFromUrl = false;
+        }, 100);
+      }
+      if (urlPag !== currentPage) {
+        isUpdatingPageFromUrl = true;
+        currentPage = urlPag;
+        pageInput = String(urlPag);
+        setTimeout(() => {
+          isUpdatingPageFromUrl = false;
+        }, 100);
+      }
+    }
+  }
+
+  $: if (
+    browser &&
+    homeUrlSyncInitialized &&
+    !isUpdatingItemsPerPageFromUrl &&
+    $page?.url?.pathname === '/' &&
+    $page?.url
+  ) {
+    const urlParams = parseUrlParams($page.url);
+    const urlIpp =
+      urlParams.itensPorPagina !== null && VALID_OPTIONS.includes(urlParams.itensPorPagina)
+        ? urlParams.itensPorPagina
+        : 10;
+    if (urlIpp !== $bibliotecaItemsPerPage) {
+      updateUrlParams({ itensPorPagina: $bibliotecaItemsPerPage });
+      lastKnownHomeUrl = { ...lastKnownHomeUrl, itensPorPagina: $bibliotecaItemsPerPage };
+    }
   }
   
   // Debounce: Aguarda 300ms após o usuário parar de digitar antes de pesquisar
@@ -357,26 +560,91 @@
 
 <div class="max-w-6xl mx-auto">
   <div class="flex flex-col items-center mt-8 space-y-4">
-    <CategoryFilters />
-    
-    <ClassificationFilters availableClassifications={$louvores.map(l => l.classificacao).filter(c => c)} />
+    <div class="w-full max-w-4xl p-4 bg-card-color rounded-lg border-2 filter-collapse-outer">
+      <span class="filter-collapse-tag">Filtros</span>
+      <div class="filter-collapse-select-wrapper">
+        <button
+          type="button"
+          class="filter-collapse-trigger"
+          aria-expanded={filtersExpanded}
+          aria-controls={filtersExpanded ? 'home-filters-panel' : undefined}
+          on:click={() => (filtersExpanded = !filtersExpanded)}
+        >
+          <span class="filter-collapse-title">
+            {filtersExpanded ? 'Toque para ver menos' : 'Toque para ver mais'}
+          </span>
+          <svg
+            class="filter-collapse-chevron-svg"
+            class:expanded={filtersExpanded}
+            xmlns="http://www.w3.org/2000/svg"
+            fill="none"
+            viewBox="0 0 24 24"
+            aria-hidden="true"
+          >
+            <path
+              stroke="var(--gold-color)"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              d="m6 9 6 6 6-6"
+            />
+          </svg>
+        </button>
+      </div>
+
+      {#if filtersExpanded}
+        <div id="home-filters-panel" class="filter-expanded-panel">
+          <CategoryFilters />
+          <ClassificationFilters availableClassifications={$louvores.map(l => l.classificacao).filter(c => c)} />
+        </div>
+      {/if}
+    </div>
     
     <PdfViewerSelector />
     
     <CarouselChips />
     
-    <SearchBar bind:searchQuery on:clear={handleClear} />
+    <SearchBar bind:searchQuery on:clear={handleClear} on:blur={flushSearchToUrlOnBlur} />
   </div>
   
-  <div class="mt-8 flex justify-center">
+  <div id="home-louvores-results" class="mt-8 flex justify-center">
     {#if filteredResults.length > 0}
       <div class="louvores-container w-full max-w-4xl">
         <span class="container-tag">Louvores</span>
+
+        <LouvorPaginationControls
+          variant="top"
+          bind:pageInput
+          currentPage={currentPage}
+          totalPages={totalPagesHome}
+          itemsPerPage={itemsPerPageHome}
+          on:itemsPerPage={handleHomeItemsPerPage}
+          on:gotoPage={handleHomePaginationPage}
+          on:previous={() => currentPage > 1 && setPage(currentPage - 1)}
+          on:next={() => currentPage < totalPagesHome && setPage(currentPage + 1)}
+          on:first={() => setPage(1)}
+          on:last={() => setPage(totalPagesHome)}
+        />
+
         <div class="louvores-list">
-          {#each filteredResults as louvor (getLouvorKey(louvor))}
+          {#each paginatedResults as louvor (getLouvorKey(louvor))}
             <LouvorCard {louvor} />
           {/each}
         </div>
+
+        <LouvorPaginationControls
+          variant="bottom"
+          bind:pageInput
+          currentPage={currentPage}
+          totalPages={totalPagesHome}
+          itemsPerPage={itemsPerPageHome}
+          on:itemsPerPage={handleHomeItemsPerPage}
+          on:gotoPage={handleHomePaginationPage}
+          on:previous={() => currentPage > 1 && setPage(currentPage - 1)}
+          on:next={() => currentPage < totalPagesHome && setPage(currentPage + 1)}
+          on:first={() => setPage(1)}
+          on:last={() => setPage(totalPagesHome)}
+        />
       </div>
     {:else if searchQuery}
       <p class="text-center mt-8 no-results-message">Nenhum resultado encontrado.</p>
@@ -412,11 +680,95 @@
     display: flex;
     flex-direction: column;
     gap: 0.5rem;
+    margin-top: 1.5rem;
+    margin-bottom: 1.5rem;
   }
   
   .no-results-message {
     color: var(--text-light);
     opacity: 0.9;
+  }
+
+  /* Mesmo padrão visual de PdfViewerSelector (tag + área interna estilo select) */
+  .filter-collapse-outer {
+    border-color: var(--gold-color);
+    color: var(--text-dark);
+    position: relative;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .filter-collapse-tag {
+    position: absolute;
+    top: -0.875rem;
+    left: 0.75rem;
+    background-color: var(--card-color);
+    color: var(--text-dark);
+    font-size: 0.75rem;
+    font-weight: 600;
+    padding: 0.25rem 0.5rem;
+    border-radius: 0.25rem;
+    border: 2px solid var(--gold-color);
+    z-index: 10;
+    line-height: 1;
+  }
+
+  .filter-collapse-select-wrapper {
+    position: relative;
+    width: 100%;
+  }
+
+  .filter-collapse-trigger {
+    width: 100%;
+    min-height: 2.5rem;
+    padding: 0.5rem 0.875rem;
+    border-radius: 0.75rem;
+    border: 2px solid var(--gold-color);
+    background-color: #ffffff;
+    color: var(--title-color);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+    font-size: 0.95rem;
+    font-weight: 600;
+    line-height: 1.2;
+    cursor: pointer;
+    transition: box-shadow 0.2s ease, border-color 0.2s ease;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  .filter-collapse-trigger:hover {
+    border-color: var(--title-color);
+  }
+
+  .filter-collapse-trigger:focus-visible {
+    outline: none;
+    border-color: var(--gold-color);
+    box-shadow: 0 0 0 3px rgba(212, 175, 55, 0.3);
+  }
+
+  .filter-collapse-title {
+    text-align: left;
+  }
+
+  .filter-collapse-chevron-svg {
+    flex-shrink: 0;
+    width: 1rem;
+    height: 1rem;
+    transition: transform 0.2s ease;
+  }
+
+  .filter-collapse-chevron-svg.expanded {
+    transform: rotate(180deg);
+  }
+
+  .filter-expanded-panel {
+    margin-top: 1rem;
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
   }
 </style>
 

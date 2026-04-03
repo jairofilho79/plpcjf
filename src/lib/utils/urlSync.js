@@ -3,7 +3,10 @@ import { page } from '$app/stores';
 import { get } from 'svelte/store';
 
 /**
- * Serializa um array em string para URL param (vírgula separada, cada item encoded)
+ * Serializa um array em um único valor de query (vírgulas entre itens).
+ * Não use encodeURIComponent por item: URLSearchParams.set já codifica o valor inteiro
+ * uma vez; codificar antes geraria %2520 etc.
+ * Itens não devem conter vírgula literal (não há escape por item neste formato).
  * @param {string[]} array
  * @returns {string}
  */
@@ -11,7 +14,16 @@ export function serializeArrayParam(array) {
   if (!Array.isArray(array) || array.length === 0) {
     return '';
   }
-  return array.map(item => encodeURIComponent(item)).join(',');
+  return array.map((item) => String(item)).join(',');
+}
+
+function safeDecodeURIComponent(value) {
+  if (value == null || value === '') return '';
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
 }
 
 /**
@@ -23,7 +35,7 @@ export function deserializeArrayParam(param) {
   if (!param || typeof param !== 'string') {
     return [];
   }
-  return param.split(',').map(item => decodeURIComponent(item)).filter(Boolean);
+  return param.split(',').map((item) => safeDecodeURIComponent(item.trim())).filter(Boolean);
 }
 
 /**
@@ -46,9 +58,9 @@ export function parseUrlParams(url) {
     materiais: deserializeArrayParam(params.get('materiais') || ''),
     arranjo: deserializeArrayParam(params.get('arranjo') || ''),
     arranjoEspecial: deserializeArrayParam(params.get('arranjoEspecial') || ''),
-    comoAbrir: comoAbrirParam ? decodeURIComponent(comoAbrirParam) : '',
-    pesquisa: pesquisaParam ? decodeURIComponent(pesquisaParam) : '',
-    ordenar: ordenarParam ? decodeURIComponent(ordenarParam) : '',
+    comoAbrir: safeDecodeURIComponent(comoAbrirParam || ''),
+    pesquisa: safeDecodeURIComponent(pesquisaParam || ''),
+    ordenar: safeDecodeURIComponent(ordenarParam || ''),
     itensPorPagina: itensPorPaginaParam ? parseInt(itensPorPaginaParam, 10) : null,
     pagina: paginaParam ? parseInt(paginaParam, 10) : null
   };
@@ -132,7 +144,8 @@ export function updateUrlParams(newParams, options = {}) {
     if (comoAbrir === defaultComoAbrir || !comoAbrir) {
       currentParams.delete('comoAbrir');
     } else {
-      currentParams.set('comoAbrir', encodeURIComponent(comoAbrir));
+      // URLSearchParams.set já aplica percent-encoding
+      currentParams.set('comoAbrir', comoAbrir);
     }
   }
   
@@ -141,7 +154,7 @@ export function updateUrlParams(newParams, options = {}) {
     if (!pesquisa) {
       currentParams.delete('pesquisa');
     } else {
-      currentParams.set('pesquisa', encodeURIComponent(pesquisa));
+      currentParams.set('pesquisa', pesquisa);
     }
   }
   
@@ -151,7 +164,7 @@ export function updateUrlParams(newParams, options = {}) {
     if (ordenar === 'numero' || !ordenar) {
       currentParams.delete('ordenar');
     } else {
-      currentParams.set('ordenar', encodeURIComponent(ordenar));
+      currentParams.set('ordenar', ordenar);
     }
   }
   

@@ -149,6 +149,32 @@ function createSavedPlaylistsStore() {
       });
     },
     /**
+     * Remove one PDF id from a saved playlist (order preserved).
+     * @param {string} playlistId
+     * @param {string} pdfId
+     */
+    removePdfFromPlaylist: (playlistId, pdfId) => {
+      update(playlists => {
+        const updated = playlists.map((p) => {
+          if (p.id !== playlistId) return p;
+          return {
+            ...p,
+            pdfIds: p.pdfIds.filter((id) => id !== pdfId)
+          };
+        });
+
+        if (browser) {
+          try {
+            localStorage.setItem(SAVED_PLAYLISTS_STORAGE_KEY, JSON.stringify(updated));
+          } catch (e) {
+            console.warn('Não foi possível atualizar a playlist no localStorage:', e);
+          }
+        }
+
+        return updated;
+      });
+    },
+    /**
      * Find a playlist with the same pdfIds in the same order
      * @param {string[]} pdfIds - Array of PDF IDs in order
      * @returns {{id: string, nome: string, pdfIds: string[], createdAt: string, favorita: boolean} | null}

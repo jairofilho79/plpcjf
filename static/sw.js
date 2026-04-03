@@ -51,6 +51,7 @@ if (IS_DEV) {
 // App shell resources to cache on install
 // Note: Only cache the root '/' HTML shell, not individual SPA routes like '/leitor'
 // SvelteKit's client-side router will handle routing to /leitor once the app shell loads
+// louvores-manifest.json: listed for cache-first at runtime, but excluded from install addAll (~1.3MB).
 const APP_SHELL = [
   '/',
   '/manifest.json',
@@ -60,6 +61,7 @@ const APP_SHELL = [
   '/icon-192.png',
   '/icon-512.png'
 ];
+const APP_SHELL_INSTALL = APP_SHELL.filter((path) => path !== '/louvores-manifest.json');
 
 // PDF.js modules to cache for faster loading
 const PDFJS_MODULES = [
@@ -85,7 +87,7 @@ self.addEventListener('install', (event) => {
       caches.open(APP_CACHE)
         .then(cache => {
           console.log('[SW] Caching app shell');
-          return cache.addAll(APP_SHELL.map(url => new Request(url, { cache: 'no-cache' })));
+          return cache.addAll(APP_SHELL_INSTALL.map(url => new Request(url, { cache: 'no-cache' })));
         }),
       // Cache PDF.js modules (cache-first strategy for faster loading)
       caches.open(PDFJS_CACHE)
@@ -394,6 +396,24 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
+  // louvores-version.json: always prefer network when online; do not persist to APP_CACHE
+  if (url.pathname === '/louvores-version.json') {
+    event.respondWith(
+      (async () => {
+        try {
+          const res = await fetch(event.request, { cache: 'no-store' });
+          if (res && res.ok) return res;
+        } catch (e) {
+          console.warn('[SW] louvores-version network failed:', e);
+        }
+        const cached = await caches.match(event.request);
+        if (cached) return cached;
+        return fetch(event.request, { cache: 'no-store' });
+      })()
+    );
+    return;
+  }
+
   // Handle app shell and manifest requests (non-navigation)
   if (APP_SHELL.some(path => url.pathname === path || url.pathname.startsWith(path))) {
     event.respondWith(
@@ -565,6 +585,10 @@ self.addEventListener('message', (event) => {
 
     case 'CLEAR_PDF_CACHE_ENTRY':
       handleClearPdfCacheEntry(event, data);
+      break;
+
+    case 'CLEAR_LOUVORES_MANIFEST_CACHE':
+      handleClearLouvoresManifestCache(event);
       break;
     
     case 'SKIP_WAITING':
@@ -787,6 +811,46 @@ async function handleClearPdfCacheEntry(event, data) {
       event.ports[0].postMessage({
         type: 'ERROR',
         error: err.message || 'Failed to clear PDF cache entry'
+      });
+    }
+  }
+}
+
+/** Remove cached louvores-manifest.json so the next fetch can miss and go to the network. */
+async function handleClearLouvoresManifestCache(event) {
+  try {
+    const cache = await caches.open(APP_CACHE);
+    const requests = await cache.keys();
+    let removedCount = 0;
+
+    await Promise.all(
+      requests.map(async (req) => {
+        try {
+          const u = new URL(req.url);
+          if (u.pathname === '/louvores-manifest.json') {
+            const deleted = await cache.delete(req);
+            if (deleted) removedCount++;
+          }
+        } catch {
+          // ignore
+        }
+      })
+    );
+
+    console.log('[SW] Cleared louvores-manifest from app cache, removed', removedCount, 'entries');
+
+    if (event.ports && event.ports[0]) {
+      event.ports[0].postMessage({
+        type: 'LOUVORES_MANIFEST_CACHE_CLEARED',
+        removedCount
+      });
+    }
+  } catch (err) {
+    console.error('[SW] Error clearing louvores manifest cache:', err);
+    if (event.ports && event.ports[0]) {
+      event.ports[0].postMessage({
+        type: 'ERROR',
+        error: err.message || 'Failed to clear louvores manifest cache'
       });
     }
   }

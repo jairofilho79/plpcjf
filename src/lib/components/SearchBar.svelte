@@ -1,10 +1,17 @@
 <script>
-  import { createEventDispatcher } from 'svelte';
+  import { createEventDispatcher, onMount, tick } from 'svelte';
   
   export let searchQuery = '';
   
   const dispatch = createEventDispatcher();
   let searchInput;
+  
+  onMount(async () => {
+    await tick();
+    // Comportamento por defeito do browser: faz scroll até ao input se não estiver visível
+    // (relevante em mobile / viewport pequeno). preventScroll:true evitava isso e podia esconder o cursor.
+    searchInput?.focus();
+  });
   
   function handleKeydown(event) {
     if (event.key === 'Enter') {
@@ -47,10 +54,12 @@
     {/if}
     
     <input
+      id="louvor-search-input"
       type="text"
       bind:this={searchInput}
       bind:value={searchQuery}
       on:keydown={handleKeydown}
+      on:blur={() => dispatch('blur')}
       placeholder="Pesquisar louvor..."
       class="search-input"
       class:has-text={searchQuery.trim()}
