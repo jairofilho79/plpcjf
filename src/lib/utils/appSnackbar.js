@@ -1,11 +1,18 @@
-import { toast } from 'svelte-sonner';
-import AppSnackbarToast from '$lib/components/AppSnackbarToast.svelte';
+import { writable } from 'svelte/store';
 
 const DURATIONS = {
   info: 10000,
   success: 3000,
   warning: 5000,
   error: 5000
+};
+
+const MAX_VISIBLE_SNACKBARS = 3;
+const snackbarsStore = writable([]);
+const timers = new Map();
+
+export const appSnackbars = {
+  subscribe: snackbarsStore.subscribe
 };
 
 function makeToastId(prefix = 'snackbar') {
@@ -25,18 +32,33 @@ function makeToastId(prefix = 'snackbar') {
 export function showSnackbar(variant, message, options = {}) {
   const durationMs = options.durationMs ?? DURATIONS[variant] ?? 4000;
   const toastId = options.id ?? makeToastId(variant);
-
-  return toast.custom(AppSnackbarToast, {
+  const createdAt = Date.now();
+  const snackbar = {
     id: toastId,
-    duration: durationMs,
-    dismissible: true,
-    componentProps: {
-      toastId,
-      variant,
-      message,
-      durationMs
-    }
+    variant,
+    message,
+    durationMs,
+    createdAt
+  };
+
+  snackbarsStore.update((items) => {
+    const withoutSameId = items.filter((item) => item.id !== toastId);
+    const nextItems = [...withoutSameId, snackbar];
+    return nextItems.slice(-MAX_VISIBLE_SNACKBARS);
   });
+
+  if (timers.has(toastId)) {
+    clearTimeout(timers.get(toastId));
+  }
+
+  timers.set(
+    toastId,
+    setTimeout(() => {
+      dismissSnackbar(toastId);
+    }, durationMs)
+  );
+
+  return toastId;
 }
 
 export function showInfoSnackbar(message, options) {
@@ -56,5 +78,11 @@ export function showErrorSnackbar(message, options) {
 }
 
 export function dismissSnackbar(id) {
-  toast.dismiss(id);
+  const timer = timers.get(id);
+  if (timer) {
+    clearTimeout(timer);
+    timers.delete(id);
+  }
+
+  snackbarsStore.update((items) => items.filter((item) => item.id !== id));
 }

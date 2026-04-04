@@ -799,7 +799,7 @@
 
 <div class="max-w-6xl mx-auto px-4">
   <div
-    class="mt-6 rounded-lg border border-amber-500/40 bg-amber-950/25 px-4 py-3 text-sm text-amber-100/95 shadow-sm sm:px-5"
+    class="mx-auto mt-6 w-full max-w-4xl rounded-lg border border-amber-500/40 bg-amber-950/25 px-4 py-3 text-sm text-amber-100/95 shadow-sm sm:px-5"
     role="region"
     aria-label="Atualização do banco de louvores"
   >

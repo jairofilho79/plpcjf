@@ -1,17 +1,18 @@
 <script>
-  import { toast } from 'svelte-sonner';
+  import { createEventDispatcher } from 'svelte';
   import { AlertCircle, AlertTriangle, CheckCircle2, Info, X } from 'lucide-svelte';
 
   export let toastId;
   export let variant = 'info';
   export let message = '';
   export let durationMs = 4000;
+  const dispatch = createEventDispatcher();
 
   const RADIUS = 14;
   const RING_CIRCUMFERENCE = 2 * Math.PI * RADIUS;
 
   function dismiss() {
-    toast.dismiss(toastId);
+    dispatch('dismiss', { id: toastId });
   }
 
   $: IconComponent =

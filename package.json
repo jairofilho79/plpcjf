@@ -20,8 +20,7 @@
     "@sveltejs/kit": "^2.0.0",
     "fflate": "^0.8.2",
     "lucide-svelte": "^0.436.0",
-    "pdfjs-dist": "^4.8.69",
-    "svelte-sonner": "0.3.28"
+    "pdfjs-dist": "^4.8.69"
   },
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^3.0.0",
