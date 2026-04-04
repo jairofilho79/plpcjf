@@ -1054,14 +1054,22 @@
   :global(body), :global(html) {
     margin: 0;
     padding: 0;
-    width: 100%;
-    height: 100%;
     overflow: hidden;
     overscroll-behavior: none;
   }
 
-  .container {
+  .leitor-viewport {
     position: fixed;
+    inset: 0;
+    width: 100%;
+    height: 100vh;
+    height: 100dvh;
+    overflow: hidden;
+    background: #2a2a2a;
+  }
+
+  .container {
+    position: absolute;
     /* top is set dynamically via JS to match toolbar height including border */
     top: 0;
     right: 0;
@@ -1107,7 +1115,7 @@
   }
   /* Removed unused nested selector to satisfy build warnings */
   .toolbar {
-    position: fixed;
+    position: absolute;
     top: 0;
     left: 0;
     right: 0;
@@ -1398,7 +1406,7 @@
   }
   
   .pdf-loading-overlay {
-    position: fixed;
+    position: absolute;
     top: 0;
     left: 0;
     right: 0;
@@ -1427,7 +1435,7 @@
   }
   
   .pdf-error-banner {
-    position: fixed;
+    position: absolute;
     top: 60px;
     left: 50%;
     transform: translateX(-50%);
@@ -1467,7 +1475,7 @@
   }
   
   .fab-exit-fullscreen {
-    position: fixed;
+    position: absolute;
     top: calc(12px + env(safe-area-inset-top));
     right: calc(12px + env(safe-area-inset-right));
     width: 44px;
@@ -1566,6 +1574,7 @@
   }
 </style>
 
+<div class="leitor-viewport">
 <div class="toolbar" bind:this={toolbarEl} class:hidden={!isToolbarVisible}>
   <GestureButton
     on:click={goToHome}
@@ -1758,4 +1767,5 @@
   <div bind:this={viewerEl} class="viewer pdfViewer"></div>
   <!-- pdfjs-dist css hooks on .pdfViewer and .viewer -->
   
+</div>
 </div>
