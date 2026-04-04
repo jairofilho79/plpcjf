@@ -29,11 +29,25 @@
    * @type {HTMLElement | null}
    */
   let viewFavoriteButtonElement = null;
-  let viewingPlaylistId = null;
   let viewLeitorError = null;
   let openingLeitor = false;
 
   $: allPlaylists = $savedPlaylists;
+  $: viewIdFromUrl = $page.url.searchParams.get('viewId');
+  /** Id da playlist em modo ver lista: só válido se existir em allPlaylists e viewId estiver na URL */
+  $: viewingPlaylistId =
+    viewIdFromUrl && allPlaylists.some((p) => p.id === viewIdFromUrl) ? viewIdFromUrl : null;
+
+  /** Remove viewId inválido da barra de endereços */
+  $: if (
+    browser &&
+    viewIdFromUrl &&
+    !allPlaylists.some((p) => p.id === viewIdFromUrl)
+  ) {
+    const u = new URL($page.url.href);
+    u.searchParams.delete('viewId');
+    goto(`${u.pathname}${u.search}`, { replaceState: true, noScroll: true });
+  }
   $: filteredByFavorite = showOnlyFavorites 
     ? allPlaylists.filter((p) => p.favorita === true)
     : allPlaylists;
@@ -305,12 +319,19 @@
 
   function handleView(playlist, event) {
     event.stopPropagation();
-    viewingPlaylistId = playlist.id;
+    if (!browser) return;
+    const u = new URL($page.url.href);
+    u.searchParams.set('viewId', playlist.id);
+    goto(`${u.pathname}${u.search}`, { replaceState: true, noScroll: true });
   }
 
   function closeView() {
-    viewingPlaylistId = null;
     viewLeitorError = null;
+    if (!browser) return;
+    if (!$page.url.searchParams.has('viewId')) return;
+    const u = new URL($page.url.href);
+    u.searchParams.delete('viewId');
+    goto(`${u.pathname}${u.search}`, { replaceState: true, noScroll: true });
   }
 
   onMount(async () => {
@@ -321,22 +342,16 @@
     
     await tick();
 
-    // Leitor (Lista → Ver Lista): viewId tem prioridade sobre editId
-    if (browser && $page.url.searchParams.has('viewId')) {
-      const viewId = $page.url.searchParams.get('viewId');
-      if (viewId) {
-        await tick();
-        const playlist = $savedPlaylists.find((p) => p.id === viewId);
-        if (playlist) {
-          viewingPlaylistId = viewId;
-        }
-        goto('/listas', { replaceState: true, noScroll: true });
-        return;
-      }
-    }
-
     // Verificar se há editId na URL para colocar a playlist em modo de edição
     if (browser && $page.url.searchParams.has('editId')) {
+      const vid = $page.url.searchParams.get('viewId');
+      if (vid && $savedPlaylists.some((p) => p.id === vid)) {
+        const u = new URL($page.url.href);
+        u.searchParams.delete('editId');
+        goto(`${u.pathname}${u.search}`, { replaceState: true, noScroll: true });
+        return;
+      }
+
       const editId = $page.url.searchParams.get('editId');
       if (editId) {
         await tick();

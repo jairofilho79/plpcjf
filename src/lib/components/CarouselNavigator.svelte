@@ -71,7 +71,7 @@
 
     const existing = savedPlaylists.findPlaylistByPdfIds(pdfIds);
     const id = existing ? existing.id : savedPlaylists.savePlaylist(pdfIds);
-    goto(`/listas?viewId=${encodeURIComponent(id)}`);
+    goto(`/listas?viewId=${encodeURIComponent(id)}`, { replaceState: true, noScroll: true });
   }
 </script>
 
