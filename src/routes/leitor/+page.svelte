@@ -607,6 +607,8 @@
     });
     eventBus.on('pagechanging', (e: any) => {
       currentPage = e?.pageNumber ?? currentPage;
+      resetFitModeScrollPosition();
+      requestAnimationFrame(() => resetFitModeScrollPosition());
       // Adjust zoom when page changes if in page-width mode
       // Don't force recalculate - reuse cached scale
       if (preferredFitMode === 'page-width') {
@@ -705,6 +707,12 @@
     if (!viewer) return;
     const prev = Math.max(((viewer as any).currentPageNumber ?? 1) - 1, 1);
     (viewer as any).currentPageNumber = prev;
+  }
+  function resetFitModeScrollPosition() {
+    if (!containerEl || preferredFitMode !== 'page-fit') return;
+    // Em page-fit, evita deslocamento residual após swipe/troca de página.
+    containerEl.scrollLeft = 0;
+    containerEl.scrollTop = 0;
   }
   function goToFirstPage() {
     if (!viewer) return;
@@ -853,6 +861,20 @@
     
     // Single touch: check if it moved significantly
     if (touches.length === 1 && !isPinching) {
+      // Impede pan nativo da viewport durante swipe horizontal entre páginas.
+      const swipeDx = touches[0].clientX - swipePageStartX;
+      const swipeDy = touches[0].clientY - swipePageStartY;
+      const isMostlyHorizontalSwipe = Math.abs(swipeDx) > Math.abs(swipeDy) * 1.1;
+      if (ENABLE_SWIPE_PAGE_NAV && swipePageGestureValid && isMostlyHorizontalSwipe) {
+        e.preventDefault();
+      }
+
+      // Em page-fit sem zoom relevante, evita micro-scroll vertical residual do browser.
+      const currentScale = (viewer as any).currentScale ?? 1;
+      if (preferredFitMode === 'page-fit' && currentScale <= 1.02) {
+        e.preventDefault();
+      }
+
       const dx = Math.abs(touches[0].clientX - touchStartX);
       const dy = Math.abs(touches[0].clientY - touchStartY);
       
