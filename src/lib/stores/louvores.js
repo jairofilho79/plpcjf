@@ -2,6 +2,7 @@ import { writable, get } from 'svelte/store';
 import { browser } from '$app/environment';
 import { clearLouvoresManifestFromSwCache } from '$lib/utils/swRegistration';
 import { tokensContent, normalizeForSearch } from '$lib/utils/louvorSearch';
+import { dismissSnackbar, showErrorSnackbar, showInfoSnackbar, showSuccessSnackbar } from '$lib/utils/appSnackbar.js';
 
 /**
  * Enrich manifest rows with precomputed title tokens and replace store contents.
@@ -98,12 +99,24 @@ async function afterManifestLoaded(data) {
 function scheduleBackgroundRefresh(remoteVersion, scheduleGen) {
   queueMicrotask(async () => {
     if (scheduleGen !== louvoresLoadGeneration) return;
+    const refreshInfoId = `louvores-refresh-${scheduleGen}`;
+    showInfoSnackbar(
+      'Atualizando catálogo de louvores. Aguarde até 10 segundos e não recarregue a aplicação.',
+      { id: refreshInfoId, durationMs: 10000 }
+    );
+
     try {
       // Ordem obrigatória: limpar APP_CACHE do SW, depois rede com no-store (evita HTTP cache da rota + garante manifest alinhado à nova versão).
       await clearLouvoresManifestFromSwCache();
-      if (scheduleGen !== louvoresLoadGeneration) return;
+      if (scheduleGen !== louvoresLoadGeneration) {
+        dismissSnackbar(refreshInfoId);
+        return;
+      }
       const data = await fetchAndParseLouvoresManifest({ cache: 'no-store' });
-      if (scheduleGen !== louvoresLoadGeneration) return;
+      if (scheduleGen !== louvoresLoadGeneration) {
+        dismissSnackbar(refreshInfoId);
+        return;
+      }
       const enriched = applyLouvoresManifest(data);
       localStorage.setItem(LOUVORES_MANIFEST_VERSION_KEY, String(remoteVersion));
       await afterManifestLoaded(enriched);
@@ -113,8 +126,15 @@ function scheduleBackgroundRefresh(remoteVersion, scheduleGen) {
       } catch (e) {
         console.warn('[Louvores] checkForNewPDFs after refresh:', e);
       }
+      // Se terminar antes de 10s, fechamos a info imediatamente e mostramos sucesso.
+      dismissSnackbar(refreshInfoId);
+      showSuccessSnackbar('Catálogo atualizado com sucesso.', { durationMs: 3000 });
     } catch (e) {
       console.error('[Louvores] background manifest refresh failed', e);
+      dismissSnackbar(refreshInfoId);
+      showErrorSnackbar('Não foi possível atualizar o catálogo agora. Tente novamente em instantes.', {
+        durationMs: 5000
+      });
     }
   });
 }

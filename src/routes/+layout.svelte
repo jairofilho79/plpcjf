@@ -6,6 +6,7 @@
   import { goto } from '$app/navigation';
   import { CloudOff } from 'lucide-svelte';
   import OfflineIndicator from '$lib/components/OfflineIndicator.svelte';
+  import AppSnackbarHost from '$lib/components/AppSnackbarHost.svelte';
   import { registerServiceWorker, setupServiceWorkerMessageListener } from '$lib/utils/swRegistration';
   import { setupCacheSync } from '$lib/utils/cacheSync';
   import { 
@@ -130,6 +131,8 @@
   // Verificar se alguma página está ativa (para aplicar estado inativo nos outros)
   $: hasActivePage = isSobreActive || isBibliotecaActive || isHomeActive || isOfflineActive || isListasActive;
 </script>
+
+<AppSnackbarHost />
 
 <!-- Toolbar fixa no topo (oculta no /leitor) -->
 {#if !$page.url.pathname.startsWith('/leitor')}
