@@ -607,6 +607,8 @@
     });
     eventBus.on('pagechanging', (e: any) => {
       currentPage = e?.pageNumber ?? currentPage;
+      resetFitModeScrollPosition();
+      requestAnimationFrame(() => resetFitModeScrollPosition());
       // Adjust zoom when page changes if in page-width mode
       // Don't force recalculate - reuse cached scale
       if (preferredFitMode === 'page-width') {
@@ -705,6 +707,12 @@
     if (!viewer) return;
     const prev = Math.max(((viewer as any).currentPageNumber ?? 1) - 1, 1);
     (viewer as any).currentPageNumber = prev;
+  }
+  function resetFitModeScrollPosition() {
+    if (!containerEl || preferredFitMode !== 'page-fit') return;
+    // Em page-fit, evita deslocamento residual após swipe/troca de página.
+    containerEl.scrollLeft = 0;
+    containerEl.scrollTop = 0;
   }
   function goToFirstPage() {
     if (!viewer) return;
@@ -853,6 +861,20 @@
     
     // Single touch: check if it moved significantly
     if (touches.length === 1 && !isPinching) {
+      // Impede pan nativo da viewport durante swipe horizontal entre páginas.
+      const swipeDx = touches[0].clientX - swipePageStartX;
+      const swipeDy = touches[0].clientY - swipePageStartY;
+      const isMostlyHorizontalSwipe = Math.abs(swipeDx) > Math.abs(swipeDy) * 1.1;
+      if (ENABLE_SWIPE_PAGE_NAV && swipePageGestureValid && isMostlyHorizontalSwipe) {
+        e.preventDefault();
+      }
+
+      // Em page-fit sem zoom relevante, evita micro-scroll vertical residual do browser.
+      const currentScale = (viewer as any).currentScale ?? 1;
+      if (preferredFitMode === 'page-fit' && currentScale <= 1.02) {
+        e.preventDefault();
+      }
+
       const dx = Math.abs(touches[0].clientX - touchStartX);
       const dy = Math.abs(touches[0].clientY - touchStartY);
       
@@ -1054,11 +1076,22 @@
   :global(body), :global(html) {
     margin: 0;
     padding: 0;
-    overflow-x: hidden;
+    overflow: hidden;
+    overscroll-behavior: none;
+  }
+
+  .leitor-viewport {
+    position: fixed;
+    inset: 0;
+    width: 100%;
+    height: 100vh;
+    height: 100dvh;
+    overflow: hidden;
+    background: #2a2a2a;
   }
 
   .container {
-    position: fixed;
+    position: absolute;
     /* top is set dynamically via JS to match toolbar height including border */
     top: 0;
     right: 0;
@@ -1067,10 +1100,14 @@
     overflow-y: auto;
     overflow-x: auto;
     background: #2a2a2a;
-    width: 100vw;
-    max-width: 100vw;
+    /* 100% do pai/viewport — evita overflow horizontal por 100vw em mobile */
+    width: 100%;
+    max-width: 100%;
+    box-sizing: border-box;
     z-index: 1; /* ensure it overlays page background */
     touch-action: pan-x pan-y; /* Allow scrolling but prevent default pinch */
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
   }
 
   /* Viewer base width equals viewport; zooms can overflow horizontally for scroll */
@@ -1100,7 +1137,7 @@
   }
   /* Removed unused nested selector to satisfy build warnings */
   .toolbar {
-    position: fixed;
+    position: absolute;
     top: 0;
     left: 0;
     right: 0;
@@ -1117,7 +1154,7 @@
     align-items: center;
     box-sizing: border-box;
     width: 100%;
-    max-width: 100vw;
+    max-width: 100%;
     overflow: hidden;
     transition: transform 0.3s ease, opacity 0.3s ease;
   }
@@ -1391,7 +1428,7 @@
   }
   
   .pdf-loading-overlay {
-    position: fixed;
+    position: absolute;
     top: 0;
     left: 0;
     right: 0;
@@ -1420,7 +1457,7 @@
   }
   
   .pdf-error-banner {
-    position: fixed;
+    position: absolute;
     top: 60px;
     left: 50%;
     transform: translateX(-50%);
@@ -1460,7 +1497,7 @@
   }
   
   .fab-exit-fullscreen {
-    position: fixed;
+    position: absolute;
     top: calc(12px + env(safe-area-inset-top));
     right: calc(12px + env(safe-area-inset-right));
     width: 44px;
@@ -1559,6 +1596,7 @@
   }
 </style>
 
+<div class="leitor-viewport">
 <div class="toolbar" bind:this={toolbarEl} class:hidden={!isToolbarVisible}>
   <GestureButton
     on:click={goToHome}
@@ -1751,4 +1789,5 @@
   <div bind:this={viewerEl} class="viewer pdfViewer"></div>
   <!-- pdfjs-dist css hooks on .pdfViewer and .viewer -->
   
+</div>
 </div>

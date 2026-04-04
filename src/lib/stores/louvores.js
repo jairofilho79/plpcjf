@@ -2,6 +2,7 @@ import { writable, get } from 'svelte/store';
 import { browser } from '$app/environment';
 import { clearLouvoresManifestFromSwCache } from '$lib/utils/swRegistration';
 import { tokensContent, normalizeForSearch } from '$lib/utils/louvorSearch';
+import { dismissSnackbar, showErrorSnackbar, showInfoSnackbar, showSuccessSnackbar } from '$lib/utils/appSnackbar.js';
 
 /**
  * Enrich manifest rows with precomputed title tokens and replace store contents.
@@ -92,31 +93,77 @@ async function afterManifestLoaded(data) {
 }
 
 /**
+ * Refresh do banco de louvores na rede (SW → no-store → stores → versão opcional → índice → checkForNewPDFs).
+ * Usado pelo refresh em background e por {@link forceRefreshLouvoresFromNetwork}.
+ *
+ * @param {number | null} remoteVersion
+ * @param {number} refreshGen
+ */
+async function runLouvoresManifestNetworkRefresh(remoteVersion, refreshGen) {
+  if (refreshGen !== louvoresLoadGeneration) return;
+  const refreshInfoId = `louvores-refresh-${refreshGen}`;
+  showInfoSnackbar(
+    'Atualizando o banco de louvores. Aguarde até 10 segundos e não recarregue a aplicação.',
+    { id: refreshInfoId, durationMs: 10000 }
+  );
+
+  try {
+    // Ordem obrigatória: limpar APP_CACHE do SW, depois rede com no-store (evita HTTP cache da rota + garante manifest alinhado à nova versão).
+    await clearLouvoresManifestFromSwCache();
+    if (refreshGen !== louvoresLoadGeneration) {
+      dismissSnackbar(refreshInfoId);
+      return;
+    }
+    const data = await fetchAndParseLouvoresManifest({ cache: 'no-store' });
+    if (refreshGen !== louvoresLoadGeneration) {
+      dismissSnackbar(refreshInfoId);
+      return;
+    }
+    const enriched = applyLouvoresManifest(data);
+    if (typeof remoteVersion === 'number' && Number.isFinite(remoteVersion)) {
+      localStorage.setItem(LOUVORES_MANIFEST_VERSION_KEY, String(remoteVersion));
+    }
+    await afterManifestLoaded(enriched);
+    try {
+      const { offline } = await import('$lib/stores/offline.js');
+      await offline.checkForNewPDFs();
+    } catch (e) {
+      console.warn('[Louvores] checkForNewPDFs after refresh:', e);
+    }
+    dismissSnackbar(refreshInfoId);
+    showSuccessSnackbar('Banco de louvores atualizado com sucesso.', { durationMs: 3000 });
+  } catch (e) {
+    console.error('[Louvores] manifest network refresh failed', e);
+    dismissSnackbar(refreshInfoId);
+    showErrorSnackbar('Não foi possível atualizar o banco de louvores agora. Tente novamente em instantes.', {
+      durationMs: 5000
+    });
+  }
+}
+
+/**
  * @param {number} remoteVersion
  * @param {number} scheduleGen
  */
 function scheduleBackgroundRefresh(remoteVersion, scheduleGen) {
-  queueMicrotask(async () => {
-    if (scheduleGen !== louvoresLoadGeneration) return;
-    try {
-      // Ordem obrigatória: limpar APP_CACHE do SW, depois rede com no-store (evita HTTP cache da rota + garante manifest alinhado à nova versão).
-      await clearLouvoresManifestFromSwCache();
-      if (scheduleGen !== louvoresLoadGeneration) return;
-      const data = await fetchAndParseLouvoresManifest({ cache: 'no-store' });
-      if (scheduleGen !== louvoresLoadGeneration) return;
-      const enriched = applyLouvoresManifest(data);
-      localStorage.setItem(LOUVORES_MANIFEST_VERSION_KEY, String(remoteVersion));
-      await afterManifestLoaded(enriched);
-      try {
-        const { offline } = await import('$lib/stores/offline.js');
-        await offline.checkForNewPDFs();
-      } catch (e) {
-        console.warn('[Louvores] checkForNewPDFs after refresh:', e);
-      }
-    } catch (e) {
-      console.error('[Louvores] background manifest refresh failed', e);
-    }
+  queueMicrotask(() => {
+    void runLouvoresManifestNetworkRefresh(remoteVersion, scheduleGen);
   });
+}
+
+/**
+ * Atualização manual do banco de louvores na rede (mesmo pipeline do refresh em background).
+ * Só executa com conexão; fora disso mostra snackbar e retorna.
+ */
+export async function forceRefreshLouvoresFromNetwork() {
+  if (!browser) return;
+  if (!navigator.onLine) {
+    showErrorSnackbar('Conecte-se à internet para atualizar o banco de louvores.', { durationMs: 5000 });
+    return;
+  }
+  const gen = ++louvoresLoadGeneration;
+  const remoteVersion = await fetchRemoteVersion();
+  await runLouvoresManifestNetworkRefresh(remoteVersion, gen);
 }
 
 export async function loadLouvores() {
