@@ -158,4 +158,47 @@ describe('louvores versioning refresh', () => {
     expect(showErrorSnackbarMock).not.toHaveBeenCalled();
     expect(dismissSnackbarMock).toHaveBeenCalledTimes(1);
   });
+
+  it('forceRefreshLouvoresFromNetwork runs same pipeline when online', async () => {
+    const freshManifest = [{ id: 'forced', nome: 'Forcado', pdfId: 'f1' }];
+
+    global.fetch = vi.fn(async (url, init = {}) => {
+      if (url === '/louvores-version.json') {
+        return jsonResponse({ version: 9 });
+      }
+      if (url === '/louvores-manifest.json') {
+        expect(init?.cache).toBe('no-store');
+        return jsonResponse(freshManifest);
+      }
+      throw new Error(`Unexpected fetch URL: ${url}`);
+    });
+
+    const { forceRefreshLouvoresFromNetwork, louvores, LOUVORES_MANIFEST_VERSION_KEY } = await import('./louvores.js');
+    localStorage.setItem(LOUVORES_MANIFEST_VERSION_KEY, '8');
+
+    await forceRefreshLouvoresFromNetwork();
+
+    expect(clearLouvoresManifestFromSwCacheMock).toHaveBeenCalledTimes(1);
+    expect(get(louvores).map((item) => item.id)).toEqual(['forced']);
+    expect(localStorage.getItem(LOUVORES_MANIFEST_VERSION_KEY)).toBe('9');
+    expect(checkForNewPDFsMock).toHaveBeenCalledTimes(1);
+    expect(showInfoSnackbarMock).toHaveBeenCalledTimes(1);
+    expect(showSuccessSnackbarMock).toHaveBeenCalledTimes(1);
+    expect(showErrorSnackbarMock).not.toHaveBeenCalled();
+    expect(dismissSnackbarMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('forceRefreshLouvoresFromNetwork shows error and skips pipeline when offline', async () => {
+    vi.stubGlobal('navigator', { onLine: false });
+    global.fetch = vi.fn();
+
+    const { forceRefreshLouvoresFromNetwork } = await import('./louvores.js');
+
+    await forceRefreshLouvoresFromNetwork();
+
+    expect(global.fetch).not.toHaveBeenCalled();
+    expect(clearLouvoresManifestFromSwCacheMock).not.toHaveBeenCalled();
+    expect(showErrorSnackbarMock).toHaveBeenCalledTimes(1);
+    expect(showInfoSnackbarMock).not.toHaveBeenCalled();
+  });
 });

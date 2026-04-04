@@ -2,7 +2,7 @@
   import { onMount, onDestroy } from 'svelte';
   import { browser } from '$app/environment';
   import { page } from '$app/stores';
-  import { louvores, loadLouvores, louvoresLoaded } from '$lib/stores/louvores';
+  import { louvores, loadLouvores, louvoresLoaded, forceRefreshLouvoresFromNetwork } from '$lib/stores/louvores';
   import { classificationFilters } from '$lib/stores/classificationFilters';
   import { filters, CATEGORY_OPTIONS } from '$lib/stores/filters';
   import { bibliotecaSort } from '$lib/stores/bibliotecaSort';
@@ -17,6 +17,26 @@
   import LouvorCard from '$lib/components/LouvorCard.svelte';
   import GestureButton from '$lib/components/GestureButton.svelte';
   import { ChevronLeft, ChevronRight } from 'lucide-svelte';
+
+  /** @type {boolean} */
+  let isOnline = browser ? navigator.onLine : true;
+  let catalogRefreshing = false;
+
+  function updateOnlineStatus() {
+    if (browser) {
+      isOnline = navigator.onLine;
+    }
+  }
+
+  async function handleRefreshBancoLouvores() {
+    if (catalogRefreshing) return;
+    catalogRefreshing = true;
+    try {
+      await forceRefreshLouvoresFromNetwork();
+    } finally {
+      catalogRefreshing = false;
+    }
+  }
   
   // Normalize classification by removing content in parentheses
   /**
@@ -594,7 +614,10 @@
     
     if (browser) {
       document.addEventListener('click', handleClickOutside);
-      
+      updateOnlineStatus();
+      window.addEventListener('online', updateOnlineStatus);
+      window.addEventListener('offline', updateOnlineStatus);
+
       // Inicializar valores da URL uma única vez
       if ($page && $page.url) {
         const urlParams = parseUrlParams($page.url);
@@ -703,6 +726,8 @@
     if (browser) {
       if (initTimeout) clearTimeout(initTimeout);
       document.removeEventListener('click', handleClickOutside);
+      window.removeEventListener('online', updateOnlineStatus);
+      window.removeEventListener('offline', updateOnlineStatus);
     }
   });
   
@@ -772,7 +797,28 @@
   <title>Biblioteca</title>
 </svelte:head>
 
-<div class="max-w-6xl mx-auto">
+<div class="max-w-6xl mx-auto px-4">
+  <div
+    class="mt-6 rounded-lg border border-amber-500/40 bg-amber-950/25 px-4 py-3 text-sm text-amber-100/95 shadow-sm sm:px-5"
+    role="region"
+    aria-label="Atualização do banco de louvores"
+  >
+    <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
+      <p class="m-0 leading-snug">
+        Em breve, a atualização do banco de louvores será movida para a página de modo offline.
+      </p>
+      <button
+        type="button"
+        class="shrink-0 rounded-md border border-amber-400/50 bg-amber-900/40 px-3 py-2 font-medium text-amber-50 transition hover:bg-amber-800/50 disabled:cursor-not-allowed disabled:opacity-50"
+        disabled={!isOnline || catalogRefreshing}
+        aria-busy={catalogRefreshing}
+        on:click={handleRefreshBancoLouvores}
+      >
+        {catalogRefreshing ? 'Atualizando…' : 'Atualizar banco de louvores'}
+      </button>
+    </div>
+  </div>
+
   <div class="flex flex-col items-center mt-8 space-y-4">
     <CategoryFilters />
     
