@@ -1067,8 +1067,10 @@
     overflow-y: auto;
     overflow-x: auto;
     background: #2a2a2a;
-    width: 100vw;
-    max-width: 100vw;
+    /* 100% do pai/viewport — evita overflow horizontal por 100vw em mobile */
+    width: 100%;
+    max-width: 100%;
+    box-sizing: border-box;
     z-index: 1; /* ensure it overlays page background */
     touch-action: pan-x pan-y; /* Allow scrolling but prevent default pinch */
   }
@@ -1104,12 +1106,16 @@
     top: 0;
     left: 0;
     right: 0;
-    height: 56px;
+    /* Área útil ~56px + safe-area superior (notch); altura total medida pelo JS */
+    min-height: calc(56px + env(safe-area-inset-top, 0px));
+    padding-top: env(safe-area-inset-top, 0px);
+    padding-bottom: 0;
+    padding-left: calc(12px + env(safe-area-inset-left, 0px));
+    padding-right: calc(12px + env(safe-area-inset-right, 0px));
     display: grid;
     grid-template-columns: 1fr max-content max-content repeat(4, max-content);
     grid-template-rows: repeat(3, 1fr);
     column-gap: 8px;
-    padding: 0 calc(12px + env(safe-area-inset-right)) 0 calc(12px + env(safe-area-inset-left));
     background: var(--background-color);
     color: var(--text-light);
     border-bottom: 4px solid var(--gold-color);
@@ -1117,7 +1123,7 @@
     align-items: center;
     box-sizing: border-box;
     width: 100%;
-    max-width: 100vw;
+    max-width: 100%;
     overflow: hidden;
     transition: transform 0.3s ease, opacity 0.3s ease;
   }
@@ -1421,7 +1427,7 @@
   
   .pdf-error-banner {
     position: fixed;
-    top: 60px;
+    top: calc(60px + env(safe-area-inset-top, 0px));
     left: 50%;
     transform: translateX(-50%);
     max-width: 90%;
