@@ -30,29 +30,6 @@
   html {
     background-color: var(--background-color);
   }
-
-  /* /leitor: preencher viewport sem min-h-screen/100vh extra (evita scroll em mobile) */
-  html:has(.leitor-route-shell) {
-    height: 100%;
-    overflow: hidden;
-  }
-
-  html:has(.leitor-route-shell) body {
-    min-height: 100vh;
-    min-height: 100dvh;
-    height: 100%;
-    max-height: 100vh;
-    max-height: 100dvh;
-    overflow: hidden;
-  }
-
-  .leitor-route-shell {
-    box-sizing: border-box;
-    height: 100%;
-    max-height: 100vh;
-    max-height: 100dvh;
-    overflow: hidden;
-  }
   
   h1, h2, h3 {
     @apply font-garamond font-bold tracking-wide;

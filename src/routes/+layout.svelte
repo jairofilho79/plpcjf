@@ -217,15 +217,11 @@
   </div>
 {/if}
 
-<!-- Conteúdo principal com margem para toolbar (shell dedicado no /leitor: sem min-h-screen) -->
-<div
-  class="pb-4 px-4 bg-background-color"
-  class:min-h-screen={!$page.url.pathname.startsWith('/leitor')}
-  class:leitor-route-shell={$page.url.pathname.startsWith('/leitor')}
-  class:pt-24={!$page.url.pathname.startsWith('/leitor')}
-  class:px-0={$page.url.pathname.startsWith('/leitor')}
-  class:pb-0={$page.url.pathname.startsWith('/leitor')}
->
+<!-- Conteúdo principal com margem para toolbar (sem margem superior no /leitor) -->
+<div class="pb-4 px-4 min-h-screen bg-background-color" 
+     class:pt-24={!$page.url.pathname.startsWith('/leitor')}
+     class:px-0={$page.url.pathname.startsWith('/leitor')}
+     class:pb-0={$page.url.pathname.startsWith('/leitor')}>
   <slot />
 </div>
 
