@@ -29,6 +29,8 @@
   // Estado para controlar visibilidade da barra superior (fullscreen)
   // Sempre começa como true (barra visível) quando a página é carregada
   let isToolbarVisible = true;
+  let toolbarLayoutSyncRaf = 0;
+  let visualViewportLayoutRaf = 0;
 
   $: searchParams = new URLSearchParams($page.url.search);
   $: file = searchParams.get('file') ?? '/pdfs/exemplo.pdf';
@@ -415,6 +417,40 @@
     }
   }
 
+  /** Mede a toolbar e posiciona o topo do container do PDF (fonte única). */
+  function syncToolbarLayout() {
+    if (typeof window === 'undefined' || !containerEl) return;
+    if (isToolbarVisible) {
+      toolbarHeight = toolbarEl ? toolbarEl.offsetHeight : 60;
+    } else {
+      toolbarHeight = 0;
+    }
+    containerEl.style.top = `${toolbarHeight}px`;
+  }
+
+  /**
+   * Reaplica o layout em frame seguinte(s): no Safari iOS a barra/endereço e o safe area
+   * estabilizam depois do primeiro paint — evita reload da página.
+   */
+  function scheduleToolbarLayoutSync() {
+    syncToolbarLayout();
+    if (toolbarLayoutSyncRaf) cancelAnimationFrame(toolbarLayoutSyncRaf);
+    toolbarLayoutSyncRaf = requestAnimationFrame(() => {
+      toolbarLayoutSyncRaf = 0;
+      syncToolbarLayout();
+      requestAnimationFrame(() => syncToolbarLayout());
+    });
+  }
+
+  function queueVisualViewportLayoutSync() {
+    if (typeof window === 'undefined') return;
+    if (visualViewportLayoutRaf) return;
+    visualViewportLayoutRaf = requestAnimationFrame(() => {
+      visualViewportLayoutRaf = 0;
+      scheduleToolbarLayoutSync();
+    });
+  }
+
   onMount(async () => {
     // Set IS_LEITOR_OFFLINE flag when accessing the leitor route
     if (typeof window !== 'undefined') {
@@ -442,18 +478,19 @@
     }
 
     if (!containerEl || !viewerEl) return;
-    // Measure toolbar height (including border) and keep it updated
-    const updateToolbarHeight = () => {
-      if (isToolbarVisible) {
-        toolbarHeight = toolbarEl ? toolbarEl.offsetHeight : 60;
-      } else {
-        toolbarHeight = 0;
-      }
-      if (containerEl) containerEl.style.top = `${toolbarHeight}px`;
-    };
-    updateToolbarHeight();
-    const ro = new ResizeObserver(updateToolbarHeight);
+    syncToolbarLayout();
+    const ro = new ResizeObserver(() => syncToolbarLayout());
     if (toolbarEl) ro.observe(toolbarEl);
+
+    const vv = window.visualViewport;
+    const onVisualViewportChange = () => queueVisualViewportLayoutSync();
+    if (vv) {
+      vv.addEventListener('resize', onVisualViewportChange);
+      vv.addEventListener('scroll', onVisualViewportChange);
+    }
+
+    const onPageShow = () => scheduleToolbarLayoutSync();
+    window.addEventListener('pageshow', onPageShow);
 
     // Carregar PDF.js completo (garantir viewer disponível antes de inicializar)
     // Mostrar feedback visual durante carregamento
@@ -514,6 +551,7 @@
     linkService.setViewer(viewer);
 
     const resize = () => {
+      scheduleToolbarLayoutSync();
       // apenas notifica o viewer para recalcular o layout/textLayer
       eventBus.dispatch('resize', {});
       // Adjust zoom after resize if in page-width mode
@@ -628,8 +666,14 @@
     } else {
       await load(file);
     }
+    scheduleToolbarLayoutSync();
 
     cleanup = () => {
+      if (vv) {
+        vv.removeEventListener('resize', onVisualViewportChange);
+        vv.removeEventListener('scroll', onVisualViewportChange);
+      }
+      window.removeEventListener('pageshow', onPageShow);
       window.removeEventListener('resize', resize);
       window.removeEventListener('keydown', onKeyDown);
       document.removeEventListener('click', handleFirstInteraction, true);
@@ -651,6 +695,14 @@
   });
 
   onDestroy(() => {
+    if (toolbarLayoutSyncRaf) {
+      cancelAnimationFrame(toolbarLayoutSyncRaf);
+      toolbarLayoutSyncRaf = 0;
+    }
+    if (visualViewportLayoutRaf) {
+      cancelAnimationFrame(visualViewportLayoutRaf);
+      visualViewportLayoutRaf = 0;
+    }
     if (pageWidthAdjustTimeout) {
       clearTimeout(pageWidthAdjustTimeout);
       pageWidthAdjustTimeout = null;
@@ -982,16 +1034,8 @@
   // Função para toggle da barra superior (fullscreen)
   function toggleToolbar() {
     isToolbarVisible = !isToolbarVisible;
-    // Atualizar altura do container quando a barra é toggleada
-    if (containerEl) {
-      if (isToolbarVisible) {
-        toolbarHeight = toolbarEl ? toolbarEl.offsetHeight : 60;
-      } else {
-        toolbarHeight = 0;
-      }
-      containerEl.style.top = `${toolbarHeight}px`;
-    }
-    
+    scheduleToolbarLayoutSync();
+
     // Disparar evento resize para notificar o PDF.js sobre a mudança de tamanho
     if (eventBus) {
       eventBus.dispatch('resize', {});
@@ -1020,13 +1064,8 @@
   function showToolbar() {
     // Garantir que a barra seja mostrada
     isToolbarVisible = true;
-    
-    // Atualizar altura do container
-    if (containerEl) {
-      toolbarHeight = toolbarEl ? toolbarEl.offsetHeight : 60;
-      containerEl.style.top = `${toolbarHeight}px`;
-    }
-    
+    scheduleToolbarLayoutSync();
+
     // Disparar evento resize para notificar o PDF.js sobre a mudança de tamanho
     if (eventBus) {
       eventBus.dispatch('resize', {});
@@ -1051,14 +1090,11 @@
     }
   }
   
-  // Reativo: atualizar altura do container quando a visibilidade da barra mudar
+  // Reativo: manter topo do canvas alinhado quando refs ou visibilidade mudam
   $: if (containerEl) {
-    if (isToolbarVisible) {
-      toolbarHeight = toolbarEl ? toolbarEl.offsetHeight : 60;
-    } else {
-      toolbarHeight = 0;
-    }
-    containerEl.style.top = `${toolbarHeight}px`;
+    isToolbarVisible;
+    toolbarEl;
+    syncToolbarLayout();
   }
   
   // Reload if the file query param changes, but only when it actually changes
