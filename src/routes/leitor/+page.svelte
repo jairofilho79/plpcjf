@@ -26,6 +26,9 @@
   let cleanup: (() => void) | null = null;
   let toolbarEl: HTMLDivElement | null = null;
   let leitorViewportEl: HTMLDivElement | null = null;
+  /** Evita escrita redundante em style.top (menos reflow / menos risco de cascata). */
+  let lastSyncedTopPx: number | null = null;
+  let topSyncRafId = 0;
   // Estado para controlar visibilidade da barra superior (fullscreen)
   // Sempre começa como true (barra visível) quando a página é carregada
   let isToolbarVisible = true;
@@ -443,8 +446,14 @@
 
     if (!containerEl || !viewerEl) return;
     syncContainerTopFromToolbar();
+
+    let roTopDebounce: ReturnType<typeof setTimeout> | null = null;
     const ro = new ResizeObserver(() => {
-      syncContainerTopFromToolbar();
+      if (roTopDebounce) clearTimeout(roTopDebounce);
+      roTopDebounce = setTimeout(() => {
+        roTopDebounce = null;
+        scheduleContainerTopSync();
+      }, 48);
     });
     if (toolbarEl) ro.observe(toolbarEl);
     if (leitorViewportEl) ro.observe(leitorViewportEl);
@@ -507,10 +516,15 @@
     });
     linkService.setViewer(viewer);
 
+    let windowResizeTopDebounce: ReturnType<typeof setTimeout> | null = null;
     const resize = () => {
       // apenas notifica o viewer para recalcular o layout/textLayer
       eventBus.dispatch('resize', {});
-      requestAnimationFrame(() => syncContainerTopFromToolbar());
+      if (windowResizeTopDebounce) clearTimeout(windowResizeTopDebounce);
+      windowResizeTopDebounce = setTimeout(() => {
+        windowResizeTopDebounce = null;
+        scheduleContainerTopSync();
+      }, 120);
       // Adjust zoom after resize if in page-width mode
       // Force recalculate on resize since container width may have changed
       if (preferredFitMode === 'page-width') {
@@ -578,8 +592,7 @@
           viewer.currentScaleValue = preferredFitMode;
         }
       }
-      requestAnimationFrame(() => syncContainerTopFromToolbar());
-      setTimeout(() => syncContainerTopFromToolbar(), 0);
+      scheduleContainerTopSync();
     });
     eventBus.on('scalechanging', (e: any) => {
       const newScale = e?.scale ?? (viewer as any)?.currentScale ?? 1;
@@ -598,7 +611,7 @@
       requestAnimationFrame(() => resetFitModeScrollPosition());
       setTimeout(() => {
         resetFitModeScrollPosition();
-        syncContainerTopFromToolbar();
+        scheduleContainerTopSync();
       }, 100);
       // Adjust zoom after pages are loaded if in page-width mode
       if (preferredFitMode === 'page-width') {
@@ -613,7 +626,7 @@
       resetFitModeScrollPosition();
       requestAnimationFrame(() => {
         resetFitModeScrollPosition();
-        syncContainerTopFromToolbar();
+        scheduleContainerTopSync();
       });
       // Adjust zoom when page changes if in page-width mode
       // Don't force recalculate - reuse cached scale
@@ -636,6 +649,12 @@
     }
 
     cleanup = () => {
+      if (topSyncRafId) {
+        cancelAnimationFrame(topSyncRafId);
+        topSyncRafId = 0;
+      }
+      if (roTopDebounce) clearTimeout(roTopDebounce);
+      if (windowResizeTopDebounce) clearTimeout(windowResizeTopDebounce);
       window.removeEventListener('resize', resize);
       window.removeEventListener('keydown', onKeyDown);
       document.removeEventListener('click', handleFirstInteraction, true);
@@ -662,6 +681,10 @@
   });
 
   onDestroy(() => {
+    if (topSyncRafId) {
+      cancelAnimationFrame(topSyncRafId);
+      topSyncRafId = 0;
+    }
     if (pageWidthAdjustTimeout) {
       clearTimeout(pageWidthAdjustTimeout);
       pageWidthAdjustTimeout = null;
@@ -700,11 +723,13 @@
         // Force recalculate when switching to page-width mode
         setTimeout(() => {
           applyPageWidthZoom(true);
+          scheduleContainerTopSync();
         }, 100);
       } else {
         // Clear cache when switching away from page-width
         cachedPageWidthScale = null;
         viewer.currentScaleValue = preferredFitMode;
+        scheduleContainerTopSync();
       }
     }
   }
@@ -726,17 +751,28 @@
     containerEl.scrollTop = 0;
   }
 
-  /** Topo do canvas = base da toolbar em coords do shell (iOS safe area / visual viewport). */
+  /** Topo do canvas = base da toolbar em coords do shell (safe area inclusa no layout da barra). Idempotente. */
   function syncContainerTopFromToolbar() {
     if (typeof window === 'undefined' || !containerEl) return;
-    if (!isToolbarVisible || !toolbarEl) {
-      containerEl.style.top = '0px';
-      return;
+    let topPx = 0;
+    if (isToolbarVisible && toolbarEl) {
+      const vpTop = leitorViewportEl?.getBoundingClientRect().top ?? 0;
+      const tb = toolbarEl.getBoundingClientRect();
+      topPx = Math.max(0, Math.round(tb.bottom - vpTop));
     }
-    const vpTop = leitorViewportEl?.getBoundingClientRect().top ?? 0;
-    const tb = toolbarEl.getBoundingClientRect();
-    const topPx = Math.max(0, Math.round(tb.bottom - vpTop));
+    if (lastSyncedTopPx === topPx) return;
+    lastSyncedTopPx = topPx;
     containerEl.style.top = `${topPx}px`;
+  }
+
+  /** Coalesce múltiplos pedidos de sync no mesmo frame (discreto, sem loop). */
+  function scheduleContainerTopSync() {
+    if (typeof window === 'undefined') return;
+    if (topSyncRafId) cancelAnimationFrame(topSyncRafId);
+    topSyncRafId = requestAnimationFrame(() => {
+      topSyncRafId = 0;
+      syncContainerTopFromToolbar();
+    });
   }
   function goToFirstPage() {
     if (!viewer) return;
@@ -997,8 +1033,7 @@
     if (!pdfPath) return;
     // Em navegação entre itens do carousel, sempre restaura a barra visível.
     isToolbarVisible = true;
-    syncContainerTopFromToolbar();
-    requestAnimationFrame(() => syncContainerTopFromToolbar());
+    scheduleContainerTopSync();
 
     const fileParam = encodeURIComponent(`/${pdfPath}`);
     const tituloParam = encodeURIComponent(louvor.nome || '');
@@ -1010,8 +1045,7 @@
   // Função para toggle da barra superior (fullscreen)
   function toggleToolbar() {
     isToolbarVisible = !isToolbarVisible;
-    syncContainerTopFromToolbar();
-    requestAnimationFrame(() => syncContainerTopFromToolbar());
+    scheduleContainerTopSync();
     
     // Disparar evento resize para notificar o PDF.js sobre a mudança de tamanho
     if (eventBus) {
@@ -1033,7 +1067,7 @@
           // Para page-fit, deixar o PDF.js recalcular automaticamente
           viewer.currentScaleValue = 'page-fit';
         }
-        syncContainerTopFromToolbar();
+        scheduleContainerTopSync();
       }, 150);
     }
   }
@@ -1042,8 +1076,7 @@
   function showToolbar() {
     // Garantir que a barra seja mostrada
     isToolbarVisible = true;
-    syncContainerTopFromToolbar();
-    requestAnimationFrame(() => syncContainerTopFromToolbar());
+    scheduleContainerTopSync();
     
     // Disparar evento resize para notificar o PDF.js sobre a mudança de tamanho
     if (eventBus) {
@@ -1065,7 +1098,7 @@
           // Para page-fit, deixar o PDF.js recalcular automaticamente
           viewer.currentScaleValue = 'page-fit';
         }
-        syncContainerTopFromToolbar();
+        scheduleContainerTopSync();
       }, 150);
     }
   }
@@ -1097,6 +1130,9 @@
     height: 100dvh;
     overflow: hidden;
     background: #2a2a2a;
+    box-sizing: border-box;
+    /* Área segura inferior (home indicator) sem depender de JS */
+    padding-bottom: env(safe-area-inset-bottom, 0px);
   }
 
   .container {
@@ -1150,12 +1186,13 @@
     top: 0;
     left: 0;
     right: 0;
-    height: calc(56px + env(safe-area-inset-top));
+    height: calc(56px + env(safe-area-inset-top, 0px));
     display: grid;
     grid-template-columns: minmax(0, 1fr) max-content max-content repeat(4, max-content);
     grid-template-rows: repeat(3, 1fr);
     column-gap: 8px;
-    padding: env(safe-area-inset-top) calc(12px + env(safe-area-inset-right)) 0 calc(12px + env(safe-area-inset-left));
+    padding: env(safe-area-inset-top, 0px) calc(12px + env(safe-area-inset-right, 0px)) 0
+      calc(12px + env(safe-area-inset-left, 0px));
     background: var(--background-color);
     color: var(--text-light);
     border-bottom: 4px solid var(--gold-color);
@@ -1225,6 +1262,7 @@
   .brand {
     grid-column: 1;
     grid-row: 1;
+    min-width: 0;
     white-space: nowrap;
     font-weight: 700;
     font-family: "EB Garamond", Garamond, Georgia, serif; /* similar ao header */
@@ -1519,8 +1557,8 @@
   
   .fab-exit-fullscreen {
     position: absolute;
-    top: calc(12px + env(safe-area-inset-top));
-    right: calc(12px + env(safe-area-inset-right));
+    top: calc(12px + env(safe-area-inset-top, 0px));
+    right: calc(12px + env(safe-area-inset-right, 0px));
     width: 44px;
     height: 44px;
     background: white;
