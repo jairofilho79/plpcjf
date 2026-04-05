@@ -166,13 +166,8 @@
   }
 
   // Gesture state for pinch to zoom
-  const ENABLE_PINCH_FOCAL_FIX = true;
   let pinchInitialDistance = 0;
   let pinchInitialScale = 1;
-  let pinchStartFocalX = 0;
-  let pinchStartFocalY = 0;
-  let pinchStartContentX = 0;
-  let pinchStartContentY = 0;
   let isPinching = false;
   
   // Gesture state for single touch navigation
@@ -181,23 +176,7 @@
   let touchStartTime = 0;
   let hasMoved = false;
   const TOUCH_MOVE_THRESHOLD = 10; // pixels
-  const TOUCH_TIME_THRESHOLD = 300; // ms
-
-  const ENABLE_SWIPE_PAGE_NAV = true;
-  const SWIPE_MIN_DISTANCE_PX = 80;
-  const SWIPE_MAX_DURATION_MS = 400;
-  const SWIPE_HORIZONTAL_RATIO = 1.4;
-  const SWIPE_MIN_VELOCITY_PX_MS = 0.35;
-  const SWIPE_COOLDOWN_MS = 250;
-  const SWIPE_ZOOM_STRICT_SCALE = 1.15;
-  const SWIPE_EXTRA_DISTANCE_WHEN_ZOOMED_PX = 20;
-  const SWIPE_EXTRA_VELOCITY_WHEN_ZOOMED = 0.1;
-
-  let swipePageStartX = 0;
-  let swipePageStartY = 0;
-  let swipePageStartTime = 0;
-  let swipePageGestureValid = false;
-  let lastSwipePageTurnAt = 0;
+  const TOUCH_TIME_THRESHOLD = 300; // milliseconds
 
   // Load PDF directly without validation (optimization: skip validation if already validated)
   async function loadDirectly(fileUrl: string) {
@@ -607,8 +586,6 @@
     });
     eventBus.on('pagechanging', (e: any) => {
       currentPage = e?.pageNumber ?? currentPage;
-      resetFitModeScrollPosition();
-      requestAnimationFrame(() => resetFitModeScrollPosition());
       // Adjust zoom when page changes if in page-width mode
       // Don't force recalculate - reuse cached scale
       if (preferredFitMode === 'page-width') {
@@ -708,12 +685,6 @@
     const prev = Math.max(((viewer as any).currentPageNumber ?? 1) - 1, 1);
     (viewer as any).currentPageNumber = prev;
   }
-  function resetFitModeScrollPosition() {
-    if (!containerEl || preferredFitMode !== 'page-fit') return;
-    // Em page-fit, evita deslocamento residual após swipe/troca de página.
-    containerEl.scrollLeft = 0;
-    containerEl.scrollTop = 0;
-  }
   function goToFirstPage() {
     if (!viewer) return;
     (viewer as any).currentPageNumber = 1;
@@ -731,45 +702,6 @@
     return Math.sqrt(dx * dx + dy * dy);
   }
 
-  /**
-   * Swipe horizontal rápido (1 dedo): dx negativo => próxima página; positivo => anterior.
-   * Não substitui tap/long press nas zonas — GestureButton cancela tap se houve movimento grande.
-   */
-  function trySwipePageTurn(e: TouchEvent) {
-    if (!ENABLE_SWIPE_PAGE_NAV || !viewer) return;
-    if (e.type === 'touchcancel') return;
-    const t = e.changedTouches[0];
-    if (!t) return;
-
-    const now = performance.now();
-    if (now - lastSwipePageTurnAt < SWIPE_COOLDOWN_MS) return;
-
-    const dx = t.clientX - swipePageStartX;
-    const dy = t.clientY - swipePageStartY;
-    const dt = Math.max(now - swipePageStartTime, 1);
-
-    const scale = (viewer as any).currentScale ?? 1;
-    const zoomed = scale > SWIPE_ZOOM_STRICT_SCALE;
-    const minDist =
-      SWIPE_MIN_DISTANCE_PX + (zoomed ? SWIPE_EXTRA_DISTANCE_WHEN_ZOOMED_PX : 0);
-    const minVel =
-      SWIPE_MIN_VELOCITY_PX_MS + (zoomed ? SWIPE_EXTRA_VELOCITY_WHEN_ZOOMED : 0);
-
-    if (dt > SWIPE_MAX_DURATION_MS) return;
-    if (Math.abs(dx) < minDist) return;
-    if (Math.abs(dx) < Math.abs(dy) * SWIPE_HORIZONTAL_RATIO) return;
-    const v = Math.abs(dx) / dt;
-    if (v < minVel) return;
-
-    lastSwipePageTurnAt = now;
-    if (dx < 0) {
-      nextPage();
-    } else {
-      prevPage();
-    }
-    e.preventDefault();
-  }
-
   // Handle touch start for gestures
   function onTouchStart(e: TouchEvent) {
     if (!viewer || !containerEl) return;
@@ -779,35 +711,15 @@
     // PRIORIDADE 1: Pinch to zoom (2 dedos) - processar primeiro
     if (touches.length === 2) {
       isPinching = true;
-      swipePageGestureValid = false;
       pinchInitialDistance = getTouchDistance(touches[0], touches[1]);
       pinchInitialScale = viewer.currentScale;
-      if (ENABLE_PINCH_FOCAL_FIX) {
-        const containerRect = containerEl.getBoundingClientRect();
-        pinchStartFocalX =
-          (touches[0].clientX + touches[1].clientX) / 2 - containerRect.left;
-        pinchStartFocalY =
-          (touches[0].clientY + touches[1].clientY) / 2 - containerRect.top;
-
-        // Mapear o ponto focal para coordenadas de conteúdo na escala inicial.
-        pinchStartContentX =
-          (containerEl.scrollLeft + pinchStartFocalX) / Math.max(pinchInitialScale, 0.0001);
-        pinchStartContentY =
-          (containerEl.scrollTop + pinchStartFocalY) / Math.max(pinchInitialScale, 0.0001);
-      }
       e.preventDefault();
       return; // Não processar GestureButton quando em pinch
     }
     
-    // Um dedo: candidato a swipe em todo o canvas (sobreposto a zonas ou PDF)
-    if (touches.length === 1 && ENABLE_SWIPE_PAGE_NAV) {
-      swipePageGestureValid = true;
-      swipePageStartX = touches[0].clientX;
-      swipePageStartY = touches[0].clientY;
-      swipePageStartTime = performance.now();
-    }
-
-    // PRIORIDADE 2: Zonas de navegação — estado para hasMoved / GestureButton
+    // PRIORIDADE 2: Verificar se toque está nas zonas de navegação
+    // Se estiver, deixar GestureButton processar
+    // Se não estiver, permitir scroll normal
     if (touches.length === 1) {
       const containerRect = containerEl.getBoundingClientRect();
       const relativeX = touches[0].clientX - containerRect.left;
@@ -817,9 +729,13 @@
       const isInRightZone = relativeX > containerRect.width - quarterWidth;
       
       if (!isInLeftZone && !isInRightZone) {
+        // Fora das zonas de navegação, permitir scroll
+        // Não prevenir default para permitir scroll nativo
         return;
       }
       
+      // Dentro das zonas, GestureButton vai processar
+      // Manter estado para compatibilidade, mas não processar navegação aqui
       touchStartX = touches[0].clientX;
       touchStartY = touches[0].clientY;
       touchStartTime = Date.now();
@@ -836,24 +752,12 @@
     // Pinch to zoom: 2 touches
     if (touches.length === 2 && isPinching) {
       const currentDistance = getTouchDistance(touches[0], touches[1]);
-      if (!currentDistance || !pinchInitialDistance) {
-        e.preventDefault();
-        return;
-      }
       const scaleRatio = currentDistance / pinchInitialDistance;
       const newScale = pinchInitialScale * scaleRatio;
       
       // Clamp scale to reasonable bounds (0.25x to 4x)
       const clampedScale = Math.max(0.25, Math.min(4, newScale));
       viewer.currentScale = clampedScale;
-
-      if (ENABLE_PINCH_FOCAL_FIX) {
-        // Reaplica o ponto de conteúdo inicial sob o centro dos dedos.
-        const targetScrollLeft = pinchStartContentX * clampedScale - pinchStartFocalX;
-        const targetScrollTop = pinchStartContentY * clampedScale - pinchStartFocalY;
-        containerEl.scrollLeft = Math.max(0, targetScrollLeft);
-        containerEl.scrollTop = Math.max(0, targetScrollTop);
-      }
       
       e.preventDefault();
       return;
@@ -861,20 +765,6 @@
     
     // Single touch: check if it moved significantly
     if (touches.length === 1 && !isPinching) {
-      // Impede pan nativo da viewport durante swipe horizontal entre páginas.
-      const swipeDx = touches[0].clientX - swipePageStartX;
-      const swipeDy = touches[0].clientY - swipePageStartY;
-      const isMostlyHorizontalSwipe = Math.abs(swipeDx) > Math.abs(swipeDy) * 1.1;
-      if (ENABLE_SWIPE_PAGE_NAV && swipePageGestureValid && isMostlyHorizontalSwipe) {
-        e.preventDefault();
-      }
-
-      // Em page-fit sem zoom relevante, evita micro-scroll vertical residual do browser.
-      const currentScale = (viewer as any).currentScale ?? 1;
-      if (preferredFitMode === 'page-fit' && currentScale <= 1.02) {
-        e.preventDefault();
-      }
-
       const dx = Math.abs(touches[0].clientX - touchStartX);
       const dy = Math.abs(touches[0].clientY - touchStartY);
       
@@ -895,33 +785,14 @@
       isPinching = false;
       pinchInitialDistance = 0;
       pinchInitialScale = 1;
-      pinchStartFocalX = 0;
-      pinchStartFocalY = 0;
-      pinchStartContentX = 0;
-      pinchStartContentY = 0;
-      swipePageGestureValid = false;
       e.preventDefault();
-      touchStartX = 0;
-      touchStartY = 0;
-      touchStartTime = 0;
-      hasMoved = false;
       return;
     }
-
-    if (e.type === 'touchcancel') {
-      swipePageGestureValid = false;
-    } else if (
-      ENABLE_SWIPE_PAGE_NAV &&
-      swipePageGestureValid &&
-      !isPinching &&
-      touches.length === 0
-    ) {
-      trySwipePageTurn(e);
-    }
-
-    swipePageGestureValid = false;
     
-    // Navegação por toque simples é processada pelos GestureButtons
+    // Navegação por toque simples agora é processada pelos GestureButtons
+    // Manter apenas reset de estado aqui
+    
+    // Reset state
     touchStartX = 0;
     touchStartY = 0;
     touchStartTime = 0;
@@ -1076,22 +947,11 @@
   :global(body), :global(html) {
     margin: 0;
     padding: 0;
-    overflow: hidden;
-    overscroll-behavior: none;
-  }
-
-  .leitor-viewport {
-    position: fixed;
-    inset: 0;
-    width: 100%;
-    height: 100vh;
-    height: 100dvh;
-    overflow: hidden;
-    background: #2a2a2a;
+    overflow-x: hidden;
   }
 
   .container {
-    position: absolute;
+    position: fixed;
     /* top is set dynamically via JS to match toolbar height including border */
     top: 0;
     right: 0;
@@ -1100,14 +960,10 @@
     overflow-y: auto;
     overflow-x: auto;
     background: #2a2a2a;
-    /* 100% do pai/viewport — evita overflow horizontal por 100vw em mobile */
-    width: 100%;
-    max-width: 100%;
-    box-sizing: border-box;
+    width: 100vw;
+    max-width: 100vw;
     z-index: 1; /* ensure it overlays page background */
     touch-action: pan-x pan-y; /* Allow scrolling but prevent default pinch */
-    overscroll-behavior: contain;
-    -webkit-overflow-scrolling: touch;
   }
 
   /* Viewer base width equals viewport; zooms can overflow horizontally for scroll */
@@ -1137,7 +993,7 @@
   }
   /* Removed unused nested selector to satisfy build warnings */
   .toolbar {
-    position: absolute;
+    position: fixed;
     top: 0;
     left: 0;
     right: 0;
@@ -1154,7 +1010,7 @@
     align-items: center;
     box-sizing: border-box;
     width: 100%;
-    max-width: 100%;
+    max-width: 100vw;
     overflow: hidden;
     transition: transform 0.3s ease, opacity 0.3s ease;
   }
@@ -1428,7 +1284,7 @@
   }
   
   .pdf-loading-overlay {
-    position: absolute;
+    position: fixed;
     top: 0;
     left: 0;
     right: 0;
@@ -1457,7 +1313,7 @@
   }
   
   .pdf-error-banner {
-    position: absolute;
+    position: fixed;
     top: 60px;
     left: 50%;
     transform: translateX(-50%);
@@ -1497,7 +1353,7 @@
   }
   
   .fab-exit-fullscreen {
-    position: absolute;
+    position: fixed;
     top: calc(12px + env(safe-area-inset-top));
     right: calc(12px + env(safe-area-inset-right));
     width: 44px;
@@ -1596,7 +1452,6 @@
   }
 </style>
 
-<div class="leitor-viewport">
 <div class="toolbar" bind:this={toolbarEl} class:hidden={!isToolbarVisible}>
   <GestureButton
     on:click={goToHome}
@@ -1755,7 +1610,7 @@
       on:longpress={goToFirstPage}
       longPressDuration={500}
       hapticFeedback={true}
-      preventDefault={false}
+      preventDefault={true}
     >
       <div class="touch-zone left"></div>
     </GestureButton>
@@ -1767,7 +1622,7 @@
       on:longpress={toggleToolbar}
       longPressDuration={500}
       hapticFeedback={true}
-      preventDefault={false}
+      preventDefault={true}
     >
       <div class="touch-zone center"></div>
     </GestureButton>
@@ -1780,7 +1635,7 @@
       on:longpress={goToLastPage}
       longPressDuration={500}
       hapticFeedback={true}
-      preventDefault={false}
+      preventDefault={true}
     >
       <div class="touch-zone right"></div>
     </GestureButton>
@@ -1789,5 +1644,4 @@
   <div bind:this={viewerEl} class="viewer pdfViewer"></div>
   <!-- pdfjs-dist css hooks on .pdfViewer and .viewer -->
   
-</div>
 </div>
