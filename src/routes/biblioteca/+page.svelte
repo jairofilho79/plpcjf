@@ -16,7 +16,7 @@
   import PdfViewerSelector from '$lib/components/PdfViewerSelector.svelte';
   import LouvorCard from '$lib/components/LouvorCard.svelte';
   import GestureButton from '$lib/components/GestureButton.svelte';
-  import { ChevronLeft, ChevronRight } from 'lucide-svelte';
+  import { ChevronLeft, ChevronRight, RefreshCw } from 'lucide-svelte';
 
   /** @type {boolean} */
   let isOnline = browser ? navigator.onLine : true;
@@ -798,26 +798,37 @@
 </svelte:head>
 
 <div class="max-w-6xl mx-auto px-4">
-  <div
-    class="mx-auto mt-6 w-full max-w-4xl rounded-lg border border-amber-500/40 bg-amber-950/25 px-4 py-3 text-sm text-amber-100/95 shadow-sm sm:px-5"
+  <section
+    class="louvores-catalog-banner"
     role="region"
-    aria-label="Atualização do banco de louvores"
+    aria-label="Atualização da lista de louvores a partir do servidor"
   >
-    <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
-      <p class="m-0 leading-snug">
-        Em breve, a atualização do banco de louvores será movida para a página de modo offline.
-      </p>
+    <div class="louvores-catalog-banner__inner">
+      <div class="louvores-catalog-banner__copy">
+        <h2 class="louvores-catalog-banner__title font-garamond">Atualizar a lista de louvores</h2>
+        <p class="louvores-catalog-banner__text">
+          Obtém no servidor a versão mais recente do catálogo (músicas, categorias e referências aos PDFs). As
+          alterações passam a valer aqui na biblioteca e na busca da página inicial. Use quando houver músicas
+          novas ou correções publicadas. É necessário estar online; em conexões lentas o processo pode levar
+          alguns segundos.
+        </p>
+      </div>
       <button
         type="button"
-        class="shrink-0 rounded-md border border-amber-400/50 bg-amber-900/40 px-3 py-2 font-medium text-amber-50 transition hover:bg-amber-800/50 disabled:cursor-not-allowed disabled:opacity-50"
+        class="louvores-catalog-banner__action"
         disabled={!isOnline || catalogRefreshing}
         aria-busy={catalogRefreshing}
         on:click={handleRefreshBancoLouvores}
       >
-        {catalogRefreshing ? 'Atualizando…' : 'Atualizar banco de louvores'}
+        {#if catalogRefreshing}
+          <RefreshCw class="louvores-catalog-banner__action-icon" aria-hidden="true" />
+          <span>Atualizando…</span>
+        {:else}
+          <span>Atualizar agora</span>
+        {/if}
       </button>
     </div>
-  </div>
+  </section>
 
   <div class="flex flex-col items-center mt-8 space-y-4">
     <CategoryFilters />
@@ -1291,6 +1302,112 @@
   .no-results-message {
     color: var(--text-light);
     opacity: 0.9;
+  }
+
+  /* Faixa de atualização do manifesto — alinhada ao tema (borgonha, dourado, creme no botão) */
+  .louvores-catalog-banner {
+    margin: 1.5rem auto 0;
+    width: 100%;
+    max-width: 56rem;
+    border-radius: 0.625rem;
+    border: 2px solid var(--gold-color);
+    background: #632a2a;
+    box-shadow: var(--shadow-md);
+    padding: 1rem 1.15rem;
+  }
+
+  @media (min-width: 640px) {
+    .louvores-catalog-banner {
+      padding: 1.1rem 1.35rem;
+    }
+  }
+
+  .louvores-catalog-banner__inner {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 1rem;
+  }
+
+  @media (min-width: 640px) {
+    .louvores-catalog-banner__inner {
+      flex-direction: row;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1.25rem;
+    }
+  }
+
+  .louvores-catalog-banner__copy {
+    min-width: 0;
+  }
+
+  .louvores-catalog-banner__title {
+    margin: 0 0 0.4rem;
+    font-weight: 700;
+    font-size: 1.125rem;
+    letter-spacing: 0.02em;
+    line-height: 1.25;
+    color: #ffffff;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+  }
+
+  @media (min-width: 640px) {
+    .louvores-catalog-banner__title {
+      font-size: 1.2rem;
+    }
+  }
+
+  .louvores-catalog-banner__text {
+    margin: 0;
+    font-size: 0.875rem;
+    line-height: 1.5;
+    color: rgba(255, 255, 255, 0.94);
+  }
+
+  .louvores-catalog-banner__action {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.45rem;
+    min-height: 2.75rem;
+    padding: 0.5rem 1.1rem;
+    border-radius: 0.5rem;
+    border: 2px solid var(--gold-color);
+    background: var(--card-color);
+    color: var(--text-dark);
+    font-weight: 600;
+    font-size: 0.875rem;
+    cursor: pointer;
+    transition: background 0.2s ease, box-shadow 0.2s ease, transform 0.15s ease;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
+  }
+
+  .louvores-catalog-banner__action:hover:not(:disabled) {
+    background: #fffef6;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15);
+  }
+
+  .louvores-catalog-banner__action:active:not(:disabled) {
+    transform: scale(0.98);
+  }
+
+  .louvores-catalog-banner__action:disabled {
+    cursor: not-allowed;
+    opacity: 0.55;
+  }
+
+  .louvores-catalog-banner__action-icon {
+    width: 1rem;
+    height: 1rem;
+    animation: louvores-banner-spin 0.85s linear infinite;
+  }
+
+  @keyframes louvores-banner-spin {
+    to {
+      transform: rotate(360deg);
+    }
   }
 </style>
 

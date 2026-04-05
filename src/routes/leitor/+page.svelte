@@ -1009,7 +1009,11 @@
   function navigateToPdf(louvor: any) {
     const pdfPath = getPdfRelPath(louvor);
     if (!pdfPath) return;
-    
+    // Em navegação entre itens do carousel, sempre restaura a barra visível.
+    isToolbarVisible = true;
+    syncContainerTopFromToolbar();
+    requestAnimationFrame(() => syncContainerTopFromToolbar());
+
     const fileParam = encodeURIComponent(`/${pdfPath}`);
     const tituloParam = encodeURIComponent(louvor.nome || '');
     const subtituloText = `${louvor.categoria || ''} | ${louvor.classificacao || ''}`.trim();
@@ -1170,12 +1174,12 @@
     top: 0;
     left: 0;
     right: 0;
-    height: 56px;
+    height: calc(56px + env(safe-area-inset-top));
     display: grid;
     grid-template-columns: minmax(0, 1fr) max-content max-content repeat(4, max-content);
     grid-template-rows: repeat(3, 1fr);
     column-gap: 8px;
-    padding: 0 calc(12px + env(safe-area-inset-right)) 0 calc(12px + env(safe-area-inset-left));
+    padding: env(safe-area-inset-top) calc(12px + env(safe-area-inset-right)) 0 calc(12px + env(safe-area-inset-left));
     background: var(--background-color);
     color: var(--text-light);
     border-bottom: 4px solid var(--gold-color);
