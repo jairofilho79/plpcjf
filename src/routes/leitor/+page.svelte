@@ -25,14 +25,10 @@
   let viewer: any;
   let cleanup: (() => void) | null = null;
   let toolbarEl: HTMLDivElement | null = null;
-  let leitorViewportEl: HTMLDivElement | null = null;
-  /** Evita escrita redundante em style.top (menos reflow / menos risco de cascata). */
-  let lastSyncedTopPx: number | null = null;
-  let topSyncRafId = 0;
+  let toolbarHeight = 60;
   // Estado para controlar visibilidade da barra superior (fullscreen)
   // Sempre começa como true (barra visível) quando a página é carregada
   let isToolbarVisible = true;
-  let initialToolbarVisibilityEnsured = false;
 
   $: searchParams = new URLSearchParams($page.url.search);
   $: file = searchParams.get('file') ?? '/pdfs/exemplo.pdf';
@@ -170,13 +166,8 @@
   }
 
   // Gesture state for pinch to zoom
-  const ENABLE_PINCH_FOCAL_FIX = true;
   let pinchInitialDistance = 0;
   let pinchInitialScale = 1;
-  let pinchStartFocalX = 0;
-  let pinchStartFocalY = 0;
-  let pinchStartContentX = 0;
-  let pinchStartContentY = 0;
   let isPinching = false;
   
   // Gesture state for single touch navigation
@@ -185,23 +176,7 @@
   let touchStartTime = 0;
   let hasMoved = false;
   const TOUCH_MOVE_THRESHOLD = 10; // pixels
-  const TOUCH_TIME_THRESHOLD = 300; // ms
-
-  const ENABLE_SWIPE_PAGE_NAV = true;
-  const SWIPE_MIN_DISTANCE_PX = 80;
-  const SWIPE_MAX_DURATION_MS = 400;
-  const SWIPE_HORIZONTAL_RATIO = 1.4;
-  const SWIPE_MIN_VELOCITY_PX_MS = 0.35;
-  const SWIPE_COOLDOWN_MS = 250;
-  const SWIPE_ZOOM_STRICT_SCALE = 1.15;
-  const SWIPE_EXTRA_DISTANCE_WHEN_ZOOMED_PX = 20;
-  const SWIPE_EXTRA_VELOCITY_WHEN_ZOOMED = 0.1;
-
-  let swipePageStartX = 0;
-  let swipePageStartY = 0;
-  let swipePageStartTime = 0;
-  let swipePageGestureValid = false;
-  let lastSwipePageTurnAt = 0;
+  const TOUCH_TIME_THRESHOLD = 300; // milliseconds
 
   // Load PDF directly without validation (optimization: skip validation if already validated)
   async function loadDirectly(fileUrl: string) {
@@ -427,7 +402,6 @@
     
     // Sempre garantir que a barra esteja visível ao carregar a página
     isToolbarVisible = true;
-    initialToolbarVisibilityEnsured = false;
     
     // Add storage event listener for carousel synchronization between tabs
     let storageHandler: ((e: StorageEvent) => void) | null = null;
@@ -447,20 +421,18 @@
     }
 
     if (!containerEl || !viewerEl) return;
-    syncContainerTopFromToolbar();
-    // Reforço leve no primeiro frame para evitar estado inicial com barra oculta.
-    requestAnimationFrame(() => ensureInitialToolbarVisibility());
-
-    let roTopDebounce: ReturnType<typeof setTimeout> | null = null;
-    const ro = new ResizeObserver(() => {
-      if (roTopDebounce) clearTimeout(roTopDebounce);
-      roTopDebounce = setTimeout(() => {
-        roTopDebounce = null;
-        scheduleContainerTopSync();
-      }, 48);
-    });
+    // Measure toolbar height (including border) and keep it updated
+    const updateToolbarHeight = () => {
+      if (isToolbarVisible) {
+        toolbarHeight = toolbarEl ? toolbarEl.offsetHeight : 60;
+      } else {
+        toolbarHeight = 0;
+      }
+      if (containerEl) containerEl.style.top = `${toolbarHeight}px`;
+    };
+    updateToolbarHeight();
+    const ro = new ResizeObserver(updateToolbarHeight);
     if (toolbarEl) ro.observe(toolbarEl);
-    if (leitorViewportEl) ro.observe(leitorViewportEl);
 
     // Carregar PDF.js completo (garantir viewer disponível antes de inicializar)
     // Mostrar feedback visual durante carregamento
@@ -520,15 +492,9 @@
     });
     linkService.setViewer(viewer);
 
-    let windowResizeTopDebounce: ReturnType<typeof setTimeout> | null = null;
     const resize = () => {
       // apenas notifica o viewer para recalcular o layout/textLayer
       eventBus.dispatch('resize', {});
-      if (windowResizeTopDebounce) clearTimeout(windowResizeTopDebounce);
-      windowResizeTopDebounce = setTimeout(() => {
-        windowResizeTopDebounce = null;
-        scheduleContainerTopSync();
-      }, 120);
       // Adjust zoom after resize if in page-width mode
       // Force recalculate on resize since container width may have changed
       if (preferredFitMode === 'page-width') {
@@ -596,7 +562,6 @@
           viewer.currentScaleValue = preferredFitMode;
         }
       }
-      scheduleContainerTopSync();
     });
     eventBus.on('scalechanging', (e: any) => {
       const newScale = e?.scale ?? (viewer as any)?.currentScale ?? 1;
@@ -611,13 +576,6 @@
     eventBus.on('pagesloaded', (e: any) => {
       totalPages = e?.pagesCount ?? totalPages;
       currentPage = (viewer as any)?.currentPageNumber ?? currentPage;
-      ensureInitialToolbarVisibility();
-      resetFitModeScrollPosition();
-      requestAnimationFrame(() => resetFitModeScrollPosition());
-      setTimeout(() => {
-        resetFitModeScrollPosition();
-        scheduleContainerTopSync();
-      }, 100);
       // Adjust zoom after pages are loaded if in page-width mode
       if (preferredFitMode === 'page-width') {
         if (pageWidthAdjustTimeout) clearTimeout(pageWidthAdjustTimeout);
@@ -628,11 +586,6 @@
     });
     eventBus.on('pagechanging', (e: any) => {
       currentPage = e?.pageNumber ?? currentPage;
-      resetFitModeScrollPosition();
-      requestAnimationFrame(() => {
-        resetFitModeScrollPosition();
-        scheduleContainerTopSync();
-      });
       // Adjust zoom when page changes if in page-width mode
       // Don't force recalculate - reuse cached scale
       if (preferredFitMode === 'page-width') {
@@ -654,12 +607,6 @@
     }
 
     cleanup = () => {
-      if (topSyncRafId) {
-        cancelAnimationFrame(topSyncRafId);
-        topSyncRafId = 0;
-      }
-      if (roTopDebounce) clearTimeout(roTopDebounce);
-      if (windowResizeTopDebounce) clearTimeout(windowResizeTopDebounce);
       window.removeEventListener('resize', resize);
       window.removeEventListener('keydown', onKeyDown);
       document.removeEventListener('click', handleFirstInteraction, true);
@@ -674,22 +621,13 @@
         containerEl.removeEventListener('touchcancel', onTouchEnd);
         containerEl.removeEventListener('click', handleFirstInteraction, true);
       }
-      try {
-        if (toolbarEl) ro.unobserve(toolbarEl);
-      } catch {}
-      try {
-        if (leitorViewportEl) ro.unobserve(leitorViewportEl);
-      } catch {}
+      try { if (toolbarEl) ro.unobserve(toolbarEl); } catch {}
       // No explicit destroy API; let GC collect. Clear container contents.
       if (viewerEl) viewerEl.innerHTML = '';
     };
   });
 
   onDestroy(() => {
-    if (topSyncRafId) {
-      cancelAnimationFrame(topSyncRafId);
-      topSyncRafId = 0;
-    }
     if (pageWidthAdjustTimeout) {
       clearTimeout(pageWidthAdjustTimeout);
       pageWidthAdjustTimeout = null;
@@ -728,13 +666,11 @@
         // Force recalculate when switching to page-width mode
         setTimeout(() => {
           applyPageWidthZoom(true);
-          scheduleContainerTopSync();
         }, 100);
       } else {
         // Clear cache when switching away from page-width
         cachedPageWidthScale = null;
         viewer.currentScaleValue = preferredFitMode;
-        scheduleContainerTopSync();
       }
     }
   }
@@ -748,52 +684,6 @@
     if (!viewer) return;
     const prev = Math.max(((viewer as any).currentPageNumber ?? 1) - 1, 1);
     (viewer as any).currentPageNumber = prev;
-  }
-  function resetFitModeScrollPosition() {
-    if (!containerEl || preferredFitMode !== 'page-fit') return;
-    // Em page-fit, evita deslocamento residual após swipe/troca de página.
-    containerEl.scrollLeft = 0;
-    containerEl.scrollTop = 0;
-  }
-
-  /** Topo do canvas = base da toolbar em coords do shell (safe area inclusa no layout da barra). Idempotente. */
-  function syncContainerTopFromToolbar() {
-    if (typeof window === 'undefined' || !containerEl) return;
-    let topPx = 0;
-    if (isToolbarVisible && toolbarEl) {
-      const vpTop = leitorViewportEl?.getBoundingClientRect().top ?? 0;
-      const tb = toolbarEl.getBoundingClientRect();
-      topPx = Math.max(0, Math.round(tb.bottom - vpTop));
-    }
-    if (lastSyncedTopPx === topPx) return;
-    lastSyncedTopPx = topPx;
-    containerEl.style.top = `${topPx}px`;
-  }
-
-  /** Coalesce múltiplos pedidos de sync no mesmo frame (discreto, sem loop). */
-  function scheduleContainerTopSync() {
-    if (typeof window === 'undefined') return;
-    if (topSyncRafId) cancelAnimationFrame(topSyncRafId);
-    topSyncRafId = requestAnimationFrame(() => {
-      topSyncRafId = 0;
-      syncContainerTopFromToolbar();
-    });
-  }
-
-  /**
-   * Em navegação SPA (sem reload), garante uma única vez que a barra não fique oculta
-   * por estado transitório durante o bootstrap inicial.
-   */
-  function ensureInitialToolbarVisibility() {
-    if (initialToolbarVisibilityEnsured) return;
-    initialToolbarVisibilityEnsured = true;
-    if (!isToolbarVisible) {
-      isToolbarVisible = true;
-    }
-    scheduleContainerTopSync();
-    if (eventBus) {
-      eventBus.dispatch('resize', {});
-    }
   }
   function goToFirstPage() {
     if (!viewer) return;
@@ -812,45 +702,6 @@
     return Math.sqrt(dx * dx + dy * dy);
   }
 
-  /**
-   * Swipe horizontal rápido (1 dedo): dx negativo => próxima página; positivo => anterior.
-   * Não substitui tap/long press nas zonas — GestureButton cancela tap se houve movimento grande.
-   */
-  function trySwipePageTurn(e: TouchEvent) {
-    if (!ENABLE_SWIPE_PAGE_NAV || !viewer) return;
-    if (e.type === 'touchcancel') return;
-    const t = e.changedTouches[0];
-    if (!t) return;
-
-    const now = performance.now();
-    if (now - lastSwipePageTurnAt < SWIPE_COOLDOWN_MS) return;
-
-    const dx = t.clientX - swipePageStartX;
-    const dy = t.clientY - swipePageStartY;
-    const dt = Math.max(now - swipePageStartTime, 1);
-
-    const scale = (viewer as any).currentScale ?? 1;
-    const zoomed = scale > SWIPE_ZOOM_STRICT_SCALE;
-    const minDist =
-      SWIPE_MIN_DISTANCE_PX + (zoomed ? SWIPE_EXTRA_DISTANCE_WHEN_ZOOMED_PX : 0);
-    const minVel =
-      SWIPE_MIN_VELOCITY_PX_MS + (zoomed ? SWIPE_EXTRA_VELOCITY_WHEN_ZOOMED : 0);
-
-    if (dt > SWIPE_MAX_DURATION_MS) return;
-    if (Math.abs(dx) < minDist) return;
-    if (Math.abs(dx) < Math.abs(dy) * SWIPE_HORIZONTAL_RATIO) return;
-    const v = Math.abs(dx) / dt;
-    if (v < minVel) return;
-
-    lastSwipePageTurnAt = now;
-    if (dx < 0) {
-      nextPage();
-    } else {
-      prevPage();
-    }
-    e.preventDefault();
-  }
-
   // Handle touch start for gestures
   function onTouchStart(e: TouchEvent) {
     if (!viewer || !containerEl) return;
@@ -860,35 +711,15 @@
     // PRIORIDADE 1: Pinch to zoom (2 dedos) - processar primeiro
     if (touches.length === 2) {
       isPinching = true;
-      swipePageGestureValid = false;
       pinchInitialDistance = getTouchDistance(touches[0], touches[1]);
       pinchInitialScale = viewer.currentScale;
-      if (ENABLE_PINCH_FOCAL_FIX) {
-        const containerRect = containerEl.getBoundingClientRect();
-        pinchStartFocalX =
-          (touches[0].clientX + touches[1].clientX) / 2 - containerRect.left;
-        pinchStartFocalY =
-          (touches[0].clientY + touches[1].clientY) / 2 - containerRect.top;
-
-        // Mapear o ponto focal para coordenadas de conteúdo na escala inicial.
-        pinchStartContentX =
-          (containerEl.scrollLeft + pinchStartFocalX) / Math.max(pinchInitialScale, 0.0001);
-        pinchStartContentY =
-          (containerEl.scrollTop + pinchStartFocalY) / Math.max(pinchInitialScale, 0.0001);
-      }
       e.preventDefault();
       return; // Não processar GestureButton quando em pinch
     }
     
-    // Um dedo: candidato a swipe em todo o canvas (sobreposto a zonas ou PDF)
-    if (touches.length === 1 && ENABLE_SWIPE_PAGE_NAV) {
-      swipePageGestureValid = true;
-      swipePageStartX = touches[0].clientX;
-      swipePageStartY = touches[0].clientY;
-      swipePageStartTime = performance.now();
-    }
-
-    // PRIORIDADE 2: Zonas de navegação — estado para hasMoved / GestureButton
+    // PRIORIDADE 2: Verificar se toque está nas zonas de navegação
+    // Se estiver, deixar GestureButton processar
+    // Se não estiver, permitir scroll normal
     if (touches.length === 1) {
       const containerRect = containerEl.getBoundingClientRect();
       const relativeX = touches[0].clientX - containerRect.left;
@@ -898,9 +729,13 @@
       const isInRightZone = relativeX > containerRect.width - quarterWidth;
       
       if (!isInLeftZone && !isInRightZone) {
+        // Fora das zonas de navegação, permitir scroll
+        // Não prevenir default para permitir scroll nativo
         return;
       }
       
+      // Dentro das zonas, GestureButton vai processar
+      // Manter estado para compatibilidade, mas não processar navegação aqui
       touchStartX = touches[0].clientX;
       touchStartY = touches[0].clientY;
       touchStartTime = Date.now();
@@ -917,24 +752,12 @@
     // Pinch to zoom: 2 touches
     if (touches.length === 2 && isPinching) {
       const currentDistance = getTouchDistance(touches[0], touches[1]);
-      if (!currentDistance || !pinchInitialDistance) {
-        e.preventDefault();
-        return;
-      }
       const scaleRatio = currentDistance / pinchInitialDistance;
       const newScale = pinchInitialScale * scaleRatio;
       
       // Clamp scale to reasonable bounds (0.25x to 4x)
       const clampedScale = Math.max(0.25, Math.min(4, newScale));
       viewer.currentScale = clampedScale;
-
-      if (ENABLE_PINCH_FOCAL_FIX) {
-        // Reaplica o ponto de conteúdo inicial sob o centro dos dedos.
-        const targetScrollLeft = pinchStartContentX * clampedScale - pinchStartFocalX;
-        const targetScrollTop = pinchStartContentY * clampedScale - pinchStartFocalY;
-        containerEl.scrollLeft = Math.max(0, targetScrollLeft);
-        containerEl.scrollTop = Math.max(0, targetScrollTop);
-      }
       
       e.preventDefault();
       return;
@@ -942,20 +765,6 @@
     
     // Single touch: check if it moved significantly
     if (touches.length === 1 && !isPinching) {
-      // Impede pan nativo da viewport durante swipe horizontal entre páginas.
-      const swipeDx = touches[0].clientX - swipePageStartX;
-      const swipeDy = touches[0].clientY - swipePageStartY;
-      const isMostlyHorizontalSwipe = Math.abs(swipeDx) > Math.abs(swipeDy) * 1.1;
-      if (ENABLE_SWIPE_PAGE_NAV && swipePageGestureValid && isMostlyHorizontalSwipe) {
-        e.preventDefault();
-      }
-
-      // Em page-fit sem zoom relevante, evita micro-scroll vertical residual do browser.
-      const currentScale = (viewer as any).currentScale ?? 1;
-      if (preferredFitMode === 'page-fit' && currentScale <= 1.02) {
-        e.preventDefault();
-      }
-
       const dx = Math.abs(touches[0].clientX - touchStartX);
       const dy = Math.abs(touches[0].clientY - touchStartY);
       
@@ -976,33 +785,14 @@
       isPinching = false;
       pinchInitialDistance = 0;
       pinchInitialScale = 1;
-      pinchStartFocalX = 0;
-      pinchStartFocalY = 0;
-      pinchStartContentX = 0;
-      pinchStartContentY = 0;
-      swipePageGestureValid = false;
       e.preventDefault();
-      touchStartX = 0;
-      touchStartY = 0;
-      touchStartTime = 0;
-      hasMoved = false;
       return;
     }
-
-    if (e.type === 'touchcancel') {
-      swipePageGestureValid = false;
-    } else if (
-      ENABLE_SWIPE_PAGE_NAV &&
-      swipePageGestureValid &&
-      !isPinching &&
-      touches.length === 0
-    ) {
-      trySwipePageTurn(e);
-    }
-
-    swipePageGestureValid = false;
     
-    // Navegação por toque simples é processada pelos GestureButtons
+    // Navegação por toque simples agora é processada pelos GestureButtons
+    // Manter apenas reset de estado aqui
+    
+    // Reset state
     touchStartX = 0;
     touchStartY = 0;
     touchStartTime = 0;
@@ -1052,10 +842,7 @@
   function navigateToPdf(louvor: any) {
     const pdfPath = getPdfRelPath(louvor);
     if (!pdfPath) return;
-    // Em navegação entre itens do carousel, sempre restaura a barra visível.
-    isToolbarVisible = true;
-    scheduleContainerTopSync();
-
+    
     const fileParam = encodeURIComponent(`/${pdfPath}`);
     const tituloParam = encodeURIComponent(louvor.nome || '');
     const subtituloText = `${louvor.categoria || ''} | ${louvor.classificacao || ''}`.trim();
@@ -1066,7 +853,15 @@
   // Função para toggle da barra superior (fullscreen)
   function toggleToolbar() {
     isToolbarVisible = !isToolbarVisible;
-    scheduleContainerTopSync();
+    // Atualizar altura do container quando a barra é toggleada
+    if (containerEl) {
+      if (isToolbarVisible) {
+        toolbarHeight = toolbarEl ? toolbarEl.offsetHeight : 60;
+      } else {
+        toolbarHeight = 0;
+      }
+      containerEl.style.top = `${toolbarHeight}px`;
+    }
     
     // Disparar evento resize para notificar o PDF.js sobre a mudança de tamanho
     if (eventBus) {
@@ -1088,7 +883,6 @@
           // Para page-fit, deixar o PDF.js recalcular automaticamente
           viewer.currentScaleValue = 'page-fit';
         }
-        scheduleContainerTopSync();
       }, 150);
     }
   }
@@ -1097,7 +891,12 @@
   function showToolbar() {
     // Garantir que a barra seja mostrada
     isToolbarVisible = true;
-    scheduleContainerTopSync();
+    
+    // Atualizar altura do container
+    if (containerEl) {
+      toolbarHeight = toolbarEl ? toolbarEl.offsetHeight : 60;
+      containerEl.style.top = `${toolbarHeight}px`;
+    }
     
     // Disparar evento resize para notificar o PDF.js sobre a mudança de tamanho
     if (eventBus) {
@@ -1119,9 +918,18 @@
           // Para page-fit, deixar o PDF.js recalcular automaticamente
           viewer.currentScaleValue = 'page-fit';
         }
-        scheduleContainerTopSync();
       }, 150);
     }
+  }
+  
+  // Reativo: atualizar altura do container quando a visibilidade da barra mudar
+  $: if (containerEl) {
+    if (isToolbarVisible) {
+      toolbarHeight = toolbarEl ? toolbarEl.offsetHeight : 60;
+    } else {
+      toolbarHeight = 0;
+    }
+    containerEl.style.top = `${toolbarHeight}px`;
   }
   
   // Reload if the file query param changes, but only when it actually changes
@@ -1139,25 +947,11 @@
   :global(body), :global(html) {
     margin: 0;
     padding: 0;
-    overflow: hidden;
-    overscroll-behavior: none;
-  }
-
-  .leitor-viewport {
-    position: fixed;
-    inset: 0;
-    width: 100%;
-    height: 100vh;
-    height: 100dvh;
-    overflow: hidden;
-    background: #2a2a2a;
-    box-sizing: border-box;
-    /* Área segura inferior (home indicator) sem depender de JS */
-    padding-bottom: env(safe-area-inset-bottom, 0px);
+    overflow-x: hidden;
   }
 
   .container {
-    position: absolute;
+    position: fixed;
     /* top is set dynamically via JS to match toolbar height including border */
     top: 0;
     right: 0;
@@ -1166,14 +960,10 @@
     overflow-y: auto;
     overflow-x: auto;
     background: #2a2a2a;
-    /* 100% do pai/viewport — evita overflow horizontal por 100vw em mobile */
-    width: 100%;
-    max-width: 100%;
-    box-sizing: border-box;
+    width: 100vw;
+    max-width: 100vw;
     z-index: 1; /* ensure it overlays page background */
     touch-action: pan-x pan-y; /* Allow scrolling but prevent default pinch */
-    overscroll-behavior: contain;
-    -webkit-overflow-scrolling: touch;
   }
 
   /* Viewer base width equals viewport; zooms can overflow horizontally for scroll */
@@ -1203,17 +993,16 @@
   }
   /* Removed unused nested selector to satisfy build warnings */
   .toolbar {
-    position: absolute;
+    position: fixed;
     top: 0;
     left: 0;
     right: 0;
-    height: calc(56px + env(safe-area-inset-top, 0px));
+    height: 56px;
     display: grid;
-    grid-template-columns: minmax(0, 1fr) max-content max-content repeat(4, max-content);
+    grid-template-columns: 1fr max-content max-content repeat(4, max-content);
     grid-template-rows: repeat(3, 1fr);
     column-gap: 8px;
-    padding: env(safe-area-inset-top, 0px) calc(12px + env(safe-area-inset-right, 0px)) 0
-      calc(12px + env(safe-area-inset-left, 0px));
+    padding: 0 calc(12px + env(safe-area-inset-right)) 0 calc(12px + env(safe-area-inset-left));
     background: var(--background-color);
     color: var(--text-light);
     border-bottom: 4px solid var(--gold-color);
@@ -1221,12 +1010,9 @@
     align-items: center;
     box-sizing: border-box;
     width: 100%;
-    max-width: 100%;
+    max-width: 100vw;
     overflow: hidden;
     transition: transform 0.3s ease, opacity 0.3s ease;
-    /* Evita pan nativo da viewport ao arrastar a barra (iOS Safari). */
-    touch-action: none;
-    overscroll-behavior: none;
   }
   
   .toolbar.hidden {
@@ -1248,7 +1034,6 @@
     -webkit-user-select: none;
     -moz-user-select: none;
     -ms-user-select: none;
-    touch-action: manipulation;
   }
   .btn:hover { filter: brightness(1.05); }
   .btn .icon {
@@ -1263,7 +1048,6 @@
     grid-column: 2;
     grid-row: 1 / 4;
     align-self: center;
-    min-width: 0;
   }
   .title-main {
     font-weight: 600;
@@ -1283,7 +1067,6 @@
   .brand {
     grid-column: 1;
     grid-row: 1;
-    min-width: 0;
     white-space: nowrap;
     font-weight: 700;
     font-family: "EB Garamond", Garamond, Georgia, serif; /* similar ao header */
@@ -1329,14 +1112,7 @@
     z-index: 1;
   }
 
-  .indicator {
-    display: flex;
-    align-items: center;
-    gap: 4px;
-    min-width: 56px;
-    justify-content: center;
-    touch-action: manipulation;
-  }
+  .indicator { display: flex; align-items: center; gap: 4px; min-width: 56px; justify-content: center; }
   .indicator .current { font-variant-numeric: tabular-nums; }
   .indicator .total { opacity: .9; }
 
@@ -1464,7 +1240,7 @@
   /* Tablet+ layout: brand in its own column, title/subtitle to the right */
   @media (min-width: 768px) {
     .toolbar {
-      grid-template-columns: auto minmax(0, 1fr) max-content repeat(6, max-content);
+      grid-template-columns: auto 1fr max-content repeat(6, max-content);
     }
     .brand { grid-column: 1; grid-row: auto; align-self: center; }
     .title-wrap { grid-column: 2; grid-row: auto; }
@@ -1508,7 +1284,7 @@
   }
   
   .pdf-loading-overlay {
-    position: absolute;
+    position: fixed;
     top: 0;
     left: 0;
     right: 0;
@@ -1537,7 +1313,7 @@
   }
   
   .pdf-error-banner {
-    position: absolute;
+    position: fixed;
     top: 60px;
     left: 50%;
     transform: translateX(-50%);
@@ -1577,9 +1353,9 @@
   }
   
   .fab-exit-fullscreen {
-    position: absolute;
-    top: calc(12px + env(safe-area-inset-top, 0px));
-    right: calc(12px + env(safe-area-inset-right, 0px));
+    position: fixed;
+    top: calc(12px + env(safe-area-inset-top));
+    right: calc(12px + env(safe-area-inset-right));
     width: 44px;
     height: 44px;
     background: white;
@@ -1676,7 +1452,6 @@
   }
 </style>
 
-<div class="leitor-viewport" bind:this={leitorViewportEl}>
 <div class="toolbar" bind:this={toolbarEl} class:hidden={!isToolbarVisible}>
   <GestureButton
     on:click={goToHome}
@@ -1835,7 +1610,7 @@
       on:longpress={goToFirstPage}
       longPressDuration={500}
       hapticFeedback={true}
-      preventDefault={false}
+      preventDefault={true}
     >
       <div class="touch-zone left"></div>
     </GestureButton>
@@ -1847,7 +1622,7 @@
       on:longpress={toggleToolbar}
       longPressDuration={500}
       hapticFeedback={true}
-      preventDefault={false}
+      preventDefault={true}
     >
       <div class="touch-zone center"></div>
     </GestureButton>
@@ -1860,7 +1635,7 @@
       on:longpress={goToLastPage}
       longPressDuration={500}
       hapticFeedback={true}
-      preventDefault={false}
+      preventDefault={true}
     >
       <div class="touch-zone right"></div>
     </GestureButton>
@@ -1869,5 +1644,4 @@
   <div bind:this={viewerEl} class="viewer pdfViewer"></div>
   <!-- pdfjs-dist css hooks on .pdfViewer and .viewer -->
   
-</div>
 </div>
