@@ -32,6 +32,7 @@
   // Estado para controlar visibilidade da barra superior (fullscreen)
   // Sempre começa como true (barra visível) quando a página é carregada
   let isToolbarVisible = true;
+  let initialToolbarVisibilityEnsured = false;
 
   $: searchParams = new URLSearchParams($page.url.search);
   $: file = searchParams.get('file') ?? '/pdfs/exemplo.pdf';
@@ -426,6 +427,7 @@
     
     // Sempre garantir que a barra esteja visível ao carregar a página
     isToolbarVisible = true;
+    initialToolbarVisibilityEnsured = false;
     
     // Add storage event listener for carousel synchronization between tabs
     let storageHandler: ((e: StorageEvent) => void) | null = null;
@@ -446,6 +448,8 @@
 
     if (!containerEl || !viewerEl) return;
     syncContainerTopFromToolbar();
+    // Reforço leve no primeiro frame para evitar estado inicial com barra oculta.
+    requestAnimationFrame(() => ensureInitialToolbarVisibility());
 
     let roTopDebounce: ReturnType<typeof setTimeout> | null = null;
     const ro = new ResizeObserver(() => {
@@ -607,6 +611,7 @@
     eventBus.on('pagesloaded', (e: any) => {
       totalPages = e?.pagesCount ?? totalPages;
       currentPage = (viewer as any)?.currentPageNumber ?? currentPage;
+      ensureInitialToolbarVisibility();
       resetFitModeScrollPosition();
       requestAnimationFrame(() => resetFitModeScrollPosition());
       setTimeout(() => {
@@ -773,6 +778,22 @@
       topSyncRafId = 0;
       syncContainerTopFromToolbar();
     });
+  }
+
+  /**
+   * Em navegação SPA (sem reload), garante uma única vez que a barra não fique oculta
+   * por estado transitório durante o bootstrap inicial.
+   */
+  function ensureInitialToolbarVisibility() {
+    if (initialToolbarVisibilityEnsured) return;
+    initialToolbarVisibilityEnsured = true;
+    if (!isToolbarVisible) {
+      isToolbarVisible = true;
+    }
+    scheduleContainerTopSync();
+    if (eventBus) {
+      eventBus.dispatch('resize', {});
+    }
   }
   function goToFirstPage() {
     if (!viewer) return;
