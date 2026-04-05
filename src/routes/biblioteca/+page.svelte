@@ -807,10 +807,10 @@
       <div class="louvores-catalog-banner__copy">
         <h2 class="louvores-catalog-banner__title font-garamond">Atualizar a lista de louvores</h2>
         <p class="louvores-catalog-banner__text">
-          Obtém no servidor a versão mais recente do catálogo (músicas, categorias e referências aos PDFs). As
-          alterações passam a valer aqui na biblioteca e na busca da página inicial. Use quando houver músicas
-          novas ou correções publicadas. É necessário estar online; em conexões lentas o processo pode levar
-          alguns segundos.
+          Obtém do servidor a versão mais recente do catálogo (louvores, categorias e referências aos PDFs). As
+          alterações passam a valer aqui na biblioteca e na busca da página inicial. Use quando houver louvores
+          novos ou correções publicadas. É necessário estar online; em conexões lentas o processo pode levar
+          alguns segundos ou corromper, necessitando tentar novamente.
         </p>
       </div>
       <button
