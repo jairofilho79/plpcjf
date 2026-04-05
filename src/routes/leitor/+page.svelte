@@ -1122,12 +1122,15 @@
     top: 0;
     left: 0;
     right: 0;
-    height: 56px;
+    /* Área útil ~56px + notch/status (viewport-fit=cover). offsetHeight passa a incluir o inset — alinhado ao JS do container. */
+    min-height: calc(56px + env(safe-area-inset-top, 0px));
+    height: auto;
     display: grid;
     grid-template-columns: 1fr max-content max-content repeat(4, max-content);
     grid-template-rows: repeat(3, 1fr);
     column-gap: 8px;
-    padding: 0 calc(12px + env(safe-area-inset-right)) 0 calc(12px + env(safe-area-inset-left));
+    padding: env(safe-area-inset-top, 0px) calc(12px + env(safe-area-inset-right, 0px)) 0
+      calc(12px + env(safe-area-inset-left, 0px));
     background: var(--background-color);
     color: var(--text-light);
     border-bottom: 4px solid var(--gold-color);
@@ -1135,7 +1138,7 @@
     align-items: center;
     box-sizing: border-box;
     width: 100%;
-    max-width: 100vw;
+    max-width: 100%;
     overflow: hidden;
     transition: transform 0.3s ease, opacity 0.3s ease;
   }
@@ -1439,7 +1442,7 @@
   
   .pdf-error-banner {
     position: fixed;
-    top: 60px;
+    top: calc(60px + env(safe-area-inset-top, 0px));
     left: 50%;
     transform: translateX(-50%);
     max-width: 90%;
@@ -1479,8 +1482,8 @@
   
   .fab-exit-fullscreen {
     position: fixed;
-    top: calc(12px + env(safe-area-inset-top));
-    right: calc(12px + env(safe-area-inset-right));
+    top: calc(12px + env(safe-area-inset-top, 0px));
+    right: calc(12px + env(safe-area-inset-right, 0px));
     width: 44px;
     height: 44px;
     background: white;

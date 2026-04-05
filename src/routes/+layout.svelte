@@ -16,7 +16,9 @@
     requestIdleCallback 
   } from '$lib/utils/pdfjsLoader';
   
-  // Handle overflow for /leitor route
+  // /leitor: evita scroll da página por trás do PDF. Atenção iOS Safari: overflow em html/body + fixed
+  // pode interagir mal com visualViewport/safe-area; se regressões persistirem, preferir overflow só no
+  // shell do leitor (feat/leitor-ios-safe-area-layout).
   $: if (browser && $page.url.pathname.startsWith('/leitor')) {
     document.documentElement.style.overflow = 'hidden';
     document.body.style.overflow = 'hidden';
