@@ -282,7 +282,7 @@ async function loadLouvoresManifestForInitialLoad() {
 export async function loadLouvores() {
   if (!browser) return;
 
-  louvoresLoadGeneration++;
+  const gen = ++louvoresLoadGeneration;
 
   try {
     if (!navigator.onLine) {
@@ -292,9 +292,11 @@ export async function loadLouvores() {
         return;
       }
       const result = await loadLouvoresManifestForInitialLoad();
+      if (gen !== louvoresLoadGeneration) return;
       if (result.ok) {
         const enriched = applyLouvoresManifest(result.data);
         await afterManifestLoaded(enriched);
+        if (gen !== louvoresLoadGeneration) return;
       } else {
         console.warn('[Louvores] manifest indisponível na carga inicial offline/sem cache válido:', result.reason);
       }
@@ -309,17 +311,22 @@ export async function loadLouvores() {
     }
 
     const result = await loadLouvoresManifestForInitialLoad();
+    if (gen !== louvoresLoadGeneration) return;
     if (!result.ok) {
       console.error('[Louvores] manifest inválido ou indisponível na carga inicial:', result.reason);
       louvoresLoaded.set(true);
       return;
     }
     const enriched = applyLouvoresManifest(result.data);
+    if (gen !== louvoresLoadGeneration) return;
     louvoresLoaded.set(true);
     await afterManifestLoaded(enriched);
+    if (gen !== louvoresLoadGeneration) return;
   } catch (error) {
     console.error('Error loading louvores:', error);
-    louvoresLoaded.set(true);
+    if (gen === louvoresLoadGeneration) {
+      louvoresLoaded.set(true);
+    }
   }
 }
 

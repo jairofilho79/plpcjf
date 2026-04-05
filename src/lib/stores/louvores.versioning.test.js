@@ -132,6 +132,35 @@ describe('louvores manifest (só atualização manual; sem versão)', () => {
     expect(get(louvores).map((item) => item.id)).toEqual(['ok']);
   });
 
+  it('loadLouvores descarta resultado obsoleto quando duas cargas concorrem', async () => {
+    vi.useFakeTimers();
+    const oldManifest = [{ id: 'old', nome: 'Antigo', pdfId: 'old1' }];
+    const newManifest = [{ id: 'new', nome: 'Novo', pdfId: 'new1' }];
+    let callCount = 0;
+
+    global.fetch = vi.fn(async (url) => {
+      if (url !== '/louvores-manifest.json') {
+        throw new Error(`Unexpected fetch URL: ${url}`);
+      }
+      callCount += 1;
+      if (callCount === 1) {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        return jsonResponse(oldManifest);
+      }
+      return jsonResponse(newManifest);
+    });
+
+    const { loadLouvores, louvores } = await import('./louvores.js');
+
+    const first = loadLouvores();
+    const second = loadLouvores();
+
+    await vi.runAllTimersAsync();
+    await Promise.all([first, second]);
+
+    expect(get(louvores).map((item) => item.id)).toEqual(['new']);
+  });
+
   it('forceRefreshLouvoresFromNetwork aplica manifesto válido', async () => {
     const freshManifest = [{ id: 'forced', nome: 'Forcado', pdfId: 'f1' }];
 
