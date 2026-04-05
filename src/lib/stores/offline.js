@@ -12,7 +12,7 @@ import {
   invalidateCachedPDFsLocal
 } from '$lib/utils/swRegistration';
 import { unzip } from 'fflate';
-import { louvores, LOUVORES_MANIFEST_VERSION_KEY } from './louvores';
+import { louvores } from './louvores';
 import { validateManifestsIntegrity } from '$lib/utils/manifestValidation';
 import { CATEGORY_OPTIONS } from './filters';
 import { atobUTF8 } from '$lib/utils/pathUtils';
@@ -2016,7 +2016,6 @@ async function clearAllCache() {
     localStorage.removeItem(ALLOW_OFFLINE_KEY);
     localStorage.removeItem(CACHED_PDFS_KEY);
     localStorage.removeItem(LAST_MANIFEST_HASH_KEY);
-    localStorage.removeItem(LOUVORES_MANIFEST_VERSION_KEY);
     localStorage.removeItem(SELECTED_CATEGORIES_KEY);
     localStorage.removeItem(DOWNLOADED_CATEGORIES_KEY);
     localStorage.removeItem(OFFLINE_CATEGORIAS_SALVAS);

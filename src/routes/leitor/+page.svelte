@@ -25,6 +25,7 @@
   let viewer: any;
   let cleanup: (() => void) | null = null;
   let toolbarEl: HTMLDivElement | null = null;
+  let leitorViewportEl: HTMLDivElement | null = null;
   let toolbarHeight = 60;
   // Estado para controlar visibilidade da barra superior (fullscreen)
   // Sempre começa como true (barra visível) quando a página é carregada
@@ -442,18 +443,19 @@
     }
 
     if (!containerEl || !viewerEl) return;
-    // Measure toolbar height (including border) and keep it updated
-    const updateToolbarHeight = () => {
-      if (isToolbarVisible) {
-        toolbarHeight = toolbarEl ? toolbarEl.offsetHeight : 60;
-      } else {
-        toolbarHeight = 0;
-      }
-      if (containerEl) containerEl.style.top = `${toolbarHeight}px`;
-    };
-    updateToolbarHeight();
-    const ro = new ResizeObserver(updateToolbarHeight);
+    syncContainerTopFromToolbar();
+    const ro = new ResizeObserver(() => {
+      syncContainerTopFromToolbar();
+    });
     if (toolbarEl) ro.observe(toolbarEl);
+    if (leitorViewportEl) ro.observe(leitorViewportEl);
+
+    const onVisualViewportChange = () => syncContainerTopFromToolbar();
+    const vv = window.visualViewport;
+    if (vv) {
+      vv.addEventListener('resize', onVisualViewportChange);
+      vv.addEventListener('scroll', onVisualViewportChange);
+    }
 
     // Carregar PDF.js completo (garantir viewer disponível antes de inicializar)
     // Mostrar feedback visual durante carregamento
@@ -516,6 +518,7 @@
     const resize = () => {
       // apenas notifica o viewer para recalcular o layout/textLayer
       eventBus.dispatch('resize', {});
+      requestAnimationFrame(() => syncContainerTopFromToolbar());
       // Adjust zoom after resize if in page-width mode
       // Force recalculate on resize since container width may have changed
       if (preferredFitMode === 'page-width') {
@@ -583,6 +586,8 @@
           viewer.currentScaleValue = preferredFitMode;
         }
       }
+      requestAnimationFrame(() => syncContainerTopFromToolbar());
+      setTimeout(() => syncContainerTopFromToolbar(), 0);
     });
     eventBus.on('scalechanging', (e: any) => {
       const newScale = e?.scale ?? (viewer as any)?.currentScale ?? 1;
@@ -597,6 +602,12 @@
     eventBus.on('pagesloaded', (e: any) => {
       totalPages = e?.pagesCount ?? totalPages;
       currentPage = (viewer as any)?.currentPageNumber ?? currentPage;
+      resetFitModeScrollPosition();
+      requestAnimationFrame(() => resetFitModeScrollPosition());
+      setTimeout(() => {
+        resetFitModeScrollPosition();
+        syncContainerTopFromToolbar();
+      }, 100);
       // Adjust zoom after pages are loaded if in page-width mode
       if (preferredFitMode === 'page-width') {
         if (pageWidthAdjustTimeout) clearTimeout(pageWidthAdjustTimeout);
@@ -608,7 +619,10 @@
     eventBus.on('pagechanging', (e: any) => {
       currentPage = e?.pageNumber ?? currentPage;
       resetFitModeScrollPosition();
-      requestAnimationFrame(() => resetFitModeScrollPosition());
+      requestAnimationFrame(() => {
+        resetFitModeScrollPosition();
+        syncContainerTopFromToolbar();
+      });
       // Adjust zoom when page changes if in page-width mode
       // Don't force recalculate - reuse cached scale
       if (preferredFitMode === 'page-width') {
@@ -644,7 +658,16 @@
         containerEl.removeEventListener('touchcancel', onTouchEnd);
         containerEl.removeEventListener('click', handleFirstInteraction, true);
       }
-      try { if (toolbarEl) ro.unobserve(toolbarEl); } catch {}
+      try {
+        if (toolbarEl) ro.unobserve(toolbarEl);
+      } catch {}
+      try {
+        if (leitorViewportEl) ro.unobserve(leitorViewportEl);
+      } catch {}
+      if (vv) {
+        vv.removeEventListener('resize', onVisualViewportChange);
+        vv.removeEventListener('scroll', onVisualViewportChange);
+      }
       // No explicit destroy API; let GC collect. Clear container contents.
       if (viewerEl) viewerEl.innerHTML = '';
     };
@@ -713,6 +736,21 @@
     // Em page-fit, evita deslocamento residual após swipe/troca de página.
     containerEl.scrollLeft = 0;
     containerEl.scrollTop = 0;
+  }
+
+  /** Topo do canvas = base da toolbar em coords do shell (iOS safe area / visual viewport). */
+  function syncContainerTopFromToolbar() {
+    if (typeof window === 'undefined' || !containerEl) return;
+    if (!isToolbarVisible || !toolbarEl) {
+      toolbarHeight = 0;
+      containerEl.style.top = '0px';
+      return;
+    }
+    const vpTop = leitorViewportEl?.getBoundingClientRect().top ?? 0;
+    const tb = toolbarEl.getBoundingClientRect();
+    const topPx = Math.max(0, Math.round(tb.bottom - vpTop));
+    toolbarHeight = topPx;
+    containerEl.style.top = `${topPx}px`;
   }
   function goToFirstPage() {
     if (!viewer) return;
@@ -982,15 +1020,8 @@
   // Função para toggle da barra superior (fullscreen)
   function toggleToolbar() {
     isToolbarVisible = !isToolbarVisible;
-    // Atualizar altura do container quando a barra é toggleada
-    if (containerEl) {
-      if (isToolbarVisible) {
-        toolbarHeight = toolbarEl ? toolbarEl.offsetHeight : 60;
-      } else {
-        toolbarHeight = 0;
-      }
-      containerEl.style.top = `${toolbarHeight}px`;
-    }
+    syncContainerTopFromToolbar();
+    requestAnimationFrame(() => syncContainerTopFromToolbar());
     
     // Disparar evento resize para notificar o PDF.js sobre a mudança de tamanho
     if (eventBus) {
@@ -1012,6 +1043,7 @@
           // Para page-fit, deixar o PDF.js recalcular automaticamente
           viewer.currentScaleValue = 'page-fit';
         }
+        syncContainerTopFromToolbar();
       }, 150);
     }
   }
@@ -1020,12 +1052,8 @@
   function showToolbar() {
     // Garantir que a barra seja mostrada
     isToolbarVisible = true;
-    
-    // Atualizar altura do container
-    if (containerEl) {
-      toolbarHeight = toolbarEl ? toolbarEl.offsetHeight : 60;
-      containerEl.style.top = `${toolbarHeight}px`;
-    }
+    syncContainerTopFromToolbar();
+    requestAnimationFrame(() => syncContainerTopFromToolbar());
     
     // Disparar evento resize para notificar o PDF.js sobre a mudança de tamanho
     if (eventBus) {
@@ -1047,18 +1075,19 @@
           // Para page-fit, deixar o PDF.js recalcular automaticamente
           viewer.currentScaleValue = 'page-fit';
         }
+        syncContainerTopFromToolbar();
       }, 150);
     }
   }
   
-  // Reativo: atualizar altura do container quando a visibilidade da barra mudar
-  $: if (containerEl) {
-    if (isToolbarVisible) {
-      toolbarHeight = toolbarEl ? toolbarEl.offsetHeight : 60;
-    } else {
-      toolbarHeight = 0;
-    }
-    containerEl.style.top = `${toolbarHeight}px`;
+  // Reativo: sincronizar topo do canvas quando refs ou visibilidade mudam
+  $: if (typeof window !== 'undefined' && containerEl) {
+    const _ = [isToolbarVisible, toolbarEl, leitorViewportEl];
+    void _;
+    queueMicrotask(() => {
+      syncContainerTopFromToolbar();
+      requestAnimationFrame(() => syncContainerTopFromToolbar());
+    });
   }
   
   // Reload if the file query param changes, but only when it actually changes
@@ -1143,7 +1172,7 @@
     right: 0;
     height: 56px;
     display: grid;
-    grid-template-columns: 1fr max-content max-content repeat(4, max-content);
+    grid-template-columns: minmax(0, 1fr) max-content max-content repeat(4, max-content);
     grid-template-rows: repeat(3, 1fr);
     column-gap: 8px;
     padding: 0 calc(12px + env(safe-area-inset-right)) 0 calc(12px + env(safe-area-inset-left));
@@ -1157,6 +1186,9 @@
     max-width: 100%;
     overflow: hidden;
     transition: transform 0.3s ease, opacity 0.3s ease;
+    /* Evita pan nativo da viewport ao arrastar a barra (iOS Safari). */
+    touch-action: none;
+    overscroll-behavior: none;
   }
   
   .toolbar.hidden {
@@ -1178,6 +1210,7 @@
     -webkit-user-select: none;
     -moz-user-select: none;
     -ms-user-select: none;
+    touch-action: manipulation;
   }
   .btn:hover { filter: brightness(1.05); }
   .btn .icon {
@@ -1192,6 +1225,7 @@
     grid-column: 2;
     grid-row: 1 / 4;
     align-self: center;
+    min-width: 0;
   }
   .title-main {
     font-weight: 600;
@@ -1256,7 +1290,14 @@
     z-index: 1;
   }
 
-  .indicator { display: flex; align-items: center; gap: 4px; min-width: 56px; justify-content: center; }
+  .indicator {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    min-width: 56px;
+    justify-content: center;
+    touch-action: manipulation;
+  }
   .indicator .current { font-variant-numeric: tabular-nums; }
   .indicator .total { opacity: .9; }
 
@@ -1384,7 +1425,7 @@
   /* Tablet+ layout: brand in its own column, title/subtitle to the right */
   @media (min-width: 768px) {
     .toolbar {
-      grid-template-columns: auto 1fr max-content repeat(6, max-content);
+      grid-template-columns: auto minmax(0, 1fr) max-content repeat(6, max-content);
     }
     .brand { grid-column: 1; grid-row: auto; align-self: center; }
     .title-wrap { grid-column: 2; grid-row: auto; }
@@ -1596,7 +1637,7 @@
   }
 </style>
 
-<div class="leitor-viewport">
+<div class="leitor-viewport" bind:this={leitorViewportEl}>
 <div class="toolbar" bind:this={toolbarEl} class:hidden={!isToolbarVisible}>
   <GestureButton
     on:click={goToHome}

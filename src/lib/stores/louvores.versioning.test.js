@@ -61,7 +61,7 @@ function jsonResponse(payload) {
   });
 }
 
-describe('louvores versioning refresh', () => {
+describe('louvores manifest (só atualização manual; sem versão)', () => {
   beforeEach(() => {
     vi.resetModules();
     vi.clearAllMocks();
@@ -72,100 +72,70 @@ describe('louvores versioning refresh', () => {
 
   afterEach(() => {
     vi.unstubAllGlobals();
+    vi.useRealTimers();
   });
 
-  it('replaces stale manifest with no-store fetch when version changes', async () => {
-    const staleManifest = [{ id: 'stale', nome: 'Manifesto Antigo', pdfId: 'abc' }];
-    const freshManifest = [{ id: 'fresh', nome: 'Manifesto Novo', pdfId: 'def' }];
+  it('loadLouvores busca o manifesto e não consulta louvores-version.json', async () => {
+    const manifest = [{ id: 'a', nome: 'Louvor A', pdfId: 'p1' }];
 
-    global.fetch = vi.fn(async (url, init = {}) => {
-      if (url === '/louvores-version.json') {
-        return jsonResponse({ version: 2 });
-      }
-
+    global.fetch = vi.fn(async (url) => {
       if (url === '/louvores-manifest.json') {
-        if (init?.cache === 'no-store') {
-          return jsonResponse(freshManifest);
-        }
-        return jsonResponse(staleManifest);
+        return jsonResponse(manifest);
       }
-
       throw new Error(`Unexpected fetch URL: ${url}`);
     });
 
-    const { loadLouvores, louvores, LOUVORES_MANIFEST_VERSION_KEY } = await import('./louvores.js');
-    localStorage.setItem(LOUVORES_MANIFEST_VERSION_KEY, '1');
+    const { loadLouvores, louvores } = await import('./louvores.js');
 
     await loadLouvores();
 
-    // First load can still use cached/stale manifest before background refresh.
-    expect(get(louvores).map((item) => item.id)).toEqual(['stale']);
-
-    // Allow microtask + async refresh chain to finish.
-    await Promise.resolve();
-    await new Promise((resolve) => setTimeout(resolve, 0));
-
-    expect(clearLouvoresManifestFromSwCacheMock).toHaveBeenCalledTimes(1);
-    expect(get(louvores).map((item) => item.id)).toEqual(['fresh']);
-    expect(localStorage.getItem(LOUVORES_MANIFEST_VERSION_KEY)).toBe('2');
-    expect(checkForNewPDFsMock).toHaveBeenCalledTimes(1);
-    expect(showInfoSnackbarMock).toHaveBeenCalledTimes(1);
-    expect(showSuccessSnackbarMock).toHaveBeenCalledTimes(1);
-    expect(showErrorSnackbarMock).not.toHaveBeenCalled();
-    expect(dismissSnackbarMock).toHaveBeenCalledTimes(1);
+    expect(global.fetch.mock.calls.every(([u]) => u === '/louvores-manifest.json')).toBe(true);
+    expect(get(louvores).map((item) => item.id)).toEqual(['a']);
+    expect(clearLouvoresManifestFromSwCacheMock).not.toHaveBeenCalled();
+    expect(showInfoSnackbarMock).not.toHaveBeenCalled();
+    expect(checkForNewPDFsMock).not.toHaveBeenCalled();
   });
 
-  it('when data is already in memory, refreshes directly in background with no-store', async () => {
-    const memoryManifest = [{ id: 'memory', nome: 'Em Memoria', pdfId: 'mem' }];
-    const freshManifest = [{ id: 'fresh-2', nome: 'Novo 2', pdfId: 'new2' }];
+  it('loadLouvores com dados em memória não refaz fetch', async () => {
+    const memoryManifest = [{ id: 'mem', nome: 'Em Memoria', pdfId: 'm1' }];
 
-    global.fetch = vi.fn(async (url, init = {}) => {
-      if (url === '/louvores-version.json') {
-        return jsonResponse({ version: 6 });
-      }
+    global.fetch = vi.fn();
 
-      if (url === '/louvores-manifest.json') {
-        if (init?.cache === 'no-store') {
-          return jsonResponse(freshManifest);
-        }
-        return jsonResponse(memoryManifest);
-      }
-
-      throw new Error(`Unexpected fetch URL: ${url}`);
-    });
-
-    const { loadLouvores, louvores, LOUVORES_MANIFEST_VERSION_KEY } = await import('./louvores.js');
-    localStorage.setItem(LOUVORES_MANIFEST_VERSION_KEY, '5');
-
+    const { loadLouvores, louvores } = await import('./louvores.js');
     louvores.set(memoryManifest);
+
     await loadLouvores();
 
-    // With in-memory data and version mismatch, should keep memory initially.
-    expect(get(louvores).map((item) => item.id)).toEqual(['memory']);
-
-    await Promise.resolve();
-    await new Promise((resolve) => setTimeout(resolve, 0));
-
-    expect(clearLouvoresManifestFromSwCacheMock).toHaveBeenCalledTimes(1);
-    expect(get(louvores).map((item) => item.id)).toEqual(['fresh-2']);
-    expect(localStorage.getItem(LOUVORES_MANIFEST_VERSION_KEY)).toBe('6');
-
-    const manifestFetchCalls = global.fetch.mock.calls.filter(([url]) => url === '/louvores-manifest.json');
-    expect(manifestFetchCalls).toHaveLength(1);
-    expect(manifestFetchCalls[0][1]).toMatchObject({ cache: 'no-store' });
-    expect(showInfoSnackbarMock).toHaveBeenCalledTimes(1);
-    expect(showSuccessSnackbarMock).toHaveBeenCalledTimes(1);
-    expect(showErrorSnackbarMock).not.toHaveBeenCalled();
-    expect(dismissSnackbarMock).toHaveBeenCalledTimes(1);
+    expect(global.fetch).not.toHaveBeenCalled();
+    expect(get(louvores).map((item) => item.id)).toEqual(['mem']);
+    expect(clearLouvoresManifestFromSwCacheMock).not.toHaveBeenCalled();
   });
 
-  it('forceRefreshLouvoresFromNetwork runs same pipeline when online', async () => {
+  it('loadLouvores tenta segunda onda no-store se a primeira resposta for vazia', async () => {
+    const valid = [{ id: 'ok', nome: 'OK', pdfId: 'x' }];
+
+    global.fetch = vi.fn(async (url, init = {}) => {
+      if (url !== '/louvores-manifest.json') {
+        throw new Error(`Unexpected fetch URL: ${url}`);
+      }
+      if (init.cache === 'no-store') {
+        return jsonResponse(valid);
+      }
+      return jsonResponse([]);
+    });
+
+    const { loadLouvores, louvores } = await import('./louvores.js');
+
+    await loadLouvores();
+
+    expect(global.fetch).toHaveBeenCalledTimes(2);
+    expect(get(louvores).map((item) => item.id)).toEqual(['ok']);
+  });
+
+  it('forceRefreshLouvoresFromNetwork aplica manifesto válido', async () => {
     const freshManifest = [{ id: 'forced', nome: 'Forcado', pdfId: 'f1' }];
 
     global.fetch = vi.fn(async (url, init = {}) => {
-      if (url === '/louvores-version.json') {
-        return jsonResponse({ version: 9 });
-      }
       if (url === '/louvores-manifest.json') {
         expect(init?.cache).toBe('no-store');
         return jsonResponse(freshManifest);
@@ -173,19 +143,81 @@ describe('louvores versioning refresh', () => {
       throw new Error(`Unexpected fetch URL: ${url}`);
     });
 
-    const { forceRefreshLouvoresFromNetwork, louvores, LOUVORES_MANIFEST_VERSION_KEY } = await import('./louvores.js');
-    localStorage.setItem(LOUVORES_MANIFEST_VERSION_KEY, '8');
+    const { forceRefreshLouvoresFromNetwork, louvores } = await import('./louvores.js');
 
     await forceRefreshLouvoresFromNetwork();
 
     expect(clearLouvoresManifestFromSwCacheMock).toHaveBeenCalledTimes(1);
     expect(get(louvores).map((item) => item.id)).toEqual(['forced']);
-    expect(localStorage.getItem(LOUVORES_MANIFEST_VERSION_KEY)).toBe('9');
     expect(checkForNewPDFsMock).toHaveBeenCalledTimes(1);
     expect(showInfoSnackbarMock).toHaveBeenCalledTimes(1);
     expect(showSuccessSnackbarMock).toHaveBeenCalledTimes(1);
     expect(showErrorSnackbarMock).not.toHaveBeenCalled();
     expect(dismissSnackbarMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('forceRefreshLouvoresFromNetwork reintenta após falha de rede e depois aplica', async () => {
+    vi.useFakeTimers();
+    const manifest = [{ nome: 'A', pdfId: '1' }];
+    let n = 0;
+    global.fetch = vi.fn(async (url) => {
+      if (url !== '/louvores-manifest.json') throw new Error('bad url');
+      n++;
+      if (n < 3) throw new Error('network');
+      return jsonResponse(manifest);
+    });
+
+    const { forceRefreshLouvoresFromNetwork, louvores } = await import('./louvores.js');
+
+    const p = forceRefreshLouvoresFromNetwork();
+    await vi.runAllTimersAsync();
+    await p;
+
+    expect(n).toBe(3);
+    expect(get(louvores).length).toBe(1);
+    expect(showSuccessSnackbarMock).toHaveBeenCalled();
+  });
+
+  it('forceRefreshLouvoresFromNetwork não substitui o store se o manifesto for vazio', async () => {
+    const existing = [{ id: 'keep', nome: 'Manter', pdfId: 'k1' }];
+
+    global.fetch = vi.fn(async (url, init = {}) => {
+      if (url === '/louvores-manifest.json' && init?.cache === 'no-store') {
+        return jsonResponse([]);
+      }
+      throw new Error(`Unexpected fetch URL: ${url}`);
+    });
+
+    const { forceRefreshLouvoresFromNetwork, louvores } = await import('./louvores.js');
+    louvores.set(existing);
+
+    await forceRefreshLouvoresFromNetwork();
+
+    expect(get(louvores).map((item) => item.id)).toEqual(['keep']);
+    expect(showErrorSnackbarMock).toHaveBeenCalled();
+    expect(showSuccessSnackbarMock).not.toHaveBeenCalled();
+    expect(checkForNewPDFsMock).not.toHaveBeenCalled();
+  });
+
+  it('prepareLouvoresManifestPayload normaliza nome numérico e ignora linhas sem pdfId', async () => {
+    const { prepareLouvoresManifestPayload } = await import('./louvores.js');
+    expect(prepareLouvoresManifestPayload([])).toBe(null);
+    expect(prepareLouvoresManifestPayload(null)).toBe(null);
+    const a = prepareLouvoresManifestPayload([{ nome: 'x', pdfId: 'p' }]);
+    expect(a).not.toBe(null);
+    expect(a?.[0].nome).toBe('x');
+    expect(prepareLouvoresManifestPayload([{ nome: 'x' }])).toBe(null);
+    expect(prepareLouvoresManifestPayload([{ pdfId: 'p' }])).not.toBe(null);
+    expect(prepareLouvoresManifestPayload([{ pdfId: 'p' }])?.[0].nome).toBe('');
+    const num = prepareLouvoresManifestPayload([{ nome: 42, pdfId: 'p' }]);
+    expect(num?.[0].nome).toBe('42');
+    const mixed = prepareLouvoresManifestPayload([
+      { nome: 'ok', pdfId: 'a' },
+      { nome: 'bad', pdfId: '' },
+      { nome: 'ok2', pdfId: 'b' }
+    ]);
+    expect(mixed?.length).toBe(2);
+    expect(mixed?.map((x) => x.pdfId)).toEqual(['a', 'b']);
   });
 
   it('forceRefreshLouvoresFromNetwork shows error and skips pipeline when offline', async () => {

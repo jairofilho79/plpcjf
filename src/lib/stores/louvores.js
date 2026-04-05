@@ -20,67 +20,153 @@ function applyLouvoresManifest(data) {
   return enriched;
 }
 
-/** Persisted when a manifest response has been successfully applied for a given server version. */
-export const LOUVORES_MANIFEST_VERSION_KEY = 'LOUVORES_MANIFEST_VERSION';
-
 /** @type {import('svelte/store').Writable<any[]>} */
 let louvores = writable([]);
 let louvoresLoaded = writable(false);
 
 let louvoresLoadGeneration = 0;
 
-function readStoredVersion() {
-  if (!browser || typeof localStorage === 'undefined') return null;
-  try {
-    const s = localStorage.getItem(LOUVORES_MANIFEST_VERSION_KEY);
-    if (s === null || s === '') return null;
-    const n = Number(s);
-    return Number.isFinite(n) ? n : null;
-  } catch {
-    return null;
-  }
+/** Tentativas por “onda” de fetch (conexão instável). */
+const MANIFEST_RETRY_MAX_ATTEMPTS = 4;
+const MANIFEST_RETRY_BASE_MS = 450;
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 /**
- * @param {Response} response
- * @returns {Promise<any[]>}
+ * Normaliza linhas e descarta só o que é claramente inútil (sem pdfId válido).
+ * Nome vira string (inclui número/boolean do JSON) para não rejeitar dados válidos por tipo.
+ *
+ * @param {unknown} raw
+ * @returns {any[] | null} null se não houver nenhuma linha aplicável
  */
-async function parseManifestFromResponse(response) {
-  try {
-    if (!response.ok) return [];
-    const data = await response.json();
-    return Array.isArray(data) ? data : [];
-  } catch {
-    return [];
+export function prepareLouvoresManifestPayload(raw) {
+  if (!Array.isArray(raw) || raw.length === 0) return null;
+  const out = [];
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') continue;
+    const pid = /** @type {{ pdfId?: unknown }} */ (item).pdfId;
+    if (pid === null || pid === undefined) continue;
+    if (typeof pid === 'string') {
+      if (pid.trim() === '') continue;
+    } else if (typeof pid === 'number') {
+      if (!Number.isFinite(pid)) continue;
+    } else {
+      continue;
+    }
+
+    let nome = '';
+    try {
+      const nomeRaw = /** @type {{ nome?: unknown }} */ (item).nome;
+      if (nomeRaw === null || nomeRaw === undefined) {
+        nome = '';
+      } else if (typeof nomeRaw === 'string') {
+        nome = nomeRaw;
+      } else {
+        nome = String(nomeRaw);
+      }
+    } catch {
+      continue;
+    }
+
+    out.push({ ...item, nome, pdfId: pid });
   }
+  return out.length > 0 ? out : null;
 }
 
 /**
  * @param {RequestInit} [init]
- * @returns {Promise<any[]>}
+ * @returns {Promise<{ kind: 'ok'; data: unknown[] } | { kind: 'http'; status: number } | { kind: 'transport' } | { kind: 'parse' } | { kind: 'shape' }>}
  */
-async function fetchAndParseLouvoresManifest(init) {
+async function fetchLouvoresManifestOnce(init) {
   try {
     const response = await fetch('/louvores-manifest.json', init);
-    return await parseManifestFromResponse(response);
+    if (!response.ok) {
+      return { kind: 'http', status: response.status };
+    }
+    try {
+      const data = await response.json();
+      if (!Array.isArray(data)) {
+        return { kind: 'shape' };
+      }
+      return { kind: 'ok', data };
+    } catch {
+      return { kind: 'parse' };
+    }
   } catch {
-    return [];
+    return { kind: 'transport' };
   }
 }
 
 /**
- * @returns {Promise<number|null>}
+ * @param {number} status
  */
-async function fetchRemoteVersion() {
-  try {
-    const res = await fetch('/louvores-version.json', { cache: 'no-store' });
-    if (!res.ok) return null;
-    const j = await res.json();
-    if (typeof j?.version === 'number' && Number.isFinite(j.version)) return j.version;
-    return null;
-  } catch {
-    return null;
+function shouldRetryHttpStatus(status) {
+  if (status === 408 || status === 429) return true;
+  if (status >= 500) return true;
+  return false;
+}
+
+/**
+ * Baixa o manifesto com várias tentativas (backoff) para falhas típicas de rede.
+ * Não confunde “lista vazia confirmada” (HTTP 200 + []) com falha transitória — não reintenta à toa nesse caso.
+ *
+ * @param {RequestInit} init
+ * @param {{ maxAttempts?: number; isCancelled?: () => boolean }} [options]
+ * @returns {Promise<{ ok: true; data: any[] } | { ok: false; reason: 'cancelled' | 'transport' | 'http' | 'parse' | 'shape' | 'empty' | 'filtered_empty' }>}
+ */
+export async function fetchLouvoresManifestPrepared(init, options = {}) {
+  const maxAttempts = options.maxAttempts ?? MANIFEST_RETRY_MAX_ATTEMPTS;
+  const isCancelled = options.isCancelled;
+
+  /** @type {'transport' | 'http' | 'parse' | 'shape' | 'empty' | 'filtered_empty'} */
+  let lastReason = 'transport';
+
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    if (isCancelled?.()) {
+      return { ok: false, reason: 'cancelled' };
+    }
+
+    if (attempt > 0) {
+      await sleep(MANIFEST_RETRY_BASE_MS * 2 ** (attempt - 1));
+      if (isCancelled?.()) {
+        return { ok: false, reason: 'cancelled' };
+      }
+    }
+
+    const res = await fetchLouvoresManifestOnce(init);
+
+    if (res.kind === 'http') {
+      lastReason = 'http';
+      if (!shouldRetryHttpStatus(res.status)) {
+        break;
+      }
+      continue;
+    }
+
+    if (res.kind === 'transport' || res.kind === 'parse' || res.kind === 'shape') {
+      lastReason = res.kind;
+      continue;
+    }
+
+    const raw = res.data;
+    if (raw.length === 0) {
+      lastReason = 'empty';
+      break;
+    }
+
+    const prepared = prepareLouvoresManifestPayload(raw);
+    if (prepared) {
+      return { ok: true, data: prepared };
+    }
+
+    lastReason = 'filtered_empty';
+    // Corpo JSON grande mas nenhuma linha válida: pode ser resposta truncada/corrompida — vale reintentar.
+    continue;
   }
+
+  return { ok: false, reason: lastReason };
 }
 
 /**
@@ -92,37 +178,61 @@ async function afterManifestLoaded(data) {
   updatePdfIndexInBackground(data);
 }
 
+function snackbarForManifestFailure(reason) {
+  if (reason === 'empty') {
+    return 'O servidor devolveu uma lista de louvores vazia. Os dados atuais foram mantidos.';
+  }
+  if (reason === 'filtered_empty') {
+    return 'A resposta não continha nenhum louvor utilizável (dados incompletos). Os dados atuais foram mantidos.';
+  }
+  if (reason === 'http') {
+    return 'O servidor não respondeu como esperado. Verifique a conexão e tente novamente. Os dados atuais foram mantidos.';
+  }
+  return 'Conexão instável ou resposta incompleta ao baixar o banco de louvores. Os dados atuais foram mantidos — tente de novo em instantes.';
+}
+
 /**
- * Refresh do banco de louvores na rede (SW → no-store → stores → versão opcional → índice → checkForNewPDFs).
- * Usado pelo refresh em background e por {@link forceRefreshLouvoresFromNetwork}.
+ * Atualização manual: limpa cache do SW, baixa com no-store, retries e só aplica payload preparado.
  *
- * @param {number | null} remoteVersion
  * @param {number} refreshGen
  */
-async function runLouvoresManifestNetworkRefresh(remoteVersion, refreshGen) {
+async function runLouvoresManifestNetworkRefresh(refreshGen) {
   if (refreshGen !== louvoresLoadGeneration) return;
   const refreshInfoId = `louvores-refresh-${refreshGen}`;
   showInfoSnackbar(
-    'Atualizando o banco de louvores. Aguarde até 10 segundos e não recarregue a aplicação.',
-    { id: refreshInfoId, durationMs: 10000 }
+    'Atualizando o banco de louvores. Em conexões lentas isso pode levar até ~15 segundos; não recarregue a página.',
+    { id: refreshInfoId, durationMs: 16000 }
   );
 
   try {
-    // Ordem obrigatória: limpar APP_CACHE do SW, depois rede com no-store (evita HTTP cache da rota + garante manifest alinhado à nova versão).
     await clearLouvoresManifestFromSwCache();
     if (refreshGen !== louvoresLoadGeneration) {
       dismissSnackbar(refreshInfoId);
       return;
     }
-    const data = await fetchAndParseLouvoresManifest({ cache: 'no-store' });
+
+    const result = await fetchLouvoresManifestPrepared(
+      { cache: 'no-store' },
+      {
+        maxAttempts: MANIFEST_RETRY_MAX_ATTEMPTS,
+        isCancelled: () => refreshGen !== louvoresLoadGeneration
+      }
+    );
+
     if (refreshGen !== louvoresLoadGeneration) {
       dismissSnackbar(refreshInfoId);
       return;
     }
-    const enriched = applyLouvoresManifest(data);
-    if (typeof remoteVersion === 'number' && Number.isFinite(remoteVersion)) {
-      localStorage.setItem(LOUVORES_MANIFEST_VERSION_KEY, String(remoteVersion));
+
+    if (!result.ok) {
+      dismissSnackbar(refreshInfoId);
+      if (result.reason !== 'cancelled') {
+        showErrorSnackbar(snackbarForManifestFailure(result.reason), { durationMs: 9000 });
+      }
+      return;
     }
+
+    const enriched = applyLouvoresManifest(result.data);
     await afterManifestLoaded(enriched);
     try {
       const { offline } = await import('$lib/stores/offline.js');
@@ -135,25 +245,15 @@ async function runLouvoresManifestNetworkRefresh(remoteVersion, refreshGen) {
   } catch (e) {
     console.error('[Louvores] manifest network refresh failed', e);
     dismissSnackbar(refreshInfoId);
-    showErrorSnackbar('Não foi possível atualizar o banco de louvores agora. Tente novamente em instantes.', {
-      durationMs: 5000
-    });
+    showErrorSnackbar(
+      'Não foi possível concluir a atualização. Os dados atuais foram mantidos — tente novamente.',
+      { durationMs: 7000 }
+    );
   }
 }
 
 /**
- * @param {number} remoteVersion
- * @param {number} scheduleGen
- */
-function scheduleBackgroundRefresh(remoteVersion, scheduleGen) {
-  queueMicrotask(() => {
-    void runLouvoresManifestNetworkRefresh(remoteVersion, scheduleGen);
-  });
-}
-
-/**
- * Atualização manual do banco de louvores na rede (mesmo pipeline do refresh em background).
- * Só executa com conexão; fora disso mostra snackbar e retorna.
+ * Atualização manual do banco de louvores na rede.
  */
 export async function forceRefreshLouvoresFromNetwork() {
   if (!browser) return;
@@ -162,86 +262,61 @@ export async function forceRefreshLouvoresFromNetwork() {
     return;
   }
   const gen = ++louvoresLoadGeneration;
-  const remoteVersion = await fetchRemoteVersion();
-  await runLouvoresManifestNetworkRefresh(remoteVersion, gen);
+  await runLouvoresManifestNetworkRefresh(gen);
+}
+
+async function loadLouvoresManifestForInitialLoad() {
+  let result = await fetchLouvoresManifestPrepared(
+    {},
+    { maxAttempts: MANIFEST_RETRY_MAX_ATTEMPTS }
+  );
+  if (result.ok) return result;
+
+  result = await fetchLouvoresManifestPrepared(
+    { cache: 'no-store' },
+    { maxAttempts: MANIFEST_RETRY_MAX_ATTEMPTS }
+  );
+  return result;
 }
 
 export async function loadLouvores() {
   if (!browser) return;
 
-  const gen = ++louvoresLoadGeneration;
+  louvoresLoadGeneration++;
 
   try {
-    const localVersion = readStoredVersion();
-
     if (!navigator.onLine) {
       const current = get(louvores);
       if (current.length > 0) {
         louvoresLoaded.set(true);
         return;
       }
-      const data = await fetchAndParseLouvoresManifest();
-      const enriched = applyLouvoresManifest(data);
+      const result = await loadLouvoresManifestForInitialLoad();
+      if (result.ok) {
+        const enriched = applyLouvoresManifest(result.data);
+        await afterManifestLoaded(enriched);
+      } else {
+        console.warn('[Louvores] manifest indisponível na carga inicial offline/sem cache válido:', result.reason);
+      }
       louvoresLoaded.set(true);
-      await afterManifestLoaded(enriched);
       return;
     }
 
-    const remoteVersion = await fetchRemoteVersion();
-
-    // Manifest grande na rede: primeira sincronização e cada bump de versão (fase rápida com cache SW antigo + fase background com clear + no-store).
-    // Se versão remota === local e já há dados em memória, não há fetch do manifest (evita ~1,3MB por visita).
-
-    if (remoteVersion === null) {
-      const data = await fetchAndParseLouvoresManifest();
-      const enriched = applyLouvoresManifest(data);
-      louvoresLoaded.set(true);
-      console.log(`Loaded ${enriched.length} louvores (degraded, no version endpoint)`);
-      await afterManifestLoaded(enriched);
-      return;
-    }
-
-    const versionMismatch = localVersion === null || remoteVersion !== localVersion;
     const hasMemory = get(louvores).length > 0;
-
-    if (!versionMismatch && hasMemory) {
-      louvoresLoaded.set(true);
-      return;
-    }
-
-    if (!versionMismatch && !hasMemory) {
-      const data = await fetchAndParseLouvoresManifest();
-      const enriched = applyLouvoresManifest(data);
-      louvoresLoaded.set(true);
-      localStorage.setItem(LOUVORES_MANIFEST_VERSION_KEY, String(remoteVersion));
-      console.log(`Loaded ${enriched.length} louvores from manifest`);
-      await afterManifestLoaded(enriched);
-      return;
-    }
-
-    // version bump
     if (hasMemory) {
       louvoresLoaded.set(true);
-      scheduleBackgroundRefresh(remoteVersion, gen);
       return;
     }
 
-    if (localVersion === null) {
-      const data = await fetchAndParseLouvoresManifest({ cache: 'no-store' });
-      const enriched = applyLouvoresManifest(data);
+    const result = await loadLouvoresManifestForInitialLoad();
+    if (!result.ok) {
+      console.error('[Louvores] manifest inválido ou indisponível na carga inicial:', result.reason);
       louvoresLoaded.set(true);
-      localStorage.setItem(LOUVORES_MANIFEST_VERSION_KEY, String(remoteVersion));
-      console.log(`Loaded ${enriched.length} louvores from manifest (first sync)`);
-      await afterManifestLoaded(enriched);
       return;
     }
-
-    const data = await fetchAndParseLouvoresManifest();
-    const enriched = applyLouvoresManifest(data);
+    const enriched = applyLouvoresManifest(result.data);
     louvoresLoaded.set(true);
-    console.log(`Loaded ${enriched.length} louvores from manifest (stale until background refresh)`);
     await afterManifestLoaded(enriched);
-    scheduleBackgroundRefresh(remoteVersion, gen);
   } catch (error) {
     console.error('Error loading louvores:', error);
     louvoresLoaded.set(true);
