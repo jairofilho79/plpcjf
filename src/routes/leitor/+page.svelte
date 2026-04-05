@@ -26,7 +26,6 @@
   let cleanup: (() => void) | null = null;
   let toolbarEl: HTMLDivElement | null = null;
   let leitorViewportEl: HTMLDivElement | null = null;
-  let toolbarHeight = 60;
   // Estado para controlar visibilidade da barra superior (fullscreen)
   // Sempre começa como true (barra visível) quando a página é carregada
   let isToolbarVisible = true;
@@ -450,13 +449,6 @@
     if (toolbarEl) ro.observe(toolbarEl);
     if (leitorViewportEl) ro.observe(leitorViewportEl);
 
-    const onVisualViewportChange = () => syncContainerTopFromToolbar();
-    const vv = window.visualViewport;
-    if (vv) {
-      vv.addEventListener('resize', onVisualViewportChange);
-      vv.addEventListener('scroll', onVisualViewportChange);
-    }
-
     // Carregar PDF.js completo (garantir viewer disponível antes de inicializar)
     // Mostrar feedback visual durante carregamento
     pdfLoading = true;
@@ -664,10 +656,6 @@
       try {
         if (leitorViewportEl) ro.unobserve(leitorViewportEl);
       } catch {}
-      if (vv) {
-        vv.removeEventListener('resize', onVisualViewportChange);
-        vv.removeEventListener('scroll', onVisualViewportChange);
-      }
       // No explicit destroy API; let GC collect. Clear container contents.
       if (viewerEl) viewerEl.innerHTML = '';
     };
@@ -742,14 +730,12 @@
   function syncContainerTopFromToolbar() {
     if (typeof window === 'undefined' || !containerEl) return;
     if (!isToolbarVisible || !toolbarEl) {
-      toolbarHeight = 0;
       containerEl.style.top = '0px';
       return;
     }
     const vpTop = leitorViewportEl?.getBoundingClientRect().top ?? 0;
     const tb = toolbarEl.getBoundingClientRect();
     const topPx = Math.max(0, Math.round(tb.bottom - vpTop));
-    toolbarHeight = topPx;
     containerEl.style.top = `${topPx}px`;
   }
   function goToFirstPage() {
@@ -1082,16 +1068,6 @@
         syncContainerTopFromToolbar();
       }, 150);
     }
-  }
-  
-  // Reativo: sincronizar topo do canvas quando refs ou visibilidade mudam
-  $: if (typeof window !== 'undefined' && containerEl) {
-    const _ = [isToolbarVisible, toolbarEl, leitorViewportEl];
-    void _;
-    queueMicrotask(() => {
-      syncContainerTopFromToolbar();
-      requestAnimationFrame(() => syncContainerTopFromToolbar());
-    });
   }
   
   // Reload if the file query param changes, but only when it actually changes

@@ -19,24 +19,10 @@
   // Handle overflow for /leitor route
   $: if (browser && $page.url.pathname.startsWith('/leitor')) {
     document.documentElement.style.overflow = 'hidden';
-    document.documentElement.style.height = '100%';
-    document.documentElement.style.overscrollBehavior = 'none';
     document.body.style.overflow = 'hidden';
-    document.body.style.position = 'fixed';
-    document.body.style.inset = '0';
-    document.body.style.width = '100%';
-    document.body.style.height = '100%';
-    document.body.style.overscrollBehavior = 'none';
   } else if (browser) {
     document.documentElement.style.overflow = '';
-    document.documentElement.style.height = '';
-    document.documentElement.style.overscrollBehavior = '';
     document.body.style.overflow = '';
-    document.body.style.position = '';
-    document.body.style.inset = '';
-    document.body.style.width = '';
-    document.body.style.height = '';
-    document.body.style.overscrollBehavior = '';
   }
   
   // Pré-carregamento inteligente baseado em rota
