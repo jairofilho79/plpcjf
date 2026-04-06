@@ -10,6 +10,10 @@
   import { registerServiceWorker, setupServiceWorkerMessageListener } from '$lib/utils/swRegistration';
   import { setupLouvoresManifestChecksumTriggers } from '$lib/stores/louvores';
   import { setupCacheSync } from '$lib/utils/cacheSync';
+  import {
+    installStaleChunkRecoveryListeners,
+    scheduleStaleRecoveryCounterReset
+  } from '$lib/utils/staleChunkRecovery';
   import { 
     getPdfJsPriority, 
     shouldPreload, 
@@ -63,6 +67,9 @@
   // Register service worker and setup sync on mount
   onMount(() => {
     if (browser) {
+      const removeStaleChunkListeners = installStaleChunkRecoveryListeners();
+      const cancelStaleRecoveryReset = scheduleStaleRecoveryCounterReset();
+
       // CORREÇÃO PARA STANDALONE: Garantir que o SvelteKit router processe a URL correta
       // Quando o Service Worker serve o shell root ('/'), o SvelteKit pode não ter
       // processado a URL real da barra de endereços ainda. Verificamos e corrigimos.
@@ -104,6 +111,8 @@
 
       return () => {
         removeLouvoresChecksumTriggers();
+        removeStaleChunkListeners();
+        cancelStaleRecoveryReset();
       };
     }
   });

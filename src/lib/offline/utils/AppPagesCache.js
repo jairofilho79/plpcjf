@@ -10,8 +10,8 @@ const logger = createLogger('AppPagesCache');
 
 // Cache name must match the one used in service worker
 // From sw.js: const APP_CACHE = `${CACHE_VERSION}-app`;
-// CACHE_VERSION = 'plpc-v3-dev'
-const APP_CACHE_NAME = 'plpc-v3-dev-app';
+// CACHE_VERSION = 'plpc-v4'
+const APP_CACHE_NAME = 'plpc-v4-app';
 
 // All application routes that should be cached
 const APP_ROUTES = [

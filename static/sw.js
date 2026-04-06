@@ -7,7 +7,7 @@ importScripts('/sw-utils.js');
 
 // IMPORTANT: Cache names must match OfflineConfig.js
 // All environments use the same cache name to avoid mismatches
-const CACHE_VERSION = 'plpc-v3-dev';
+const CACHE_VERSION = 'plpc-v4';
 const APP_CACHE = `${CACHE_VERSION}-app`;
 const PDF_CACHE = 'plpc-pdfs'; // Single cache name for all environments
 const PDFJS_CACHE = `${CACHE_VERSION}-pdfjs`;
@@ -480,6 +480,30 @@ self.addEventListener('fetch', (event) => {
           console.error('[SW] Failed to fetch package ZIP:', url.pathname, 'URL:', requestUrl, 'Error:', err, 'Error name:', err.name, 'Error message:', err.message);
           throw err;
         })
+    );
+    return;
+  }
+
+  // SvelteKit hashed assets: rede primeiro (evita shell novo + chunk antigo em cache / 404 em deploy).
+  const isSvelteKitHashedAsset =
+    !isNavigationRequest &&
+    (url.pathname.startsWith('/_app/immutable/') ||
+      url.pathname === '/_app/version.json' ||
+      url.pathname === '/_app/env.js');
+
+  if (!IS_DEV && isSvelteKitHashedAsset) {
+    event.respondWith(
+      fetch(event.request.clone(), { cache: 'no-cache' })
+        .then((response) => {
+          if (response && response.status === 200) {
+            const clone = response.clone();
+            caches.open(APP_CACHE).then((cache) => {
+              cache.put(event.request, clone);
+            });
+          }
+          return response;
+        })
+        .catch(() => caches.match(event.request))
     );
     return;
   }

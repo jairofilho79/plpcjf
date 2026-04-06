@@ -1,0 +1,119 @@
+/**
+ * Após deploy, o browser pode pedir chunks antigos (404). Sem tratativa, reload pode repetir o mesmo estado.
+ * Uma limpeza de SW + caches + reload costuma destravar; limitamos a 2 tentativas por sessão.
+ */
+
+import { browser } from '$app/environment';
+
+const STORAGE_KEY = 'plpcjf:staleChunkRecovery';
+/** Igual a `PDF_CACHE` em `static/sw.js` / OfflineConfig — nunca apagar na recuperação de chunk. */
+const PDF_CACHE_NAME = 'plpc-pdfs';
+
+/**
+ * Só remove caches criados pelo SW para shell/immutable e PDF.js embutido.
+ * Não mexe em `plpc-pdfs`, nem em caches `plpc-*` que não sigam esse padrão.
+ *
+ * @param {string} name
+ */
+function isSwShellOrPdfJsCache(name) {
+  if (name === PDF_CACHE_NAME) return false;
+  return /^plpc-v[\w-]+-app$/.test(name) || /^plpc-v[\w-]+-pdfjs$/.test(name);
+}
+
+function readState() {
+  try {
+    const raw = sessionStorage.getItem(STORAGE_KEY);
+    if (!raw) return { n: 0 };
+    const o = JSON.parse(raw);
+    return { n: Number(o.n) || 0 };
+  } catch {
+    return { n: 0 };
+  }
+}
+
+function matchesChunkFailureMessage(msg) {
+  if (!msg || typeof msg !== 'string') return false;
+  return (
+    /Failed to fetch dynamically imported module/i.test(msg) ||
+    /Importing a module script failed/i.test(msg) ||
+    /error loading dynamically imported module/i.test(msg) ||
+    /Loading chunk [\w-]+ failed/i.test(msg) ||
+    /ChunkLoadError/i.test(msg)
+  );
+}
+
+async function hardResetSwAndAppCaches() {
+  if (!browser) return;
+  try {
+    if ('serviceWorker' in navigator) {
+      const regs = await navigator.serviceWorker.getRegistrations();
+      await Promise.all(regs.map((r) => r.unregister()));
+    }
+    if (typeof caches !== 'undefined') {
+      const keys = await caches.keys();
+      await Promise.all(keys.filter(isSwShellOrPdfJsCache).map((k) => caches.delete(k)));
+    }
+  } catch (e) {
+    console.warn('[staleChunkRecovery] cleanup failed', e);
+  }
+}
+
+/**
+ * @param {string} reason
+ * @returns {Promise<boolean>} true se disparou reload
+ */
+export async function tryRecoverFromStaleDeployment(reason) {
+  if (!browser) return false;
+  const s = readState();
+  if (s.n >= 2) {
+    console.error('[staleChunkRecovery] Desistindo após 2 tentativas:', reason);
+    return false;
+  }
+  sessionStorage.setItem(STORAGE_KEY, JSON.stringify({ n: s.n + 1, at: Date.now() }));
+  console.warn('[staleChunkRecovery] Tentativa', s.n + 1, reason);
+  await hardResetSwAndAppCaches();
+  window.location.reload();
+  return true;
+}
+
+/**
+ * @returns {() => void} cleanup
+ */
+export function installStaleChunkRecoveryListeners() {
+  if (!browser) return () => {};
+
+  const onRejection = (ev) => {
+    const msg = ev.reason?.message || String(ev.reason || '');
+    if (!matchesChunkFailureMessage(msg)) return;
+    ev.preventDefault?.();
+    void tryRecoverFromStaleDeployment(msg);
+  };
+
+  const onError = (ev) => {
+    const t = ev.target;
+    if (!t || t.tagName !== 'SCRIPT' || !t.src) return;
+    if (!t.src.includes('/_app/')) return;
+    void tryRecoverFromStaleDeployment(`script:${t.src}`);
+  };
+
+  window.addEventListener('unhandledrejection', onRejection);
+  window.addEventListener('error', onError, true);
+
+  return () => {
+    window.removeEventListener('unhandledrejection', onRejection);
+    window.removeEventListener('error', onError, true);
+  };
+}
+
+/** Reseta o contador após carga estável (permite recuperar num deploy futuro na mesma sessão). */
+export function scheduleStaleRecoveryCounterReset() {
+  if (!browser) return () => {};
+  const id = window.setTimeout(() => {
+    try {
+      sessionStorage.removeItem(STORAGE_KEY);
+    } catch {
+      /* ignore */
+    }
+  }, 12_000);
+  return () => window.clearTimeout(id);
+}

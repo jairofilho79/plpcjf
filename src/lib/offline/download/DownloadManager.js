@@ -546,9 +546,9 @@ export class DownloadManager {
               ? packageUrl 
               : `${packageDownloader.basePath}/${packageUrl}`;
             
-            // Remove from APP_CACHE (plpc-v3-dev-app) where Service Worker might have cached it
+            // Remove from APP_CACHE (plpc-v4-app) where Service Worker might have cached it
             if (typeof caches !== 'undefined') {
-              const cache = await caches.open('plpc-v3-dev-app');
+              const cache = await caches.open('plpc-v4-app');
               const packageRequest = new Request(fullPackageUrl);
               const deleted = await cache.delete(packageRequest);
               if (deleted) {

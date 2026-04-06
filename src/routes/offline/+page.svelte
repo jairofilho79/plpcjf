@@ -1238,7 +1238,7 @@
       // Clear offline manager cache (PDFs)
       await offlineManager.clearCache();
       
-      // Clear all caches including plpc-pdfs and plpc-v3-dev-app
+      // Clear all caches including plpc-pdfs e plpc-v4-app (ver static/sw.js CACHE_VERSION)
       if (typeof caches !== 'undefined') {
         try {
           // Clear plpc-pdfs cache (PDFs)
@@ -1248,7 +1248,7 @@
           console.log('[Offline Page] Cleared plpc-pdfs cache');
           
           // Clear app pages cache
-          const appCache = await caches.open('plpc-v3-dev-app');
+          const appCache = await caches.open('plpc-v4-app');
           const appKeys = await appCache.keys();
           await Promise.all(appKeys.map(key => appCache.delete(key)));
           console.log('[Offline Page] Cleared app pages cache');
@@ -1263,11 +1263,11 @@
           }
           
           try {
-            await caches.delete('plpc-v3-dev-app');
-            console.log('[Offline Page] Deleted plpc-v3-dev-app cache entirely');
+            await caches.delete('plpc-v4-app');
+            console.log('[Offline Page] Deleted plpc-v4-app cache entirely');
           } catch (e) {
             // Ignore if cache doesn't exist or can't be deleted
-            console.debug('[Offline Page] Could not delete plpc-v3-dev-app cache entirely:', e);
+            console.debug('[Offline Page] Could not delete plpc-v4-app cache entirely:', e);
           }
         } catch (error) {
           console.warn('[Offline Page] Error clearing caches:', error);
