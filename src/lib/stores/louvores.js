@@ -3,6 +3,18 @@ import { browser } from '$app/environment';
 import { clearLouvoresManifestFromSwCache } from '$lib/utils/swRegistration';
 import { tokensContent, normalizeForSearch } from '$lib/utils/louvorSearch';
 import { dismissSnackbar, showErrorSnackbar, showInfoSnackbar, showSuccessSnackbar } from '$lib/utils/appSnackbar.js';
+import {
+  LOUVORES_MANIFEST_CHECKSUM_URL,
+  isManifestSyncBlocked,
+  parseExpectedChecksumFromResponseBody,
+  readManifestBodySha256,
+  recordManifestSyncFailure,
+  resetManifestSyncPenalty,
+  sha256HexUtf8,
+  shouldFetchExpectedChecksum,
+  writeChecksumLastOkAt,
+  writeManifestBodySha256
+} from '$lib/utils/louvoresManifestChecksum.js';
 
 /**
  * Enrich manifest rows with precomputed title tokens and replace store contents.
@@ -25,6 +37,9 @@ let louvores = writable([]);
 let louvoresLoaded = writable(false);
 
 let louvoresLoadGeneration = 0;
+
+/** Evita corridas no poll automático de checksum. */
+let louvoresChecksumCheckRunning = false;
 
 /** Tentativas por “onda” de fetch (conexão instável). */
 const MANIFEST_RETRY_MAX_ATTEMPTS = 4;
@@ -77,7 +92,7 @@ export function prepareLouvoresManifestPayload(raw) {
 
 /**
  * @param {RequestInit} [init]
- * @returns {Promise<{ kind: 'ok'; data: unknown[] } | { kind: 'http'; status: number } | { kind: 'transport' } | { kind: 'parse' } | { kind: 'shape' }>}
+ * @returns {Promise<{ kind: 'ok'; data: unknown[]; rawSha256: string } | { kind: 'http'; status: number } | { kind: 'transport' } | { kind: 'parse' } | { kind: 'shape' }>}
  */
 async function fetchLouvoresManifestOnce(init) {
   try {
@@ -85,15 +100,28 @@ async function fetchLouvoresManifestOnce(init) {
     if (!response.ok) {
       return { kind: 'http', status: response.status };
     }
+    let text;
     try {
-      const data = await response.json();
-      if (!Array.isArray(data)) {
-        return { kind: 'shape' };
-      }
-      return { kind: 'ok', data };
+      text = await response.text();
+    } catch {
+      return { kind: 'transport' };
+    }
+    let rawSha256;
+    try {
+      rawSha256 = await sha256HexUtf8(text);
+    } catch {
+      return { kind: 'transport' };
+    }
+    let data;
+    try {
+      data = JSON.parse(text);
     } catch {
       return { kind: 'parse' };
     }
+    if (!Array.isArray(data)) {
+      return { kind: 'shape' };
+    }
+    return { kind: 'ok', data, rawSha256 };
   } catch {
     return { kind: 'transport' };
   }
@@ -114,7 +142,7 @@ function shouldRetryHttpStatus(status) {
  *
  * @param {RequestInit} init
  * @param {{ maxAttempts?: number; isCancelled?: () => boolean }} [options]
- * @returns {Promise<{ ok: true; data: any[] } | { ok: false; reason: 'cancelled' | 'transport' | 'http' | 'parse' | 'shape' | 'empty' | 'filtered_empty' }>}
+ * @returns {Promise<{ ok: true; data: any[]; rawSha256: string } | { ok: false; reason: 'cancelled' | 'transport' | 'http' | 'parse' | 'shape' | 'empty' | 'filtered_empty' }>}
  */
 export async function fetchLouvoresManifestPrepared(init, options = {}) {
   const maxAttempts = options.maxAttempts ?? MANIFEST_RETRY_MAX_ATTEMPTS;
@@ -158,7 +186,7 @@ export async function fetchLouvoresManifestPrepared(init, options = {}) {
 
     const prepared = prepareLouvoresManifestPayload(raw);
     if (prepared) {
-      return { ok: true, data: prepared };
+      return { ok: true, data: prepared, rawSha256: res.rawSha256 };
     }
 
     lastReason = 'filtered_empty';
@@ -233,6 +261,8 @@ async function runLouvoresManifestNetworkRefresh(refreshGen) {
     }
 
     const enriched = applyLouvoresManifest(result.data);
+    writeManifestBodySha256(result.rawSha256);
+    resetManifestSyncPenalty();
     await afterManifestLoaded(enriched);
     try {
       const { offline } = await import('$lib/stores/offline.js');
@@ -294,6 +324,7 @@ export async function loadLouvores() {
       const result = await loadLouvoresManifestForInitialLoad();
       if (gen !== louvoresLoadGeneration) return;
       if (result.ok) {
+        writeManifestBodySha256(result.rawSha256);
         const enriched = applyLouvoresManifest(result.data);
         await afterManifestLoaded(enriched);
         if (gen !== louvoresLoadGeneration) return;
@@ -317,6 +348,7 @@ export async function loadLouvores() {
       louvoresLoaded.set(true);
       return;
     }
+    writeManifestBodySha256(result.rawSha256);
     const enriched = applyLouvoresManifest(result.data);
     if (gen !== louvoresLoadGeneration) return;
     louvoresLoaded.set(true);
@@ -328,6 +360,114 @@ export async function loadLouvores() {
       louvoresLoaded.set(true);
     }
   }
+}
+
+/**
+ * GET do checksum no Worker (24h, só com baseline e online). Se o esperado ≠ hash local,
+ * baixa o manifesto com no-store e só aplica se o SHA-256 do corpo for o esperado.
+ */
+export async function maybeCheckLouvoresManifestFromServer() {
+  if (!browser) return;
+  if (louvoresChecksumCheckRunning) return;
+  louvoresChecksumCheckRunning = true;
+  try {
+    const now = Date.now();
+    if (!navigator.onLine) return;
+    if (!shouldFetchExpectedChecksum(now, true)) return;
+
+    let res;
+    try {
+      res = await fetch(LOUVORES_MANIFEST_CHECKSUM_URL, { cache: 'no-store' });
+    } catch {
+      return;
+    }
+    if (res.status === 204) return;
+    if (!res.ok) return;
+
+    let bodyText;
+    try {
+      bodyText = await res.text();
+    } catch {
+      return;
+    }
+
+    const expected = parseExpectedChecksumFromResponseBody(bodyText);
+    if (!expected) return;
+
+    const localHash = readManifestBodySha256();
+    if (!localHash) return;
+
+    if (expected === localHash) {
+      writeChecksumLastOkAt(now);
+      return;
+    }
+
+    const tBlocked = Date.now();
+    if (isManifestSyncBlocked(tBlocked)) return;
+
+    try {
+      await clearLouvoresManifestFromSwCache();
+    } catch (e) {
+      console.warn('[Louvores] checksum sync: clear SW cache', e);
+    }
+
+    const mres = await fetchLouvoresManifestOnce({ cache: 'no-store' });
+    const tAfter = Date.now();
+    if (mres.kind !== 'ok') {
+      recordManifestSyncFailure(tAfter);
+      return;
+    }
+    if (mres.rawSha256 !== expected) {
+      recordManifestSyncFailure(tAfter);
+      return;
+    }
+    const prepared = prepareLouvoresManifestPayload(mres.data);
+    if (!prepared) {
+      recordManifestSyncFailure(tAfter);
+      return;
+    }
+
+    const enriched = applyLouvoresManifest(prepared);
+    await afterManifestLoaded(enriched);
+    try {
+      const { offline } = await import('$lib/stores/offline.js');
+      await offline.checkForNewPDFs();
+    } catch (e) {
+      console.warn('[Louvores] checksum sync: checkForNewPDFs', e);
+    }
+    writeManifestBodySha256(mres.rawSha256);
+    resetManifestSyncPenalty();
+    writeChecksumLastOkAt(Date.now());
+    console.info('[Louvores] Catálogo atualizado automaticamente (checksum).');
+  } finally {
+    louvoresChecksumCheckRunning = false;
+  }
+}
+
+/**
+ * Registra gatilhos (online, visibilidade, idle) e devolve cleanup.
+ * @returns {() => void}
+ */
+export function setupLouvoresManifestChecksumTriggers() {
+  if (!browser) return () => {};
+  const run = () => {
+    void maybeCheckLouvoresManifestFromServer();
+  };
+  const onOnline = () => run();
+  const onVis = () => {
+    if (document.visibilityState === 'visible') run();
+  };
+  window.addEventListener('online', onOnline);
+  document.addEventListener('visibilitychange', onVis);
+  if (typeof requestIdleCallback === 'function') {
+    requestIdleCallback(() => run(), { timeout: 8000 });
+  } else {
+    setTimeout(run, 4000);
+  }
+  return () => {
+    window.removeEventListener('online', onOnline);
+    document.removeEventListener('visibilitychange', onVis);
+  };
 }
 
 export { louvores, louvoresLoaded };

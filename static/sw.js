@@ -431,6 +431,19 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
+  // louvores-manifest.sha256: sempre rede, no-store — nunca APP_CACHE (checksum precisa ser fresco)
+  if (url.pathname === '/louvores-manifest.sha256') {
+    event.respondWith(
+      fetch(event.request.clone(), { cache: 'no-store' })
+        .then((response) => response)
+        .catch((err) => {
+          console.warn('[SW] louvores-manifest.sha256 fetch failed:', err);
+          throw err;
+        })
+    );
+    return;
+  }
+
   // Handle package ZIP files - do NOT cache these (they are temporary downloads)
   // Packages are downloaded, extracted, and then should be removed from cache
   const isPackageZip = !isNavigationRequest && 
