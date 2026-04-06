@@ -442,6 +442,48 @@
     }
 
     if (!containerEl || !viewerEl) return;
+
+    // ── DEBUG: diagnóstico iOS safe-area ──
+    const debugSafeArea = () => {
+      const cs = getComputedStyle(document.documentElement);
+      const saTop = cs.getPropertyValue('env(safe-area-inset-top)') || 'N/A (getPropertyValue)';
+      const probe = document.createElement('div');
+      probe.style.cssText = 'position:fixed;top:0;left:0;width:0;padding-top:env(safe-area-inset-top,0px);visibility:hidden;';
+      document.body.appendChild(probe);
+      const saTopPx = probe.offsetHeight;
+      probe.remove();
+
+      const tbRect = toolbarEl?.getBoundingClientRect();
+      const tbComputed = toolbarEl ? getComputedStyle(toolbarEl) : null;
+      const vv = window.visualViewport;
+
+      console.group('[DIAG] iOS Safe Area & Toolbar');
+      console.log('safe-area-inset-top (probe):', saTopPx, 'px');
+      console.log('safe-area-inset-top (getPropertyValue):', saTop);
+      console.log('toolbar offsetHeight:', toolbarEl?.offsetHeight);
+      console.log('toolbar getBoundingClientRect:', JSON.stringify(tbRect));
+      console.log('toolbar computed paddingTop:', tbComputed?.paddingTop);
+      console.log('toolbar computed minHeight:', tbComputed?.minHeight);
+      console.log('toolbar computed height:', tbComputed?.height);
+      console.log('window.innerHeight:', window.innerHeight);
+      console.log('window.innerWidth:', window.innerWidth);
+      console.log('document.documentElement.clientHeight:', document.documentElement.clientHeight);
+      console.log('document.documentElement.clientWidth:', document.documentElement.clientWidth);
+      console.log('visualViewport height:', vv?.height, 'width:', vv?.width, 'offsetTop:', vv?.offsetTop, 'scale:', vv?.scale);
+      console.log('document.documentElement overflow:', document.documentElement.style.overflow);
+      console.log('document.body overflow:', document.body.style.overflow);
+      console.log('navigator.userAgent:', navigator.userAgent);
+      console.log('screen.height:', screen.height, 'screen.width:', screen.width);
+      console.groupEnd();
+    };
+    setTimeout(debugSafeArea, 1000);
+    setTimeout(debugSafeArea, 3000);
+    window.addEventListener('resize', () => { console.log('[DIAG] resize event'); debugSafeArea(); });
+    if (window.visualViewport) {
+      window.visualViewport.addEventListener('resize', () => { console.log('[DIAG] visualViewport resize'); debugSafeArea(); });
+    }
+    // ── FIM DEBUG ──
+
     const updateToolbarHeight = () => {
       if (isToolbarVisible) {
         toolbarHeight = toolbarEl ? toolbarEl.offsetHeight : 60;
@@ -449,9 +491,10 @@
         toolbarHeight = 0;
       }
       if (containerEl) containerEl.style.top = `${toolbarHeight}px`;
+      console.log('[DIAG] updateToolbarHeight:', toolbarHeight, 'visible:', isToolbarVisible);
     };
     updateToolbarHeight();
-    const ro = new ResizeObserver(updateToolbarHeight);
+    const ro = new ResizeObserver(() => { updateToolbarHeight(); debugSafeArea(); });
     if (toolbarEl) ro.observe(toolbarEl);
 
     // Carregar PDF.js completo (garantir viewer disponível antes de inicializar)
