@@ -75,7 +75,7 @@ describe('louvores manifest (só atualização manual; sem versão)', () => {
     vi.useRealTimers();
   });
 
-  it('loadLouvores busca o manifesto e não consulta louvores-version.json', async () => {
+  it('loadLouvores busca apenas o manifesto', async () => {
     const manifest = [{ id: 'a', nome: 'Louvor A', pdfId: 'p1' }];
 
     global.fetch = vi.fn(async (url) => {
