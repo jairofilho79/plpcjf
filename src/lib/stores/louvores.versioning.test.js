@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { get } from 'svelte/store';
+import { LS_MANIFEST_BODY_SHA256, sha256HexUtf8 } from '$lib/utils/louvoresManifestChecksum.js';
 
 vi.mock('$app/environment', () => ({
   browser: true
@@ -96,12 +97,13 @@ describe('louvores manifest (só atualização manual; sem versão)', () => {
     expect(checkForNewPDFsMock).not.toHaveBeenCalled();
   });
 
-  it('loadLouvores com dados em memória não refaz fetch', async () => {
+  it('loadLouvores com dados em memória e baseline salvo não refaz fetch', async () => {
     const memoryManifest = [{ id: 'mem', nome: 'Em Memoria', pdfId: 'm1' }];
 
     global.fetch = vi.fn();
 
     const { loadLouvores, louvores } = await import('./louvores.js');
+    localStorage.setItem(LS_MANIFEST_BODY_SHA256, 'a'.repeat(64));
     louvores.set(memoryManifest);
 
     await loadLouvores();
@@ -109,6 +111,57 @@ describe('louvores manifest (só atualização manual; sem versão)', () => {
     expect(global.fetch).not.toHaveBeenCalled();
     expect(get(louvores).map((item) => item.id)).toEqual(['mem']);
     expect(clearLouvoresManifestFromSwCacheMock).not.toHaveBeenCalled();
+  });
+
+  it('loadLouvores com dados em memória sem baseline busca manifesto, aplica payload e grava SHA-256', async () => {
+    const memoryManifest = [{ id: 'mem', nome: 'Em Memoria', pdfId: 'm1' }];
+    const body = JSON.stringify(memoryManifest);
+    const expectedHash = await sha256HexUtf8(body);
+
+    global.fetch = vi.fn(async (url) => {
+      if (url === '/louvores-manifest.json') {
+        return new Response(body, {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' }
+        });
+      }
+      throw new Error(`Unexpected fetch URL: ${url}`);
+    });
+
+    const { loadLouvores, louvores } = await import('./louvores.js');
+    louvores.set(memoryManifest);
+
+    await loadLouvores();
+
+    expect(global.fetch).toHaveBeenCalled();
+    expect(localStorage.getItem(LS_MANIFEST_BODY_SHA256)).toBe(expectedHash);
+    expect(get(louvores).map((item) => item.id)).toEqual(['mem']);
+    expect(clearLouvoresManifestFromSwCacheMock).not.toHaveBeenCalled();
+  });
+
+  it('loadLouvores sem baseline atualiza store em memória quando manifesto do servidor diverge', async () => {
+    const memoryManifest = [{ id: 'old', nome: 'Antigo', pdfId: 'o1' }];
+    const remoteManifest = [{ id: 'new', nome: 'Novo', pdfId: 'n1' }];
+    const body = JSON.stringify(remoteManifest);
+    const expectedHash = await sha256HexUtf8(body);
+
+    global.fetch = vi.fn(async (url) => {
+      if (url === '/louvores-manifest.json') {
+        return new Response(body, {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' }
+        });
+      }
+      throw new Error(`Unexpected fetch URL: ${url}`);
+    });
+
+    const { loadLouvores, louvores } = await import('./louvores.js');
+    louvores.set(memoryManifest);
+
+    await loadLouvores();
+
+    expect(localStorage.getItem(LS_MANIFEST_BODY_SHA256)).toBe(expectedHash);
+    expect(get(louvores).map((item) => item.id)).toEqual(['new']);
   });
 
   it('loadLouvores tenta segunda onda no-store se a primeira resposta for vazia', async () => {

@@ -309,6 +309,35 @@ async function loadLouvoresManifestForInitialLoad() {
   return result;
 }
 
+/**
+ * Se ainda não há hash do manifesto no localStorage, obtém o manifesto (cache → rede)
+ * e grava/aplica para manter hash e dados coerentes (útil quando loadLouvores saía cedo com dados em memória).
+ *
+ * @param {{ isCancelled?: () => boolean }} [options]
+ */
+async function ensureLouvoresManifestBodySha256Baseline(options = {}) {
+  if (readManifestBodySha256()) return;
+
+  const { isCancelled } = options;
+  if (isCancelled?.()) return;
+
+  let result = await fetchLouvoresManifestPrepared(
+    {},
+    { maxAttempts: MANIFEST_RETRY_MAX_ATTEMPTS, isCancelled }
+  );
+  if (!result.ok) {
+    result = await fetchLouvoresManifestPrepared(
+      { cache: 'no-store' },
+      { maxAttempts: MANIFEST_RETRY_MAX_ATTEMPTS, isCancelled }
+    );
+  }
+  if (!result.ok || isCancelled?.()) return;
+
+  writeManifestBodySha256(result.rawSha256);
+  const enriched = applyLouvoresManifest(result.data);
+  await afterManifestLoaded(enriched);
+}
+
 export async function loadLouvores() {
   if (!browser) return;
 
@@ -319,6 +348,9 @@ export async function loadLouvores() {
       const current = get(louvores);
       if (current.length > 0) {
         louvoresLoaded.set(true);
+        await ensureLouvoresManifestBodySha256Baseline({
+          isCancelled: () => gen !== louvoresLoadGeneration
+        });
         return;
       }
       const result = await loadLouvoresManifestForInitialLoad();
@@ -338,6 +370,9 @@ export async function loadLouvores() {
     const hasMemory = get(louvores).length > 0;
     if (hasMemory) {
       louvoresLoaded.set(true);
+      await ensureLouvoresManifestBodySha256Baseline({
+        isCancelled: () => gen !== louvoresLoadGeneration
+      });
       return;
     }
 
