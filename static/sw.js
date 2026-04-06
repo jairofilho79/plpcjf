@@ -396,24 +396,6 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // louvores-version.json: always prefer network when online; do not persist to APP_CACHE
-  if (url.pathname === '/louvores-version.json') {
-    event.respondWith(
-      (async () => {
-        try {
-          const res = await fetch(event.request, { cache: 'no-store' });
-          if (res && res.ok) return res;
-        } catch (e) {
-          console.warn('[SW] louvores-version network failed:', e);
-        }
-        const cached = await caches.match(event.request);
-        if (cached) return cached;
-        return fetch(event.request, { cache: 'no-store' });
-      })()
-    );
-    return;
-  }
-
   // Handle app shell and manifest requests (non-navigation)
   if (APP_SHELL.some(path => url.pathname === path || url.pathname.startsWith(path))) {
     event.respondWith(
@@ -444,6 +426,19 @@ self.addEventListener('fetch', (event) => {
         .catch(() => {
           // If cache.match fails entirely, try network
           return fetch(event.request);
+        })
+    );
+    return;
+  }
+
+  // louvores-manifest.sha256: sempre rede, no-store — nunca APP_CACHE (checksum precisa ser fresco)
+  if (url.pathname === '/louvores-manifest.sha256') {
+    event.respondWith(
+      fetch(event.request.clone(), { cache: 'no-store' })
+        .then((response) => response)
+        .catch((err) => {
+          console.warn('[SW] louvores-manifest.sha256 fetch failed:', err);
+          throw err;
         })
     );
     return;

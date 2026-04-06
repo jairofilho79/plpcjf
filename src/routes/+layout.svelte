@@ -8,6 +8,7 @@
   import OfflineIndicator from '$lib/components/OfflineIndicator.svelte';
   import AppSnackbarHost from '$lib/components/AppSnackbarHost.svelte';
   import { registerServiceWorker, setupServiceWorkerMessageListener } from '$lib/utils/swRegistration';
+  import { setupLouvoresManifestChecksumTriggers } from '$lib/stores/louvores';
   import { setupCacheSync } from '$lib/utils/cacheSync';
   import { 
     getPdfJsPriority, 
@@ -98,6 +99,12 @@
       
       // Pré-carregamento inteligente baseado na rota atual
       smartPreloadPdfJs();
+
+      const removeLouvoresChecksumTriggers = setupLouvoresManifestChecksumTriggers();
+
+      return () => {
+        removeLouvoresChecksumTriggers();
+      };
     }
   });
   
