@@ -420,14 +420,6 @@
           <div class="view-header-toolbar">
             <button
               type="button"
-              class="view-icon-danger-button"
-              on:click={(e) => handleRemove(viewingPlaylist, e)}
-              title="Apagar esta lista"
-            >
-              <Trash2 class="w-5 h-5" />
-            </button>
-            <button
-              type="button"
               class="favorite-filter-button"
               class:active={viewingPlaylist.favorita}
               on:click={(e) => {
@@ -438,6 +430,14 @@
               bind:this={viewFavoriteButtonElement}
             >
               <Star class="star-icon" />
+            </button>
+            <button
+              type="button"
+              class="view-icon-danger-button"
+              on:click={(e) => handleRemove(viewingPlaylist, e)}
+              title="Apagar esta lista"
+            >
+              <Trash2 class="w-5 h-5" />
             </button>
             <button type="button" class="close-view-button" on:click={closeView} title="Fechar visualização">
               <X class="w-5 h-5" />
@@ -1304,14 +1304,14 @@
     height: 2.5rem;
     background: none;
     border: none;
-    color: #dc3545;
+    color: var(--text-light);
     cursor: pointer;
     border-radius: 0.5rem;
     transition: background-color 0.2s ease, color 0.2s ease;
   }
 
   .view-icon-danger-button:hover {
-    background-color: rgba(220, 53, 69, 0.15);
+    background-color: rgba(255, 255, 255, 0.1);
   }
 
   .view-title {
@@ -1399,18 +1399,18 @@
     justify-content: center;
     width: 2.75rem;
     padding: 0;
-    border: 2px solid #dc3545;
+    border: 2px solid var(--gold-color);
     border-radius: 0.5rem;
     background: transparent;
-    color: #dc3545;
+    color: var(--text-light);
     cursor: pointer;
     transition: background-color 0.2s ease, color 0.2s ease;
     flex-shrink: 0;
   }
 
   .view-remove-louvor-button:hover {
-    background-color: #dc3545;
-    color: white;
+    background-color: rgba(212, 175, 55, 0.2);
+    color: var(--text-light);
   }
 
   .view-header-toolbar .close-view-button {
