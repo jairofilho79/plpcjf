@@ -973,32 +973,16 @@
     // Only react if count actually changed (not just on initial load)
     if (lastCachedPdfsCount > 0 && currentCount !== lastCachedPdfsCount) {
       console.log('[Offline Page] Cached PDFs count changed:', lastCachedPdfsCount, '->', currentCount);
-      
-      // Prevent recursive updates
       isProcessingCacheChange = true;
-      
-      // Invalidate all stats to force recalculation with new cache state
-      const allCategories = Object.keys(categoryStats);
-      if (allCategories.length > 0) {
-        invalidateCategories(allCategories);
-        allCategories.forEach(cat => {
-          statsCache.delete(cat);
-          statsCalculator.invalidateCategory(cat);
-        });
-        loadedCategories.clear();
-        
-        // Reload stats for all categories that have been loaded
-        loadCategoryStatsForCategories(allCategories, true)
-          .then(() => {
-            isProcessingCacheChange = false;
-          })
-          .catch(err => {
-            console.error('[Offline Page] Error reloading stats after cache change:', err);
-            isProcessingCacheChange = false;
-          });
-      } else {
+      scheduleCacheReconciliation({
+        source: 'state-cached-pdfs-change',
+        batch: true,
+        previousCount: lastCachedPdfsCount,
+        currentCount
+      });
+      setTimeout(() => {
         isProcessingCacheChange = false;
-      }
+      }, 300);
     }
     lastCachedPdfsCount = currentCount;
   }

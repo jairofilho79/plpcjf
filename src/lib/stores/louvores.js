@@ -15,6 +15,7 @@ import {
   writeChecksumLastOkAt,
   writeManifestBodySha256
 } from '$lib/utils/louvoresManifestChecksum.js';
+import { setManifestRevision } from '$lib/offline/core/OfflineRevision.js';
 
 /**
  * Enrich manifest rows with precomputed title tokens and replace store contents.
@@ -262,6 +263,7 @@ async function runLouvoresManifestNetworkRefresh(refreshGen) {
 
     const enriched = applyLouvoresManifest(result.data);
     writeManifestBodySha256(result.rawSha256);
+    setManifestRevision(result.rawSha256);
     resetManifestSyncPenalty();
     await afterManifestLoaded(enriched);
     try {
@@ -334,12 +336,18 @@ async function ensureLouvoresManifestBodySha256Baseline(options = {}) {
   if (!result.ok || isCancelled?.()) return;
 
   writeManifestBodySha256(result.rawSha256);
+  setManifestRevision(result.rawSha256);
   const enriched = applyLouvoresManifest(result.data);
   await afterManifestLoaded(enriched);
 }
 
 export async function loadLouvores() {
   if (!browser) return;
+
+  const localManifestHash = readManifestBodySha256();
+  if (localManifestHash) {
+    setManifestRevision(localManifestHash);
+  }
 
   const gen = ++louvoresLoadGeneration;
 
@@ -357,6 +365,7 @@ export async function loadLouvores() {
       if (gen !== louvoresLoadGeneration) return;
       if (result.ok) {
         writeManifestBodySha256(result.rawSha256);
+        setManifestRevision(result.rawSha256);
         const enriched = applyLouvoresManifest(result.data);
         await afterManifestLoaded(enriched);
         if (gen !== louvoresLoadGeneration) return;
@@ -384,6 +393,7 @@ export async function loadLouvores() {
       return;
     }
     writeManifestBodySha256(result.rawSha256);
+    setManifestRevision(result.rawSha256);
     const enriched = applyLouvoresManifest(result.data);
     if (gen !== louvoresLoadGeneration) return;
     louvoresLoaded.set(true);
@@ -471,6 +481,7 @@ export async function maybeCheckLouvoresManifestFromServer() {
       console.warn('[Louvores] checksum sync: checkForNewPDFs', e);
     }
     writeManifestBodySha256(mres.rawSha256);
+    setManifestRevision(mres.rawSha256);
     resetManifestSyncPenalty();
     writeChecksumLastOkAt(Date.now());
     console.info('[Louvores] Catálogo atualizado automaticamente (checksum).');

@@ -18,6 +18,15 @@ import { CATEGORY_OPTIONS } from './filters';
 import { atobUTF8 } from '$lib/utils/pathUtils';
 import { findMissingPdfs, findRequiredPackages } from '$lib/utils/pdfValidation';
 import { getConfig } from '$lib/offline/core/OfflineConfig.js';
+import {
+  bumpCacheRevision,
+  clearDownloadJobSnapshot,
+  clearOfflineRevisionState,
+  getLastSeenManifestRevision,
+  getManifestRevision,
+  markStaleRunningJobAsInterrupted,
+  setLastSeenManifestRevision
+} from '$lib/offline/core/OfflineRevision.js';
 import { 
   encodeUrlUtf8, 
   decodeUrlUtf8, 
@@ -44,6 +53,28 @@ const DEFAULT_PDF_CACHE_FALLBACK = getConfig('PDF_CACHE_NAME') || 'plpc-pdfs';
 let zipDownloadController = null;
 let isZipDownloadActive = false;
 let zipDownloadCancelled = false;
+
+/**
+ * Compare cached PDFs snapshots to decide if cache revision should be bumped.
+ * Order-independent comparison.
+ *
+ * @param {string[]} previousList
+ * @param {string[]} nextList
+ * @returns {boolean}
+ */
+function hasCachedPdfsChanged(previousList = [], nextList = []) {
+  if (previousList.length !== nextList.length) return true;
+  if (previousList.length === 0 && nextList.length === 0) return false;
+
+  const previousSorted = [...previousList].sort();
+  const nextSorted = [...nextList].sort();
+  for (let i = 0; i < previousSorted.length; i++) {
+    if (previousSorted[i] !== nextSorted[i]) {
+      return true;
+    }
+  }
+  return false;
+}
 
 /**
  * Normalize package URL - converts absolute URLs to relative paths
@@ -338,16 +369,7 @@ async function initialize() {
  */
 async function loadCachedPdfsList(forceRefresh = false, skipEvent = false, requireFresh = false) {
   try {
-    // FASE 4: Invalidar cache de stats quando recarregamos lista de PDFs
-    // pois os dados podem ter mudado
-    clearStatsCalculationCache();
-    // Invalidar também no StatsCalculator
-    try {
-      const { default: statsCalculator } = await import('$lib/offline/stats/StatsCalculator.js');
-      statsCalculator.invalidateAll();
-    } catch (e) {
-      // Ignorar erro se StatsCalculator não disponível
-    }
+    const previousCachedPdfs = get(offlineState).cachedPdfs || [];
     
     // If force refresh, invalidate local cache first
     if (forceRefresh && browser) {
@@ -358,6 +380,20 @@ async function loadCachedPdfsList(forceRefresh = false, skipEvent = false, requi
     const cachedUrls = await getCachedPDFsFast({
       preferFresh: forceRefresh || requireFresh
     });
+
+    const cacheChanged = hasCachedPdfsChanged(previousCachedPdfs, cachedUrls);
+    if (cacheChanged) {
+      bumpCacheRevision();
+
+      // Invalidate stats only when cache contents really changed.
+      clearStatsCalculationCache();
+      try {
+        const { default: statsCalculator } = await import('$lib/offline/stats/StatsCalculator.js');
+        statsCalculator.invalidateAll();
+      } catch (e) {
+        // Ignore if StatsCalculator is not available
+      }
+    }
     
     offlineState.update(state => ({
       ...state,
@@ -498,6 +534,22 @@ function getManifestHash(louvoresData) {
     .sort()
     .join('|');
   return sortedPdfs;
+}
+
+/**
+ * Keep legacy and revision-based manifest tracking aligned.
+ * @param {any[]} louvoresData
+ */
+function syncManifestTracking(louvoresData) {
+  if (!browser || !louvoresData || louvoresData.length === 0) return;
+
+  const currentHash = getManifestHash(louvoresData);
+  localStorage.setItem(LAST_MANIFEST_HASH_KEY, currentHash);
+
+  const manifestRevision = getManifestRevision();
+  if (manifestRevision) {
+    setLastSeenManifestRevision(manifestRevision);
+  }
 }
 
 async function openPdfCache() {
@@ -796,8 +848,7 @@ async function startZipDownloadWithSpecificParts(categories, pdfUrls, partsByCat
        */
       const louvoresData = get(louvores);
       if (louvoresData && louvoresData.length > 0) {
-        const currentHash = getManifestHash(louvoresData);
-        localStorage.setItem(LAST_MANIFEST_HASH_KEY, currentHash);
+        syncManifestTracking(louvoresData);
         
         // Update PDF index after ZIP extraction (force update after download)
         if (browser) {
@@ -1233,11 +1284,15 @@ async function checkForNewPDFs() {
   const louvoresData = get(louvores);
   if (!louvoresData || louvoresData.length === 0) return;
 
+  const manifestRevision = getManifestRevision();
+  const lastSeenManifestRevision = getLastSeenManifestRevision();
   const currentHash = getManifestHash(louvoresData);
   const lastHash = localStorage.getItem(LAST_MANIFEST_HASH_KEY);
+  const changedByRevision = !!manifestRevision && !!lastSeenManifestRevision && manifestRevision !== lastSeenManifestRevision;
+  const changedByLegacyHash = !manifestRevision && !!lastHash && lastHash !== currentHash;
 
   // First time or manifest changed
-  if (lastHash && lastHash !== currentHash) {
+  if (changedByRevision || changedByLegacyHash) {
     console.log('[Offline Store] Manifest changed, checking for new PDFs');
     
     const state = get(offlineState);
@@ -1276,6 +1331,9 @@ async function checkForNewPDFs() {
 
   // Save current hash
   localStorage.setItem(LAST_MANIFEST_HASH_KEY, currentHash);
+  if (manifestRevision) {
+    setLastSeenManifestRevision(manifestRevision);
+  }
 }
 
 /**
@@ -1513,8 +1571,7 @@ async function startDownload(pdfUrls, selectedCategories = []) {
        * @type {never[]}
        */
       const louvoresData = get(louvores);
-      const currentHash = getManifestHash(louvoresData);
-      localStorage.setItem(LAST_MANIFEST_HASH_KEY, currentHash);
+      syncManifestTracking(louvoresData);
     }
 
     // Reload cached PDFs list
@@ -1760,8 +1817,7 @@ async function startZipDownload(categories, pdfUrls, alreadyDownloadedCategories
        */
       const louvoresData = get(louvores);
       if (louvoresData && louvoresData.length > 0) {
-        const currentHash = getManifestHash(louvoresData);
-        localStorage.setItem(LAST_MANIFEST_HASH_KEY, currentHash);
+        syncManifestTracking(louvoresData);
         
         // Update PDF index after ZIP extraction
         if (browser) {
@@ -2066,6 +2122,8 @@ async function clearAllCache() {
     localStorage.removeItem(SELECTED_CATEGORIES_KEY);
     localStorage.removeItem(DOWNLOADED_CATEGORIES_KEY);
     localStorage.removeItem(OFFLINE_CATEGORIAS_SALVAS);
+    clearOfflineRevisionState();
+    clearDownloadJobSnapshot();
     
     // Reset state
     offlineState.set(initialState);
@@ -2127,6 +2185,19 @@ async function lazyInitialize() {
     return;
   }
   isInitialized = true;
+
+  const interruptedSnapshot = markStaleRunningJobAsInterrupted();
+  if (interruptedSnapshot?.status === 'interrupted') {
+    offlineState.update(state => ({
+      ...state,
+      error: interruptedSnapshot.error || 'Download interrompido antes da conclusao.',
+      progress: interruptedSnapshot.progress || state.progress,
+      completed: interruptedSnapshot.completed || state.completed,
+      failed: interruptedSnapshot.failed || state.failed,
+      total: interruptedSnapshot.total || state.total
+    }));
+  }
+
   await initialize();
 }
 

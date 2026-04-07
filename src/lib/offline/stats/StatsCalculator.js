@@ -7,10 +7,11 @@
 import cacheStorageAdapter from '../storage/CacheStorageAdapter.js';
 import urlNormalizer from '../normalization/UrlNormalizer.js';
 import { findMissingPdfs } from '$lib/utils/pdfValidation.js';
-import { getCachedStats, cacheStats, invalidateCategory, invalidateCategories, getAllCachedStats } from '$lib/utils/statsCache.js';
+import { getCachedStats, cacheStats, invalidateCategory, invalidateCategories, getAllCachedStats, isCacheValid } from '$lib/utils/statsCache.js';
 import { createLogger } from '../utils/OfflineLogger.js';
 import { browser } from '$app/environment';
 import { getCachedPDFsFast } from '$lib/utils/swRegistration.js';
+import { getCurrentStatsRevision } from '../core/OfflineRevision.js';
 
 const logger = createLogger('StatsCalculator');
 
@@ -285,21 +286,19 @@ class StatsCalculator {
   async sync(cachedPdfs = null) {
     logger.debug('StatsCalculator', 'Syncing stats with cache state');
 
-    // Get current cached PDFs if not provided
-    let currentCachedPdfs = cachedPdfs;
-    if (!currentCachedPdfs && browser) {
-      currentCachedPdfs = await getCachedPDFsFast();
+    // Keep API-compatible signature for callers that pass cached PDFs.
+    // Stats revision validation is authoritative for invalidation decisions.
+    void cachedPdfs;
+
+    // Cache validity now includes statsRevision match (manifestRevision + cacheRevision).
+    // Only invalidate when revision does not match.
+    if (!isCacheValid()) {
+      this.invalidateAll();
+      logger.debug('StatsCalculator', `Stats invalidated due to revision mismatch (revision=${getCurrentStatsRevision()})`);
+      return;
     }
 
-    // Get cached stats metadata to compare
-    const allCached = getAllCachedStats();
-    
-    // For now, we'll invalidate all and let them be recalculated on demand
-    // This is simpler and ensures consistency
-    // In the future, we could do incremental sync
-    this.invalidateAll();
-
-    logger.debug('StatsCalculator', 'Stats sync completed');
+    logger.debug('StatsCalculator', 'Stats cache is valid for current revision');
   }
 
   /**
@@ -343,7 +342,8 @@ class StatsCalculator {
       stats,
       timestamp: Date.now(),
       louvoresCount,
-      cachedPdfsCount
+      cachedPdfsCount,
+      statsRevision: getCurrentStatsRevision()
     });
 
     // Limit memory cache size (keep last 50)

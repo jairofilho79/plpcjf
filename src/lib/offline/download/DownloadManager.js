@@ -19,6 +19,10 @@ import { notifyCacheUpdate, updateCacheVersion } from '$lib/utils/cacheSync.js';
 import { invalidateCategory, invalidateCategories } from '$lib/utils/statsCache.js';
 import statsCalculator from '../stats/StatsCalculator.js';
 import cacheSync from '../storage/CacheSync.js';
+import {
+  getCurrentStatsRevision,
+  writeDownloadJobSnapshot
+} from '../core/OfflineRevision.js';
 
 const logger = createLogger('DownloadManager');
 
@@ -47,6 +51,8 @@ export class DownloadManager {
     this.progress = null;
     this.abortController = null;
     this.isDownloading = false;
+    this.currentJobId = null;
+    this.currentJobCategories = [];
   }
 
   /**
@@ -78,6 +84,20 @@ export class DownloadManager {
 
     this.isDownloading = true;
     this.abortController = new AbortController();
+    this.currentJobCategories = [...categories];
+    this.currentJobId = `offline-job-${Date.now()}`;
+    this._updateJobSnapshot({
+      jobId: this.currentJobId,
+      status: 'running',
+      categories: this.currentJobCategories,
+      completed: 0,
+      failed: 0,
+      total: 0,
+      phase: 'downloading',
+      progress: 0,
+      error: null,
+      targetStatsRevision: getCurrentStatsRevision()
+    });
 
     try {
       logger.info('DownloadManager', `Starting download for ${categories.length} categories`);
@@ -190,6 +210,9 @@ export class DownloadManager {
       this._updateOfflineState({
         total: pdfUrls.length
       });
+      this._updateJobSnapshot({
+        total: pdfUrls.length
+      });
 
       // Download packages with progress callback that updates offline state
       const result = await this._downloadPackages(
@@ -241,6 +264,15 @@ export class DownloadManager {
         completed: result.completed,
         failed: result.failed
       });
+      this._updateJobSnapshot({
+        status: 'completed',
+        phase: 'complete',
+        progress: finalProgress,
+        completed: result.completed,
+        failed: result.failed,
+        total: pdfUrls.length,
+        error: null
+      });
 
       return {
         success: result.failed === 0,
@@ -259,6 +291,12 @@ export class DownloadManager {
           ? 'Download cancelado pelo usuário.' 
           : error.message || 'Erro ao baixar pacotes ZIP.'
       });
+
+      this._updateJobSnapshot({
+        status: error.message === 'DOWNLOAD_CANCELLED' ? 'cancelled' : 'failed',
+        phase: 'complete',
+        error: error.message || 'Erro ao baixar pacotes ZIP.'
+      });
       
       if (error.message === 'DOWNLOAD_CANCELLED') {
         return {
@@ -276,6 +314,8 @@ export class DownloadManager {
       this.isDownloading = false;
       this.abortController = null;
       this.progress = null;
+      this.currentJobId = null;
+      this.currentJobCategories = [];
     }
   }
 
@@ -491,6 +531,14 @@ export class DownloadManager {
                   totalPackages: totalPackages
                 });
               }
+              this._updateJobSnapshot({
+                status: 'running',
+                phase: downloadPhase,
+                progress: globalPercentage,
+                completed: globalCompleted,
+                failed,
+                total: totalPdfs
+              });
             }
           });
           
@@ -535,6 +583,14 @@ export class DownloadManager {
               totalPackages: totalPackages
             });
           }
+          this._updateJobSnapshot({
+            status: 'running',
+            phase: 'storing',
+            progress: finalGlobalPercentage,
+            completed: finalGlobalCompleted,
+            failed,
+            total: totalPdfs
+          });
 
           logger.debug('DownloadManager', `Stored ${stored} PDFs from package ${packageIndex + 1}/${totalPackages}: ${part.filename}`);
           
@@ -600,6 +656,14 @@ export class DownloadManager {
           totalPackages: totalPackages
         });
       }
+      this._updateJobSnapshot({
+        status: 'running',
+        phase: 'complete',
+        progress: 100,
+        completed,
+        failed,
+        total: totalPdfs
+      });
 
       // Emit complete event with categories info and batch flag
       offlineEvents.emit(EVENTS.DOWNLOAD_COMPLETE, {
@@ -666,6 +730,33 @@ export class DownloadManager {
       });
     } catch (error) {
       logger.warn('DownloadManager', 'Could not update offline state', error);
+    }
+  }
+
+  /**
+   * Persist minimal job snapshot for recovery and UX continuity.
+   * @param {Object} updates
+   * @private
+   */
+  _updateJobSnapshot(updates) {
+    try {
+      const snapshot = {
+        jobId: this.currentJobId || updates.jobId || `offline-job-${Date.now()}`,
+        status: updates.status || 'running',
+        categories: updates.categories || this.currentJobCategories || [],
+        phase: updates.phase || 'downloading',
+        error: updates.error ?? null,
+        targetStatsRevision: updates.targetStatsRevision || getCurrentStatsRevision()
+      };
+
+      if ('completed' in updates) snapshot.completed = updates.completed ?? 0;
+      if ('failed' in updates) snapshot.failed = updates.failed ?? 0;
+      if ('total' in updates) snapshot.total = updates.total ?? 0;
+      if ('progress' in updates) snapshot.progress = updates.progress ?? 0;
+
+      writeDownloadJobSnapshot(snapshot);
+    } catch (error) {
+      logger.warn('DownloadManager', 'Could not persist download job snapshot', error);
     }
   }
 
