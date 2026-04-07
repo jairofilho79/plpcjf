@@ -26,7 +26,8 @@ import {
 import {
   checkStorageCapacity,
   createQuotaExceededError,
-  isQuotaExceededError
+  isQuotaExceededError,
+  requestPersistentStorage
 } from '../core/OfflineStorageErrors.js';
 
 const logger = createLogger('DownloadManager');
@@ -490,19 +491,14 @@ export class DownloadManager {
         });
 
         try {
-          // Download and extract package
-          const result = await packageDownloader.downloadAndExtract(
+          // Strict per-package flow:
+          // download -> extract -> store -> release memory before next package.
+          const result = await packageDownloader.downloadExtractStorePackage(
             part.url || part.filename,
             pdfUrls,
-            this.abortController?.signal
-          );
-
-          // Update actual PDF count for this package
-          packageInfo.estimatedPdfCount = result.pdfs.length;
-          
-          // FASE 5: Store PDFs in cache using batch mode with progress callback
-          const stored = await packageDownloader.storePdfsInCache(result.pdfs, { 
-            batch: true,  // Enable batch mode for performance
+            {
+              abortSignal: this.abortController?.signal,
+              batch: true,
             onProgress: (progressData) => {
               // Calculate PDFs from previous packages that are already complete
               // Use only completedPdfs (not estimatedPdfCount) to avoid inflating progress
@@ -554,10 +550,13 @@ export class DownloadManager {
                 total: totalPdfs
               });
             }
-          });
+            }
+          );
+          const stored = result.stored;
           
           // Update package info with actual completed count
           packageInfo.completedPdfs = stored;
+          packageInfo.estimatedPdfCount = result.extracted;
           completed += stored;
           // Update progress tracker with correct total (not increment, to avoid double counting)
           // Calculate total completed: sum of all previous packages + current package
@@ -573,19 +572,17 @@ export class DownloadManager {
           bytesDownloaded: this.progress.bytesDownloaded + result.bytesDownloaded
           });
 
-          // Always update progress after package completes, even if callback didn't fire
-          // This ensures UI is updated even if the interval wasn't reached
+          // Always update progress after package completes, even if callback didn't fire.
+          // Keep these values outside `if (onProgress)` because snapshot update also uses them.
+          const pdfsInPreviousPackages = packagesInfo
+            .slice(0, packageIndex)
+            .reduce((sum, pkg) => sum + (pkg.completedPdfs || 0), 0);
+          const finalGlobalCompleted = pdfsInPreviousPackages + stored;
+          const finalGlobalPercentage = totalPdfs > 0
+            ? Math.min(99, Math.floor((finalGlobalCompleted / totalPdfs) * 100))
+            : 0;
+
           if (onProgress) {
-            // Calculate final progress for this package
-            const pdfsInPreviousPackages = packagesInfo
-              .slice(0, packageIndex)
-              .reduce((sum, pkg) => sum + (pkg.completedPdfs || 0), 0);
-            
-            const finalGlobalCompleted = pdfsInPreviousPackages + stored;
-            const finalGlobalPercentage = totalPdfs > 0 
-              ? Math.min(99, Math.floor((finalGlobalCompleted / totalPdfs) * 100))
-              : 0;
-            
             onProgress({
               completed: finalGlobalCompleted,
               total: totalPdfs,
@@ -629,6 +626,9 @@ export class DownloadManager {
             // Non-critical error - package might not be in cache or cache API might not be available
             logger.debug('DownloadManager', `Could not remove package ZIP from cache (non-critical): ${part.filename}`, error);
           }
+
+          // Yield before moving to next package to avoid long main-thread pressure.
+          await new Promise(resolve => setTimeout(resolve, 0));
         } catch (error) {
           if (error.message === 'DOWNLOAD_CANCELLED') {
             throw error;
@@ -761,6 +761,9 @@ export class DownloadManager {
   async _runStoragePreflight(requiredParts) {
     const estimatedBytes = requiredParts.reduce((sum, part) => sum + Number(part?.size || 0), 0);
     if (estimatedBytes <= 0) return;
+
+    // Try to persist storage before estimating quota. This is best-effort.
+    await requestPersistentStorage();
 
     const result = await checkStorageCapacity(estimatedBytes);
     if (result.supported && !result.ok) {

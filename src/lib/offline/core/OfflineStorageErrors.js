@@ -75,3 +75,27 @@ export async function checkStorageCapacity(neededBytes, safetyFactor = 1.2) {
     neededBytes: reservedNeeded
   };
 }
+
+/**
+ * Best-effort request for persistent storage.
+ * Browsers may ignore or auto-decide without showing a prompt.
+ *
+ * @returns {Promise<{supported: boolean, persisted: boolean}>}
+ */
+export async function requestPersistentStorage() {
+  const hasPersistApi =
+    typeof navigator !== 'undefined' &&
+    navigator.storage &&
+    typeof navigator.storage.persist === 'function';
+
+  if (!hasPersistApi) {
+    return { supported: false, persisted: false };
+  }
+
+  try {
+    const persisted = await navigator.storage.persist();
+    return { supported: true, persisted: persisted === true };
+  } catch {
+    return { supported: true, persisted: false };
+  }
+}

@@ -258,6 +258,58 @@ export class PackageDownloader {
   }
 
   /**
+   * Safe package pipeline:
+   * download -> extract -> store -> release temporary memory.
+   * Ensures each block is finalized before the next one starts.
+   *
+   * @param {string} packageUrl
+   * @param {string[]} expectedPdfs
+   * @param {Object} [options]
+   * @param {AbortSignal} [options.abortSignal]
+   * @param {Function} [options.onProgress]
+   * @param {boolean} [options.batch=true]
+   * @returns {Promise<{stored: number, extracted: number, bytesDownloaded: number}>}
+   */
+  async downloadExtractStorePackage(packageUrl, expectedPdfs = [], options = {}) {
+    const { abortSignal = null, onProgress = null, batch = true } = options;
+    /** @type {ExtractedPdf[]} */
+    let extractedPdfs = [];
+    /** @type {Blob|null} */
+    let zipBlob = null;
+    let bytesDownloaded = 0;
+
+    try {
+      const downloadResult = await this.downloadPackage(packageUrl, abortSignal);
+      zipBlob = downloadResult.blob;
+      bytesDownloaded = downloadResult.bytesDownloaded;
+
+      extractedPdfs = await this.extractPdfsFromZip(zipBlob, expectedPdfs);
+      const stored = await this.storePdfsInCache(extractedPdfs, {
+        batch,
+        onProgress
+      });
+
+      return {
+        stored,
+        extracted: extractedPdfs.length,
+        bytesDownloaded
+      };
+    } finally {
+      // Release temporary in-memory references before moving to next package.
+      if (extractedPdfs.length > 0) {
+        for (const pdf of extractedPdfs) {
+          if (pdf && pdf.blob) {
+            // @ts-ignore - explicit cleanup of large blob reference.
+            pdf.blob = null;
+          }
+        }
+      }
+      extractedPdfs.length = 0;
+      zipBlob = null;
+    }
+  }
+
+  /**
    * Store extracted PDFs in cache
    * Uses PdfPathManager to normalize paths consistently (preserves case and accents)
    * Always uses originalName from ZIP to preserve exact path with accents and case

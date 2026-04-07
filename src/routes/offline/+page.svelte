@@ -70,6 +70,15 @@
   let requiredPackagesInfo = null;
   /** @type {string[]} */
   let unknownCategories = [];
+  /** @type {{supported: boolean, persisted: boolean, usage: number, quota: number, free: number, loading: boolean}} */
+  let storageInfo = {
+    supported: false,
+    persisted: false,
+    usage: 0,
+    quota: 0,
+    free: 0,
+    loading: true
+  };
   
   let isLoadingStats = false;
   let isInitializing = true; // Controla estado de carregamento inicial
@@ -313,6 +322,7 @@
     
     // Inicialização assíncrona
     (async () => {
+      await refreshStorageInfo();
       // FASE 1: Operações críticas - carregam dados básicos para renderização inicial
       try {
         // Inicializar store offline explicitamente (lazy initialization)
@@ -1039,6 +1049,66 @@
   }
 
   /**
+   * @param {number} bytes
+   */
+  function formatStorage(bytes) {
+    if (!bytes || bytes <= 0) return '0 MB';
+    const gb = bytes / (1024 * 1024 * 1024);
+    if (gb >= 1) return `${gb.toFixed(2)} GB`;
+    const mb = bytes / (1024 * 1024);
+    return `${mb.toFixed(0)} MB`;
+  }
+
+  async function refreshStorageInfo() {
+    const hasEstimateApi =
+      typeof navigator !== 'undefined' &&
+      navigator.storage &&
+      typeof navigator.storage.estimate === 'function';
+    const hasPersistedApi =
+      typeof navigator !== 'undefined' &&
+      navigator.storage &&
+      typeof navigator.storage.persisted === 'function';
+
+    if (!hasEstimateApi) {
+      storageInfo = {
+        supported: false,
+        persisted: false,
+        usage: 0,
+        quota: 0,
+        free: 0,
+        loading: false
+      };
+      return;
+    }
+
+    storageInfo = { ...storageInfo, loading: true };
+    try {
+      const estimate = await navigator.storage.estimate();
+      const usage = Number(estimate?.usage || 0);
+      const quota = Number(estimate?.quota || 0);
+      const persisted = hasPersistedApi ? await navigator.storage.persisted() : false;
+      storageInfo = {
+        supported: true,
+        persisted,
+        usage,
+        quota,
+        free: Math.max(0, quota - usage),
+        loading: false
+      };
+    } catch (error) {
+      console.warn('[Offline Page] Could not read storage estimate:', error);
+      storageInfo = {
+        supported: false,
+        persisted: false,
+        usage: 0,
+        quota: 0,
+        free: 0,
+        loading: false
+      };
+    }
+  }
+
+  /**
    * @param {unknown} error
    */
   function getErrorInfo(error) {
@@ -1107,6 +1177,7 @@
     }
     
     try {
+      await refreshStorageInfo();
       // FASE 5: Use OfflineManager directly
       await offlineManager.downloadCategories(categoriesToDownload, {
         louvoresData: $louvores
@@ -1163,6 +1234,7 @@
     
     // Download all categories
     try {
+      await refreshStorageInfo();
       const result = await offlineManager.downloadCategories(categoriesToDownload, {
         louvoresData: $louvores
       });
@@ -1179,6 +1251,7 @@
       if (allDownloaded || result.success) {
         setOfflineAvailable(true);
       }
+      await refreshStorageInfo();
     } catch (error) {
       console.error('[Offline Page] Error downloading all categories:', error);
       const errorInfo = getErrorInfo(error);
@@ -1206,6 +1279,7 @@
 
     try {
       console.log('[Offline Page] Starting download of missing PDFs');
+      await refreshStorageInfo();
 
       // Update offline state to show downloading
       offline.updateState({
@@ -1245,6 +1319,7 @@
 
       // Reload stats after download
       await loadCategoryStats(true);
+      await refreshStorageInfo();
 
       // Show error modal if there were errors
       if (!result.success || result.errors.length > 0) {
@@ -1355,6 +1430,7 @@
       
       // Reload cached PDFs list
       await offline.loadCachedPdfsList(false, true);
+      await refreshStorageInfo();
       
       // Update downloaded categories
       const updatedDownloaded = await offline.checkAndUpdateDownloadedCategories();
@@ -1528,6 +1604,40 @@
           </div>
         </div>
       {/if}
+
+      <div class="storage-transparency-box">
+        <div class="storage-header">
+          <Info class="w-5 h-5 info-icon" />
+          <h3>Armazenamento do navegador</h3>
+          <button class="refresh-storage-btn" on:click={refreshStorageInfo} disabled={storageInfo.loading}>
+            {#if storageInfo.loading}
+              <RefreshCw class="w-4 h-4 spinning" />
+            {:else}
+              <RefreshCw class="w-4 h-4" />
+            {/if}
+          </button>
+        </div>
+        {#if storageInfo.supported}
+          <p class="storage-line">
+            Usado: <strong>{formatStorage(storageInfo.usage)}</strong> |
+            Quota: <strong>{formatStorage(storageInfo.quota)}</strong> |
+            Livre: <strong>{formatStorage(storageInfo.free)}</strong>
+          </p>
+          {#if requiredPackagesInfo && requiredPackagesInfo.totalSize > 0}
+            <p class="storage-line">
+              Próximo download estimado: <strong>{formatStorage(requiredPackagesInfo.totalSize)}</strong>
+            </p>
+          {/if}
+          <p class="storage-note">
+            Persistência: {storageInfo.persisted ? 'ativa' : 'não garantida'}.
+            O navegador pode limitar ou limpar cache conforme política interna.
+          </p>
+        {:else}
+          <p class="storage-note">
+            Este navegador não expõe estimativa de quota via API.
+          </p>
+        {/if}
+      </div>
 
       <!-- Info about category persistence and cache limitation -->
       <div class="info-box">
@@ -1827,6 +1937,54 @@
     justify-content: center;
     margin-bottom: 1.5rem;
   }
+
+  .storage-transparency-box {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    padding: 1rem;
+    border: 1px solid var(--border-color);
+    border-radius: 0.5rem;
+    background: var(--background-color);
+    margin-bottom: 1rem;
+  }
+
+  .storage-header {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  .storage-header h3 {
+    margin: 0;
+    font-size: 0.95rem;
+    font-weight: 700;
+    color: var(--text-dark);
+  }
+
+  .refresh-storage-btn {
+    margin-left: auto;
+    border: none;
+    background: transparent;
+    color: var(--text-dark);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+  }
+
+  .refresh-storage-btn:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+  }
+
+  .storage-line,
+  .storage-note {
+    margin: 0;
+    font-size: 0.84rem;
+    color: var(--text-dark);
+  }
+
   /* Info box */
   .info-box {
     display: flex;
