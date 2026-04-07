@@ -78,6 +78,31 @@ let downloadState = {
   currentBatch: 0
 };
 
+function isQuotaExceededError(error) {
+  if (!error) return false;
+  const name = String(error.name || '');
+  const message = String(error.message || '').toLowerCase();
+  return (
+    name === 'QuotaExceededError' ||
+    name === 'NS_ERROR_DOM_QUOTA_REACHED' ||
+    message.includes('quota exceeded') ||
+    message.includes('storage quota')
+  );
+}
+
+async function safeCachePut(cache, request, response, context = '') {
+  try {
+    await cache.put(request, response);
+    return { ok: true };
+  } catch (error) {
+    if (isQuotaExceededError(error)) {
+      console.error('[SW] Quota exceeded while caching', context || request?.url || '', error);
+      return { ok: false, errorCode: 'QUOTA_EXCEEDED', error };
+    }
+    throw error;
+  }
+}
+
 // Install event - cache app shell and PDF.js
 self.addEventListener('install', (event) => {
   console.log('[SW] Installing service worker...');
@@ -209,7 +234,13 @@ self.addEventListener('fetch', (event) => {
                   // Only cache successful responses
                   if (response && response.status === 200) {
                     const responseClone = response.clone();
-                    cache.put(event.request, responseClone);
+                    cache.put(event.request, responseClone).catch(err => {
+                      if (isQuotaExceededError(err)) {
+                        console.warn('[SW] Quota exceeded caching PDF.js module:', url.pathname);
+                        return;
+                      }
+                      console.warn('[SW] Failed caching PDF.js module:', url.pathname, err);
+                    });
                     console.log('[SW] Cached PDF.js module:', url.pathname);
                   }
                   return response;
@@ -280,7 +311,10 @@ self.addEventListener('fetch', (event) => {
             // Store using normalized path for consistency
             const normalizedRequestUrl = createUrlUtf8(`/${normalizedPath}`, self.location.origin);
             const normalizedRequest = new Request(normalizedRequestUrl);
-            await cache.put(normalizedRequest, responseClone);
+            const putResult = await safeCachePut(cache, normalizedRequest, responseClone, normalizedPath);
+            if (!putResult.ok && putResult.errorCode === 'QUOTA_EXCEEDED') {
+              throw putResult.error || new Error('Quota exceeded');
+            }
             console.log('[SW] Cached PDF (normalized):', normalizedPath);
             
             // Notify clients that cache was updated
@@ -349,7 +383,11 @@ self.addEventListener('fetch', (event) => {
             if (response && response.status === 200) {
               const responseClone = response.clone();
               caches.open(APP_CACHE).then(cache => {
-                cache.put(event.request, responseClone);
+                cache.put(event.request, responseClone).catch(err => {
+                  if (!isQuotaExceededError(err)) {
+                    console.warn('[SW] Failed to cache navigation response:', err);
+                  }
+                });
                 console.log('[SW] Cached navigation response for:', url.pathname + url.search);
               });
             }
@@ -409,7 +447,11 @@ self.addEventListener('fetch', (event) => {
               if (response && response.status === 200) {
                 const responseClone = response.clone();
                 caches.open(APP_CACHE).then(cache => {
-                  cache.put(event.request, responseClone);
+                  cache.put(event.request, responseClone).catch(err => {
+                    if (!isQuotaExceededError(err)) {
+                      console.warn('[SW] Failed to cache app shell response:', err);
+                    }
+                  });
                 });
               }
               return response;
@@ -498,7 +540,11 @@ self.addEventListener('fetch', (event) => {
           if (response && response.status === 200) {
             const clone = response.clone();
             caches.open(APP_CACHE).then((cache) => {
-              cache.put(event.request, clone);
+              cache.put(event.request, clone).catch(err => {
+                if (!isQuotaExceededError(err)) {
+                  console.warn('[SW] Failed to cache immutable asset:', err);
+                }
+              });
             });
           }
           return response;
@@ -561,7 +607,11 @@ self.addEventListener('fetch', (event) => {
                 if (shouldCache) {
                   const responseClone = response.clone();
                   caches.open(APP_CACHE).then(cache => {
-                    cache.put(event.request, responseClone);
+                    cache.put(event.request, responseClone).catch(err => {
+                      if (!isQuotaExceededError(err)) {
+                        console.warn('[SW] Failed to cache app resource:', err);
+                      }
+                    });
                   });
                 }
               }
@@ -672,7 +722,15 @@ async function handleDownloadPDFs(event, data) {
             const response = await fetch(request);
             
             if (response && response.status === 200) {
-              await cache.put(request, response);
+              const putResult = await safeCachePut(cache, request, response, pdfUrl);
+              if (!putResult.ok && putResult.errorCode === 'QUOTA_EXCEEDED') {
+                return {
+                  success: false,
+                  url: pdfUrl,
+                  error: 'Quota exceeded',
+                  errorCode: 'QUOTA_EXCEEDED'
+                };
+              }
               return { success: true, url: pdfUrl };
             } else {
               throw new Error(`HTTP ${response.status}`);
@@ -683,6 +741,24 @@ async function handleDownloadPDFs(event, data) {
           }
         })
       );
+
+      const quotaFailure = results.find(result =>
+        result.status === 'fulfilled' &&
+        result.value &&
+        result.value.errorCode === 'QUOTA_EXCEEDED'
+      );
+      if (quotaFailure) {
+        event.ports[0].postMessage({
+          type: 'ERROR',
+          error: 'Sem espaco suficiente para armazenar os PDFs offline.',
+          errorCode: 'QUOTA_EXCEEDED',
+          completed,
+          failed,
+          total
+        });
+        downloadState.isDownloading = false;
+        return;
+      }
 
       // Count successes and failures
       results.forEach(result => {
@@ -736,6 +812,7 @@ async function handleDownloadPDFs(event, data) {
     event.ports[0].postMessage({
       type: 'ERROR',
       error: err.message,
+      errorCode: isQuotaExceededError(err) ? 'QUOTA_EXCEEDED' : undefined,
       completed,
       failed,
       total

@@ -9,6 +9,10 @@ import cacheStorageAdapter from '../storage/CacheStorageAdapter.js';
 import offlineEvents, { EVENTS } from '../core/OfflineEvents.js';
 import { createLogger } from '../utils/OfflineLogger.js';
 import PdfPathManager from '../utils/PdfPathManager.js';
+import {
+  createQuotaExceededError,
+  isQuotaExceededError
+} from '../core/OfflineStorageErrors.js';
 
 const logger = createLogger('PackageDownloader');
 
@@ -340,6 +344,10 @@ export class PackageDownloader {
             });
           }
         } catch (error) {
+          if (isQuotaExceededError(error) || error?.errorCode === 'QUOTA_EXCEEDED') {
+            logger.error('PackageDownloader', `Quota exceeded while storing PDF: ${path}`, error);
+            throw createQuotaExceededError({ causeMessage: error?.message });
+          }
           logger.error('PackageDownloader', `Error storing PDF: ${path}`, error);
           // Continue with other PDFs
         }
@@ -401,6 +409,10 @@ export class PackageDownloader {
           });
         }
       } catch (error) {
+        if (isQuotaExceededError(error) || error?.errorCode === 'QUOTA_EXCEEDED') {
+          logger.error('PackageDownloader', `Quota exceeded while storing PDF: ${pdf.originalName || pdf.normalizedPath}`, error);
+          throw createQuotaExceededError({ causeMessage: error?.message });
+        }
         logger.error('PackageDownloader', `Error storing PDF: ${pdf.originalName || pdf.normalizedPath}`, error);
         // Continue with other PDFs
       }

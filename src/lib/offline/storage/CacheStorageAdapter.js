@@ -15,6 +15,10 @@ import {
   encodeUrlComponentUtf8, 
   decodeUrlComponentUtf8
 } from '$lib/utils/urlEncoding.js';
+import {
+  createQuotaExceededError,
+  isQuotaExceededError
+} from '../core/OfflineStorageErrors.js';
 
 const logger = createLogger('CacheStorageAdapter');
 
@@ -297,7 +301,14 @@ export class CacheStorageAdapter extends CacheRepository {
     const requestUrl = PdfPathManager.createRequestUrl(pdfPath, window.location.origin);
     const request = new Request(requestUrl);
 
-    await cache.put(request, response);
+    try {
+      await cache.put(request, response);
+    } catch (error) {
+      if (isQuotaExceededError(error)) {
+        throw createQuotaExceededError({ causeMessage: error?.message });
+      }
+      throw error;
+    }
     
     logger.info('CacheStorageAdapter', `PDF stored in cache: ${normalizedPath}`);
     
@@ -407,6 +418,10 @@ export class CacheStorageAdapter extends CacheRepository {
           stored++;
           storedPaths.push(result.normalizedPath);
         } catch (error) {
+          if (isQuotaExceededError(error) || error?.errorCode === 'QUOTA_EXCEEDED') {
+            logger.error('CacheStorageAdapter', `Quota exceeded while storing PDF in batch: ${path}`, error);
+            throw createQuotaExceededError({ causeMessage: error?.message });
+          }
           logger.error('CacheStorageAdapter', `Error storing PDF in batch: ${path}`, error);
           // Continue with other PDFs
         }

@@ -236,10 +236,7 @@ export async function validatePdfAvailability(pdfPath, pdfId = null) {
   } catch (error) {
     console.error('[PDF Validation] Error:', error);
     const result = { available: false, needsDownload: false, url: fullUrl };
-    // Don't cache errors, but cache negative results if PDF ID is provided
-    if (pdfId && !error.message?.includes('timeout')) {
-      cacheValidation(pdfId, { available: false, url: fullUrl });
-    }
+    // Do not cache negative results on transient validation failures.
     return result;
   }
 }
@@ -287,13 +284,29 @@ export async function ensurePdfAvailable(pdfPath) {
  * @returns {Array} - Array of louvor objects with missing PDFs
  */
 export function findMissingPdfs(louvores, cachedPdfs) {
+  const detailed = findMissingPdfsDetailed(louvores, cachedPdfs);
+  return detailed.confirmedMissing;
+}
+
+/**
+ * Finds missing PDFs with deterministic states.
+ * Separates confirmed missing from unresolved/unknown items.
+ *
+ * @param {Array} louvores - Array of louvor objects
+ * @param {Array} cachedPdfs - Array of cached PDF URLs
+ * @returns {{confirmedMissing: Array, unknown: Array}}
+ */
+export function findMissingPdfsDetailed(louvores, cachedPdfs) {
   if (!louvores || !Array.isArray(louvores) || louvores.length === 0) {
-    return [];
+    return { confirmedMissing: [], unknown: [] };
   }
 
   if (!cachedPdfs || !Array.isArray(cachedPdfs)) {
-    // If no cached PDFs, all are missing
-    return louvores.filter(l => l.pdfId);
+    // Unknown cache state: avoid claiming confirmed missing without a real cache snapshot.
+    return {
+      confirmedMissing: [],
+      unknown: louvores.filter(l => l.pdfId)
+    };
   }
 
   // Prepare cached PDFs for comparison
@@ -348,7 +361,7 @@ export function findMissingPdfs(louvores, cachedPdfs) {
     }
   });
 
-  const missing = [];
+  const confirmedMissing = [];
   const debugInfo = []; // Collect debug info for first few misses
 
   for (const louvor of louvores) {
@@ -405,7 +418,7 @@ export function findMissingPdfs(louvores, cachedPdfs) {
     }
 
     if (!isCached) {
-      missing.push(louvor);
+      confirmedMissing.push(louvor);
       
       // Collect debug info for first 10 missing PDFs
       if (debugInfo.length < 10) {
@@ -420,16 +433,19 @@ export function findMissingPdfs(louvores, cachedPdfs) {
 
   // Log debug info if there are missing PDFs (only log once per unique count to reduce console spam)
   // Use a simple cache to track what we've already logged
-  if (missing.length > 0 && debugInfo.length > 0) {
+  if (confirmedMissing.length > 0 && debugInfo.length > 0) {
     // Only log if this is a new count or significant change
-    const cacheKey = `missing_${missing.length}_${louvores.length}`;
+    const cacheKey = `missing_${confirmedMissing.length}_${louvores.length}`;
     if (!findMissingPdfs._lastLog || findMissingPdfs._lastLog !== cacheKey) {
       findMissingPdfs._lastLog = cacheKey;
-      console.warn(`[PDF Validation] Found ${missing.length} missing PDFs. Sample debug info:`, debugInfo);
+      console.warn(`[PDF Validation] Found ${confirmedMissing.length} confirmed missing PDFs. Sample debug info:`, debugInfo);
     }
   }
 
-  return missing;
+  return {
+    confirmedMissing,
+    unknown: []
+  };
 }
 
 /**

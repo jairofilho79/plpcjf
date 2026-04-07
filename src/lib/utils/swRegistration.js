@@ -128,7 +128,14 @@ export async function downloadPDFsViaSW(pdfUrls, batchSize = 10, onProgress = nu
           break;
         
         case 'ERROR':
-          reject(new Error(data.error || 'Download failed'));
+          {
+            const error = /** @type {any} */ (new Error(data.error || 'Download failed'));
+            if (data.errorCode) {
+              error.errorCode = data.errorCode;
+              error.code = data.errorCode;
+            }
+            reject(/** @type {Error} */ (error));
+          }
           break;
         
         case 'CANCELLED':

@@ -68,6 +68,8 @@
      * @type {{totalParts: number, totalSize: number, partsByCategory: Object} | null}
      */
   let requiredPackagesInfo = null;
+  /** @type {string[]} */
+  let unknownCategories = [];
   
   let isLoadingStats = false;
   let isInitializing = true; // Controla estado de carregamento inicial
@@ -1005,6 +1007,8 @@
   $: totalPackages = state.totalPackages || 0;
   $: hasDownloadStatus = downloading || progress > 0 || completed > 0 || failed > 0 || total > 0;
   $: hasDownloadError = !!state.error || (!downloading && failed > 0);
+  $: hasQuotaError = state.errorCode === 'QUOTA_EXCEEDED';
+  $: unknownCategories = state.validationUnknownCategories || [];
   $: categorySizes = state.categorySizes || {};
   
   // Calculate total availability stats
@@ -1032,6 +1036,17 @@
     }
     const kb = bytes / 1024;
     return `${kb.toFixed(2)} KB`;
+  }
+
+  /**
+   * @param {unknown} error
+   */
+  function getErrorInfo(error) {
+    const err = /** @type {{message?: string, errorCode?: string, code?: string}|null|undefined} */ (error);
+    return {
+      message: err?.message || null,
+      code: err?.errorCode || err?.code || null
+    };
   }
   
   /**
@@ -1100,12 +1115,14 @@
       // After download completes, categories will be updated via reactive statement
     } catch (error) {
       console.error('[Offline Page] Error downloading selected categories:', error);
+      const errorInfo = getErrorInfo(error);
       offline.updateState({
         downloading: false,
-        error: error?.message || 'Falha ao disponibilizar conteúdo offline. Tente novamente mais tarde.'
+        error: errorInfo.message || 'Falha ao disponibilizar conteúdo offline. Tente novamente mais tarde.',
+        errorCode: errorInfo.code
       });
       errorTitle = 'Falha no download offline';
-      errorMessage = error?.message || 'Não foi possível concluir o download. Verifique sua conexão e tente novamente.';
+      errorMessage = errorInfo.message || 'Não foi possível concluir o download. Verifique sua conexão e tente novamente.';
       showErrorModal = true;
     }
   }
@@ -1164,12 +1181,14 @@
       }
     } catch (error) {
       console.error('[Offline Page] Error downloading all categories:', error);
+      const errorInfo = getErrorInfo(error);
       offline.updateState({
         downloading: false,
-        error: error?.message || 'Falha ao disponibilizar conteúdo offline. Tente novamente mais tarde.'
+        error: errorInfo.message || 'Falha ao disponibilizar conteúdo offline. Tente novamente mais tarde.',
+        errorCode: errorInfo.code
       });
       errorTitle = 'Falha no download offline';
-      errorMessage = error?.message || 'Não foi possível concluir o download. Verifique sua conexão e tente novamente.';
+      errorMessage = errorInfo.message || 'Não foi possível concluir o download. Verifique sua conexão e tente novamente.';
       showErrorModal = true;
     }
   }
@@ -1242,16 +1261,18 @@
       }
     } catch (error) {
       console.error('[Offline Page] Error downloading missing PDFs:', error);
+      const errorInfo = getErrorInfo(error);
       
       // Update state with error
       offline.updateState({
         downloading: false,
-        error: error.message || 'Erro ao baixar PDFs faltantes.'
+        error: errorInfo.message || 'Erro ao baixar PDFs faltantes.',
+        errorCode: errorInfo.code
       });
 
       // Show error modal
       errorTitle = 'Erro ao baixar PDFs';
-      errorMessage = error.message || 'Ocorreu um erro ao tentar baixar os PDFs faltantes. Tente novamente.';
+      errorMessage = errorInfo.message || 'Ocorreu um erro ao tentar baixar os PDFs faltantes. Tente novamente.';
       showErrorModal = true;
     } finally {
       isDownloadingMissing = false;
@@ -1556,6 +1577,7 @@
             {@const stats = categoryStats[category] || { total: 0, available: 0, missing: 0, percentage: 0 }}
             {@const isActuallyComplete = stats.percentage === 100 && stats.missing === 0}
             {@const isDownloaded = downloadedCategories.includes(category)}
+            {@const isUnknown = unknownCategories.includes(category)}
             {@const shouldShowCompleteBadge = isActuallyComplete && (isDownloaded || stats.available === stats.total)}
             
             <label 
@@ -1575,6 +1597,8 @@
                   <span class="category-label">{category}</span>
                   {#if shouldShowCompleteBadge}
                     <span class="downloaded-badge">✓ Completo</span>
+                  {:else if isUnknown}
+                    <span class="partial-badge unknown-badge">Validação pendente</span>
                   {:else if stats.total > 0}
                     <span class="partial-badge">{stats.percentage}% disponível</span>
                   {/if}
@@ -1734,7 +1758,11 @@
           <AlertCircle class="w-5 h-5 error-icon" />
           <div class="download-error-content">
             <p class="error-text">
-              {state.error || 'O processo de download falhou parcialmente. Tente novamente em alguns instantes.'}
+              {#if hasQuotaError}
+                Sem espaço suficiente no navegador para concluir o download offline.
+              {:else}
+                {state.error || 'O processo de download falhou parcialmente. Tente novamente em alguns instantes.'}
+              {/if}
             </p>
             <div class="action-buttons">
               <button
@@ -1744,6 +1772,15 @@
               >
                 Tentar novamente
               </button>
+              {#if hasQuotaError}
+                <button
+                  class="btn btn-danger"
+                  on:click={clearAllCache}
+                  disabled={downloading || isClearingCache}
+                >
+                  Limpar cache offline
+                </button>
+              {/if}
             </div>
           </div>
         </div>
@@ -2005,6 +2042,12 @@
     background-color: rgba(255, 193, 7, 0.25);
     border-radius: 0.25rem;
     border: 1px solid rgba(255, 193, 7, 0.4);
+  }
+
+  .unknown-badge {
+    color: #0c5460;
+    background-color: rgba(23, 162, 184, 0.15);
+    border-color: rgba(23, 162, 184, 0.35);
   }
   
   .category-header {

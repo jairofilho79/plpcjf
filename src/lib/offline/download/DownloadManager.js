@@ -23,6 +23,11 @@ import {
   getCurrentStatsRevision,
   writeDownloadJobSnapshot
 } from '../core/OfflineRevision.js';
+import {
+  checkStorageCapacity,
+  createQuotaExceededError,
+  isQuotaExceededError
+} from '../core/OfflineStorageErrors.js';
 
 const logger = createLogger('DownloadManager');
 
@@ -114,6 +119,7 @@ export class DownloadManager {
         total: 0,
         selectedCategories: categories,
         error: null,
+        errorCode: null,
         downloadPhase: 'downloading', // FASE 6: Reset phase to downloading
         phaseProgress: 0 // FASE 6: Reset phase progress
       });
@@ -191,6 +197,7 @@ export class DownloadManager {
       }
 
       logger.info('DownloadManager', `Identified ${requiredParts.length} package parts needed`);
+      await this._runStoragePreflight(requiredParts);
 
       // Group parts by category
       const partsByCategory = {};
@@ -283,22 +290,29 @@ export class DownloadManager {
       };
     } catch (error) {
       logger.error('DownloadManager', 'Error downloading categories', error);
+      const isCancelled = error.message === 'DOWNLOAD_CANCELLED';
+      const quotaError = isQuotaExceededError(error) || error?.errorCode === 'QUOTA_EXCEEDED';
+      const errorCode = quotaError ? 'QUOTA_EXCEEDED' : null;
+      const message = isCancelled
+        ? 'Download cancelado pelo usuário.'
+        : (quotaError
+          ? 'Sem espaço suficiente no navegador para concluir o download offline. Libere espaço e tente novamente.'
+          : error.message || 'Erro ao baixar pacotes ZIP.');
       
       // Update state with error
       this._updateOfflineState({
         downloading: false,
-        error: error.message === 'DOWNLOAD_CANCELLED' 
-          ? 'Download cancelado pelo usuário.' 
-          : error.message || 'Erro ao baixar pacotes ZIP.'
+        error: message,
+        errorCode
       });
 
       this._updateJobSnapshot({
-        status: error.message === 'DOWNLOAD_CANCELLED' ? 'cancelled' : 'failed',
+        status: isCancelled ? 'cancelled' : 'failed',
         phase: 'complete',
-        error: error.message || 'Erro ao baixar pacotes ZIP.'
+        error: message
       });
       
-      if (error.message === 'DOWNLOAD_CANCELLED') {
+      if (isCancelled) {
         return {
           success: false,
           completed: this.progress?.completed || 0,
@@ -619,6 +633,9 @@ export class DownloadManager {
           if (error.message === 'DOWNLOAD_CANCELLED') {
             throw error;
           }
+          if (isQuotaExceededError(error) || error?.errorCode === 'QUOTA_EXCEEDED') {
+            throw createQuotaExceededError({ causeMessage: error?.message });
+          }
 
           logger.error('DownloadManager', `Error downloading package ${packageIndex + 1}/${totalPackages}: ${part.filename}`, error);
           failed++;
@@ -679,7 +696,10 @@ export class DownloadManager {
       if (error.message === 'DOWNLOAD_CANCELLED') {
         offlineEvents.emit(EVENTS.DOWNLOAD_ERROR, { error: 'Download cancelled' });
       } else {
-        offlineEvents.emit(EVENTS.DOWNLOAD_ERROR, { error: error.message });
+        offlineEvents.emit(EVENTS.DOWNLOAD_ERROR, {
+          error: error.message,
+          errorCode: (isQuotaExceededError(error) || error?.errorCode === 'QUOTA_EXCEEDED') ? 'QUOTA_EXCEEDED' : undefined
+        });
       }
       throw error;
     } finally {
@@ -730,6 +750,30 @@ export class DownloadManager {
       });
     } catch (error) {
       logger.warn('DownloadManager', 'Could not update offline state', error);
+    }
+  }
+
+  /**
+   * @param {Array<{size?: number}>} requiredParts
+   * @returns {Promise<void>}
+   * @private
+   */
+  async _runStoragePreflight(requiredParts) {
+    const estimatedBytes = requiredParts.reduce((sum, part) => sum + Number(part?.size || 0), 0);
+    if (estimatedBytes <= 0) return;
+
+    const result = await checkStorageCapacity(estimatedBytes);
+    if (result.supported && !result.ok) {
+      logger.warn('DownloadManager', 'Storage preflight blocked download', {
+        neededBytes: result.neededBytes,
+        usageBytes: result.usageBytes,
+        quotaBytes: result.quotaBytes
+      });
+      throw createQuotaExceededError({
+        neededBytes: result.neededBytes,
+        usageBytes: result.usageBytes,
+        quotaBytes: result.quotaBytes
+      });
     }
   }
 
