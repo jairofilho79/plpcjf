@@ -6,7 +6,6 @@
   import { CATEGORY_OPTIONS } from '$lib/stores/filters';
   import { louvores, loadLouvores, louvoresLoaded } from '$lib/stores/louvores';
   import OfflineRequirementsAlert from '$lib/components/OfflineRequirementsAlert.svelte';
-  import OfflineIndicator from '$lib/components/OfflineIndicator.svelte';
   import ErrorModal from '$lib/components/ErrorModal.svelte';
   import { downloadMissingPdfs } from '$lib/utils/missingPdfsDownloader.js';
   import { setupCacheSync, onCacheSync, checkCacheVersionChanged, updateCacheVersion } from '$lib/utils/cacheSync';
@@ -1016,6 +1015,12 @@
   $: completed = state.completed || 0;
   $: failed = state.failed || 0;
   $: total = state.total || 0;
+  $: downloadPhase = state.downloadPhase || (downloading ? 'downloading' : 'idle');
+  $: phaseProgress = state.phaseProgress ?? progress;
+  $: currentPackage = state.currentPackage || 0;
+  $: totalPackages = state.totalPackages || 0;
+  $: hasDownloadStatus = downloading || progress > 0 || completed > 0 || failed > 0 || total > 0;
+  $: hasDownloadError = !!state.error || (!downloading && failed > 0);
   $: categorySizes = state.categorySizes || {};
   
   // Calculate total availability stats
@@ -1102,12 +1107,23 @@
       return;
     }
     
-    // FASE 5: Use OfflineManager directly
-    await offlineManager.downloadCategories(categoriesToDownload, {
-      louvoresData: $louvores
-    });
-    
-    // After download completes, categories will be updated via reactive statement
+    try {
+      // FASE 5: Use OfflineManager directly
+      await offlineManager.downloadCategories(categoriesToDownload, {
+        louvoresData: $louvores
+      });
+      
+      // After download completes, categories will be updated via reactive statement
+    } catch (error) {
+      console.error('[Offline Page] Error downloading selected categories:', error);
+      offline.updateState({
+        downloading: false,
+        error: error?.message || 'Falha ao disponibilizar conteúdo offline. Tente novamente mais tarde.'
+      });
+      errorTitle = 'Falha no download offline';
+      errorMessage = error?.message || 'Não foi possível concluir o download. Verifique sua conexão e tente novamente.';
+      showErrorModal = true;
+    }
   }
 
   /**
@@ -1164,7 +1180,13 @@
       }
     } catch (error) {
       console.error('[Offline Page] Error downloading all categories:', error);
-      throw error;
+      offline.updateState({
+        downloading: false,
+        error: error?.message || 'Falha ao disponibilizar conteúdo offline. Tente novamente mais tarde.'
+      });
+      errorTitle = 'Falha no download offline';
+      errorMessage = error?.message || 'Não foi possível concluir o download. Verifique sua conexão e tente novamente.';
+      showErrorModal = true;
     }
   }
 
@@ -1669,56 +1691,83 @@
           </button>
         {/if}
       </div>
-    {:else if downloading}
-      <!-- Download progress -->
-      <div class="progress-section">
-        <div class="progress-info">
-          <p class="progress-title">Baixando PDFs...</p>
-          <p class="progress-stats">
-            {completed} de {total} PDFs baixados
-            {#if failed > 0}
-              <span class="failed-count">({failed} falharam)</span>
+
+      <!-- Download status in-page (single source of progress feedback) -->
+      {#if hasDownloadStatus}
+        <div class="progress-section">
+          <div class="progress-info">
+            <p class="progress-title">
+              {#if downloading}
+                {#if downloadPhase === 'storing'}
+                  Salvando no cache...
+                {:else if downloadPhase === 'complete'}
+                  Finalizando download...
+                {:else}
+                  Baixando pacotes...
+                {/if}
+              {:else if hasDownloadError}
+                Download com falhas
+              {:else if progress >= 100}
+                Download concluído
+              {:else}
+                Status do download
+              {/if}
+            </p>
+            <p class="progress-stats">
+              {completed} de {total} PDFs processados
+              {#if failed > 0}
+                <span class="failed-count">({failed} falharam)</span>
+              {/if}
+            </p>
+            {#if totalPackages > 0}
+              <p class="progress-note">
+                Pacote {currentPackage} de {totalPackages} | Fase: {downloadPhase} ({Math.round(phaseProgress)}%)
+              </p>
             {/if}
-          </p>
-        </div>
+          </div>
 
-        <!-- Progress bar -->
-        <div class="progress-bar-container">
-          <div class="progress-bar" style="width: {progress}%"></div>
-        </div>
+          <div class="progress-bar-container">
+            <div class="progress-bar" style="width: {Math.max(0, Math.min(100, progress))}%"></div>
+          </div>
 
-        <p class="progress-percentage">{progress}%</p>
+          <p class="progress-percentage">{Math.round(progress)}%</p>
 
-        <!-- Cancel button -->
-        <div class="action-buttons">
-          <button
-            class="btn btn-danger"
-            on:click={cancelDownload}
-          >
-            Cancelar Download
-          </button>
-        </div>
-      </div>
-    {:else if progress >= 100}
-      <!-- Download complete -->
-      <div class="complete-section">
-        <CheckCircle class="w-16 h-16 complete-icon" />
-        <p class="complete-title">Download concluído!</p>
-        <p class="complete-stats">
-          {completed} PDFs baixados com sucesso
-          {#if failed > 0}
-            <br />
-            <span class="failed-count">{failed} PDFs falharam</span>
+          {#if downloading}
+            <div class="action-buttons">
+              <button
+                class="btn btn-danger"
+                on:click={cancelDownload}
+              >
+                Cancelar download
+              </button>
+            </div>
           {/if}
-        </p>
-
-        <div class="action-buttons">
-          <!-- Download completed, user can navigate away using header -->
         </div>
-      </div>
+      {/if}
+
+      {#if hasDownloadError}
+        <div class="error-box download-error-box">
+          <AlertCircle class="w-5 h-5 error-icon" />
+          <div class="download-error-content">
+            <p class="error-text">
+              {state.error || 'O processo de download falhou parcialmente. Tente novamente em alguns instantes.'}
+            </p>
+            <div class="action-buttons">
+              <button
+                class="btn btn-primary"
+                on:click={offlineAvailable ? handleDownloadMissingPdfs : downloadAllCategories}
+                disabled={downloading || !louvoresReady}
+              >
+                Tentar novamente
+              </button>
+            </div>
+          </div>
+        </div>
+      {/if}
+
     {/if}
 
-    {#if state.error}
+    {#if state.error && !hasDownloadError}
       {@const hasActualMissing = Object.values(categoryStats).some(s => s && s.missing > 0)}
       {#if hasActualMissing}
         <div class="error-box">
@@ -2325,6 +2374,17 @@
     margin: 0;
     font-size: 0.875rem;
     font-weight: 500;
+  }
+
+  .download-error-box {
+    align-items: flex-start;
+  }
+
+  .download-error-content {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
   }
 
   /* Action buttons */
