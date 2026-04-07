@@ -192,9 +192,12 @@ async function isCacheStorageAvailable() {
  * Get list of cached PDFs with local cache optimization
  * Uses localStorage cache first, then falls back to Service Worker
  * IMPORTANT: Invalidates localStorage cache if cache storage is not available
+ * @param {{ preferFresh?: boolean }} [options]
  * @returns {Promise<string[]>}
  */
-export async function getCachedPDFsFast() {
+export async function getCachedPDFsFast(options = {}) {
+  const preferFresh = options.preferFresh === true;
+
   // Verificar se cache storage está disponível
   const cacheStorageAvailable = await isCacheStorageAvailable();
   
@@ -205,8 +208,8 @@ export async function getCachedPDFsFast() {
     return [];
   }
   
-  // Verificar cache local primeiro
-  if (typeof window !== 'undefined' && typeof localStorage !== 'undefined') {
+  // Verificar cache local primeiro (exceto quando fluxo crítico pede leitura fresca)
+  if (!preferFresh && typeof window !== 'undefined' && typeof localStorage !== 'undefined') {
     try {
       const cached = localStorage.getItem(CACHED_PDFS_LOCAL_KEY);
       if (cached) {

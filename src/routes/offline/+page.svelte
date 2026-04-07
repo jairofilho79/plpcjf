@@ -977,11 +977,8 @@
     }
     lastCachedPdfsCount = currentCount;
   }
-  // Filter out already downloaded categories from selection for download button
-  // Also check if category is actually complete (100% with no missing PDFs)
+  // Only categories with real missing PDFs should be considered for download.
   $: categoriesToDownload = selectedCategories.filter(cat => {
-    // Don't include if already marked as downloaded
-    if (downloadedCategories.includes(cat)) return false;
     // Check if category is actually 100% complete
     const stats = categoryStats[cat] || { total: 0, available: 0, missing: 0, percentage: 0 };
     const isActuallyComplete = stats.percentage === 100 && stats.missing === 0;
@@ -1023,12 +1020,10 @@
   }
   
   /**
-   * Get total size of selected categories (excluding already downloaded and complete ones)
+   * Get total size of selected categories that still need download.
    */
   $: totalSelectedSize = selectedCategories
     .filter((/** @type {string} */ cat) => {
-      // Don't include if already marked as downloaded
-      if (downloadedCategories.includes(cat)) return false;
       // Don't include if actually complete (100% with no missing PDFs)
       const stats = categoryStats[cat] || { total: 0, available: 0, missing: 0, percentage: 0 };
       const isActuallyComplete = stats.percentage === 100 && stats.missing === 0;
@@ -1049,8 +1044,8 @@
     const stats = categoryStats[category] || { total: 0, available: 0, missing: 0, percentage: 0 };
     const isActuallyComplete = stats.percentage === 100 && stats.missing === 0;
     
-    // Can't remove already downloaded categories or complete categories
-    if (downloadedCategories.includes(category) || isActuallyComplete) return;
+    // Can't toggle categories that are already 100% complete
+    if (isActuallyComplete) return;
 
     if (selectedCategories.includes(category)) {
       selectedCategories = selectedCategories.filter(c => c !== category);
@@ -1069,8 +1064,12 @@
 
     console.log('[Offline Page] Starting download for categories:', selectedCategories);
     
-    // Filter out already downloaded categories - they should not be downloaded again
-    const categoriesToDownload = selectedCategories.filter(cat => !downloadedCategories.includes(cat));
+    // Filter out categories that are already effectively complete.
+    const categoriesToDownload = selectedCategories.filter(cat => {
+      const stats = categoryStats[cat] || { total: 0, available: 0, missing: 0, percentage: 0 };
+      const isActuallyComplete = stats.percentage === 100 && stats.missing === 0;
+      return !isActuallyComplete;
+    });
     
     if (categoriesToDownload.length === 0) {
       console.log('[Offline Page] All selected categories are already downloaded');
@@ -1537,7 +1536,7 @@
                 type="checkbox"
                 checked={isSelected}
                 on:change={() => toggleCategory(category)}
-                disabled={downloading || isDownloaded || isActuallyComplete}
+                disabled={downloading || isActuallyComplete}
               />
               <div class="category-info">
                 <div class="category-header">

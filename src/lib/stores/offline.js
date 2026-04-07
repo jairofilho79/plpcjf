@@ -334,8 +334,9 @@ async function initialize() {
  * Load list of cached PDFs from service worker
  * @param {boolean} forceRefresh - Force refresh of cache
  * @param {boolean} skipEvent - Skip dispatching offline-cache-updated event (prevents infinite loops)
+ * @param {boolean} requireFresh - Bypass local TTL cache and read fresh source of truth
  */
-async function loadCachedPdfsList(forceRefresh = false, skipEvent = false) {
+async function loadCachedPdfsList(forceRefresh = false, skipEvent = false, requireFresh = false) {
   try {
     // FASE 4: Invalidar cache de stats quando recarregamos lista de PDFs
     // pois os dados podem ter mudado
@@ -354,7 +355,9 @@ async function loadCachedPdfsList(forceRefresh = false, skipEvent = false) {
       invalidateCachedPDFsLocal();
     }
     
-    const cachedUrls = await getCachedPDFsFast();
+    const cachedUrls = await getCachedPDFsFast({
+      preferFresh: forceRefresh || requireFresh
+    });
     
     offlineState.update(state => ({
       ...state,
@@ -1863,17 +1866,18 @@ async function downloadByCategories(categories) {
     return;
   }
 
-  // Load cached PDFs to check which PDFs are already downloaded
+  // Load cached PDFs from a fresh source before deciding what is missing.
+  await loadCachedPdfsList(false, true, true);
   const state = get(offlineState);
   /**
    * @type {string | any[]}
    */
   let cachedPdfs = state.cachedPdfs;
   
-  // If cached PDFs are not loaded, load them
+  // If cached PDFs are not loaded, force one more fresh read as fallback
   if (!cachedPdfs || cachedPdfs.length === 0) {
         try {
-          cachedPdfs = await getCachedPDFsFast();
+          cachedPdfs = await getCachedPDFsFast({ preferFresh: true });
       offlineState.update(s => ({
         ...s,
         cachedPdfs,
@@ -2342,6 +2346,9 @@ async function checkAndUpdateDownloadedCategories() {
       return getDownloadedCategories();
     }
 
+    // Load cached PDFs from a fresh source (single source of truth for this validation).
+    await loadCachedPdfsList(false, true, true);
+
     // Load cached PDFs from cache storage (NOT ZIPs - ZIPs are removed after extraction)
     const state = get(offlineState);
     /**
@@ -2351,7 +2358,7 @@ async function checkAndUpdateDownloadedCategories() {
     
     if (!cachedPdfs || cachedPdfs.length === 0) {
       try {
-        cachedPdfs = await getCachedPDFsFast();
+        cachedPdfs = await getCachedPDFsFast({ preferFresh: true });
         offlineState.update(s => ({
           ...s,
           cachedPdfs,
