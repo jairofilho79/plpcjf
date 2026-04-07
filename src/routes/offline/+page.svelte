@@ -470,6 +470,10 @@
       if (syncUnsubscribe) {
         syncUnsubscribe();
       }
+      if (cacheUpdateDebounceTimer) {
+        clearTimeout(cacheUpdateDebounceTimer);
+        cacheUpdateDebounceTimer = null;
+      }
       if (categoryObserver) {
         categoryObserver.disconnect();
         categoryObserver = null;
@@ -489,6 +493,65 @@
   let lastCacheUpdateTime = 0;
   let isProcessingCacheUpdate = false;
   const MIN_CACHE_UPDATE_INTERVAL = 1000; // Minimum 1 second between cache updates
+  /** @type {ReturnType<typeof setTimeout> | null} */
+  let cacheUpdateDebounceTimer = null;
+  let hasPendingCacheUpdate = false;
+  let cacheUpdateRequestedDuringProcessing = false;
+  let pendingCacheUpdateDetail = {};
+
+  function scheduleCacheReconciliation(detail = {}) {
+    hasPendingCacheUpdate = true;
+    pendingCacheUpdateDetail = detail;
+
+    if (cacheUpdateDebounceTimer) {
+      clearTimeout(cacheUpdateDebounceTimer);
+    }
+
+    cacheUpdateDebounceTimer = setTimeout(() => {
+      cacheUpdateDebounceTimer = null;
+      void reconcileCacheUpdate();
+    }, 700);
+  }
+
+  async function reconcileCacheUpdate() {
+    if (isProcessingCacheUpdate) {
+      cacheUpdateRequestedDuringProcessing = true;
+      return;
+    }
+    if (!hasPendingCacheUpdate) {
+      return;
+    }
+
+    isProcessingCacheUpdate = true;
+    hasPendingCacheUpdate = false;
+    lastCacheUpdateTime = Date.now();
+
+    try {
+      // Use fresh source of truth for cache-dependent decisions.
+      await offline.loadCachedPdfsList(false, true, true);
+      const updatedDownloaded = await offline.checkAndUpdateDownloadedCategories();
+      downloadedCategories = updatedDownloaded;
+      selectedCategories = [...new Set([...selectedCategories, ...updatedDownloaded])];
+
+      if (updatedDownloaded.length > 0) {
+        invalidateCategories(updatedDownloaded);
+        updatedDownloaded.forEach(cat => statsCache.delete(cat));
+        updatedDownloaded.forEach(cat => statsCalculator.invalidateCategory(cat));
+        loadedCategories.clear();
+        await loadCategoryStatsForCategories(updatedDownloaded, true);
+      }
+
+      if (pendingCacheUpdateDetail?.source) {
+        console.log('[Offline Page] Cache reconciliation complete:', pendingCacheUpdateDetail);
+      }
+    } finally {
+      isProcessingCacheUpdate = false;
+      if (cacheUpdateRequestedDuringProcessing || hasPendingCacheUpdate) {
+        cacheUpdateRequestedDuringProcessing = false;
+        void reconcileCacheUpdate();
+      }
+    }
+  }
   
   /**
    * @param {Event} event
@@ -535,7 +598,6 @@
       // Check if this is a duplicate event (same source and timestamp)
       const eventDetail = event.detail || {};
       const eventSource = eventDetail.source || 'unknown';
-      const eventTimestamp = eventDetail.timestamp || now;
       
       // Skip if this is a cache-reload event that we triggered ourselves
       if (eventSource === 'cache-reload') {
@@ -552,47 +614,11 @@
       if (isBatchOperation) {
         console.log('[Offline Page] Batch operation detected - deferring stats recalculation');
         needsStatsRecalculation = true;
-        return; // Skip immediate processing for batch operations
+        scheduleCacheReconciliation(eventDetail);
+        return;
       }
-      
-      isProcessingCacheUpdate = true;
-      lastCacheUpdateTime = now;
-      
-      try {
-        console.log('[Offline Page] Cache updated event received:', eventDetail);
-        
-        // Reload cached PDFs list to get updated count (skip event to prevent loop)
-        await offline.loadCachedPdfsList(false, true);
-        
-        // Update downloaded categories
-        const updatedDownloaded = await offline.checkAndUpdateDownloadedCategories();
-        downloadedCategories = updatedDownloaded;
-        
-        // Ensure downloaded categories are selected
-        updatedDownloaded.forEach((cat) => {
-          if (!selectedCategories.includes(cat)) {
-            selectedCategories = [...selectedCategories, cat];
-          }
-        });
-        
-        // Invalidate stats cache and reload for affected categories
-        if (updatedDownloaded.length > 0) {
-          // Invalidate all caches: persistent, memory, and StatsCalculator
-          invalidateCategories(updatedDownloaded);
-          updatedDownloaded.forEach(cat => statsCache.delete(cat));
-          // Also invalidate StatsCalculator's internal cache
-          updatedDownloaded.forEach(cat => statsCalculator.invalidateCategory(cat));
-          loadedCategories.clear();
-          
-          // Force reload cached PDFs list to ensure we have latest data
-          await offline.loadCachedPdfsList(false, true);
-          
-          // Reload stats for updated categories (force recalculation)
-          await loadCategoryStatsForCategories(updatedDownloaded, true);
-        }
-      } finally {
-        isProcessingCacheUpdate = false;
-      }
+
+      scheduleCacheReconciliation(eventDetail);
     }
   }
   

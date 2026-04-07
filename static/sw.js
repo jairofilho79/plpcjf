@@ -673,8 +673,6 @@ async function handleDownloadPDFs(event, data) {
             
             if (response && response.status === 200) {
               await cache.put(request, response);
-              // Notify clients that cache was updated
-              notifyClientsCacheUpdated();
               return { success: true, url: pdfUrl };
             } else {
               throw new Error(`HTTP ${response.status}`);
@@ -703,12 +701,31 @@ async function handleDownloadPDFs(event, data) {
         total,
         percentage: Math.round((completed / total) * 100)
       });
+
+      // Notify clients once per batch (instead of per file) to reduce UI thrashing.
+      notifyClientsCacheUpdated({
+        source: 'zip-download-batch',
+        batch: true,
+        currentBatch: downloadState.currentBatch,
+        totalBatches: Math.ceil(total / batchSize),
+        completed,
+        failed,
+        total
+      });
     }
 
     // Download complete
     console.log(`[SW] Download complete: ${completed} successful, ${failed} failed`);
     event.ports[0].postMessage({
       type: 'COMPLETE',
+      completed,
+      failed,
+      total
+    });
+
+    notifyClientsCacheUpdated({
+      source: 'zip-download-complete',
+      batch: false,
       completed,
       failed,
       total
