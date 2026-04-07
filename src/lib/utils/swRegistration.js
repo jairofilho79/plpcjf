@@ -74,7 +74,8 @@ export async function unregisterServiceWorker() {
  * @param {object} message - Message to send
  * @returns {Promise<any>}
  */
-export function sendMessageToSW(message) {
+export function sendMessageToSW(message, options = {}) {
+  const timeoutMs = Number.isFinite(options.timeoutMs) ? options.timeoutMs : 15000;
   return new Promise((resolve, reject) => {
     if (!navigator.serviceWorker.controller) {
       reject(new Error('No service worker controller'));
@@ -89,10 +90,10 @@ export function sendMessageToSW(message) {
 
     navigator.serviceWorker.controller.postMessage(message, [messageChannel.port2]);
 
-    // Timeout after 5 minutes for long operations
+    // Use bounded timeout to avoid UI hanging indefinitely.
     setTimeout(() => {
       reject(new Error('Service worker message timeout'));
-    }, 5 * 60 * 1000);
+    }, timeoutMs);
   });
 }
 
@@ -305,7 +306,11 @@ export async function getCachedPDFs() {
       return [];
     }
 
-    const response = await sendMessageToSW({ type: 'GET_CACHED_PDFS', data: {} });
+    // Keep timeout short for read operations; if SW is unhealthy, fail fast.
+    const response = await sendMessageToSW(
+      { type: 'GET_CACHED_PDFS', data: {} },
+      { timeoutMs: navigator.onLine ? 5000 : 2000 }
+    );
     return response.pdfs || [];
   } catch (error) {
     // Log apenas se for erro diferente de "no controller"

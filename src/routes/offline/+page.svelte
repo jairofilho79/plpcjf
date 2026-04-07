@@ -320,13 +320,14 @@
         // Carregar louvores primeiro
         await loadLouvores();
         
-        // Garantir que cachedPdfs está atualizado antes de verificar categorias baixadas
+        // Garantir que cachedPdfs está atualizado no estado local
         await offline.loadCachedPdfsList(false, true);
         await new Promise(resolve => setTimeout(resolve, 50)); // Pequeno delay para garantir atualização
         
-        // Agora verificar categorias baixadas com dados atualizados
-        const downloadedCats = await offline.checkAndUpdateDownloadedCategories();
-        downloadedCategories = downloadedCats;
+        // Fase crítica: usar snapshot salvo para liberar a UI mais rápido.
+        // A validação completa (custosa) roda em background.
+        const savedDownloaded = offline.getDownloadedCategories();
+        downloadedCategories = savedDownloaded;
         
         // Load saved categories for selection
         const saved = offline.getSavedCategories();
@@ -343,14 +344,13 @@
         lastSavedCategories = [...selectedCategories];
         hasInitializedCategories = true;
         
-        // FIX: Invalidate stats for downloaded categories since validation just completed
-        // This ensures UI shows fresh stats after validation
-        if (downloadedCats.length > 0) {
+        // Invalidate stats usando snapshot local para evitar inconsistências visuais iniciais.
+        if (savedDownloaded.length > 0) {
           // Invalidate all caches: persistent, memory, and StatsCalculator
-          invalidateCategories(downloadedCats);
-          downloadedCats.forEach(cat => statsCache.delete(cat));
+          invalidateCategories(savedDownloaded);
+          savedDownloaded.forEach(cat => statsCache.delete(cat));
           // Also invalidate StatsCalculator's internal cache
-          downloadedCats.forEach(cat => statsCalculator.invalidateCategory(cat));
+          savedDownloaded.forEach(cat => statsCalculator.invalidateCategory(cat));
         }
         
         // FASE 3: Carregar stats do cache para renderização inicial rápida
@@ -371,6 +371,17 @@
         
         // Marcar inicialização básica como completa - permite renderização
         isInitializing = false;
+
+        // Validação completa em background: corrige categorias baixadas sem bloquear o carregamento.
+        void (async () => {
+          try {
+            const validatedDownloaded = await offline.checkAndUpdateDownloadedCategories();
+            downloadedCategories = validatedDownloaded;
+            selectedCategories = [...new Set([...selectedCategories, ...validatedDownloaded])];
+          } catch (err) {
+            console.warn('[Offline Page] Background validation of downloaded categories failed:', err);
+          }
+        })();
       } catch (error) {
         console.error('[Offline Page] Error during critical initialization:', error);
         isInitializing = false;

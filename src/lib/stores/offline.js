@@ -141,6 +141,30 @@ const offlineState = writable(initialState);
  */
 async function fetchOfflineManifest() {
   try {
+    // Offline-first: avoid network fetch attempts that are expected to fail.
+    if (browser && !navigator.onLine) {
+      const cached = localStorage.getItem(OFFLINE_MANIFEST_KEY);
+      if (cached) {
+        try {
+          const manifest = JSON.parse(cached);
+          const categorySizes = {};
+          if (manifest.packages) {
+            for (const [category, packageData] of Object.entries(manifest.packages)) {
+              categorySizes[category] = packageData.totalSize || 0;
+            }
+          }
+          offlineState.update(state => ({
+            ...state,
+            offlineManifest: manifest,
+            categorySizes
+          }));
+          return manifest;
+        } catch {
+          // Fall through to normal flow if cached payload is invalid.
+        }
+      }
+    }
+
     // Tentar usar ManifestRepository primeiro (nova arquitetura)
     try {
       const manifestRepository = await import('$lib/offline/manifest/ManifestRepository.js');
@@ -1008,18 +1032,17 @@ async function isCategoryCompletelyDownloaded(category, cachedPdfs, louvoresData
   // Use original paths for comparison (no normalization)
   // Create set of cached PDFs using original paths
   const cachedPdfsSet = new Set(
-    cachedPdfs.map((/** @type {string} */ url) => {
-      // Prepare path (remove leading slash for comparison)
-      const path = url.replace(/^\/+/, '');
-      return path;
-    })
+    cachedPdfs.map((/** @type {string} */ url) => url.replace(/^\/+/, ''))
   );
 
   // Track unique PDFs found for counting validation
   const foundPdfs = new Set();
   let missingCount = 0;
 
-  // Check if all PDFs for this category are in cache
+  const unresolvedPdfs = [];
+
+  // Fast pass: prefer in-memory comparisons; avoid expensive CacheStorage checks.
+  // Strict mode keeps direct CacheStorage verification for all entries.
   for (const louvor of categoryLouvores) {
     const pdfUrl = getPdfUrl(louvor);
     if (!pdfUrl) {
@@ -1029,40 +1052,31 @@ async function isCategoryCompletelyDownloaded(category, cachedPdfs, louvoresData
     // Prepare PDF URL for comparison (remove leading slash, preserve original case and accents)
     const pdfPath = pdfUrl.replace(/^\/+/, '');
 
-    // CRITICAL: Always verify directly in Cache Storage first
-    // The cache stores with URL encoding, so direct verification is most reliable
     let isCached = false;
     
-    // Primary strategy: Direct verification in Cache Storage (most reliable)
-    // This handles URL encoding correctly and doesn't use normalization
-    const existsInCache = await verifyPdfInCacheStorage(pdfUrl);
-    if (existsInCache) {
-      isCached = true;
-      foundPdfs.add(pdfPath);
-    }
-    
-    // Fallback strategies: Use original path comparison only if direct verification fails
-    // This provides compatibility with old cache entries or edge cases
-    if (!isCached && !strictMode) {
-      // Strategy 1: Exact match in cached list
+    if (strictMode) {
+      // Strict mode validates every PDF directly in Cache Storage.
+      const existsInCache = await verifyPdfInCacheStorage(pdfUrl);
+      if (existsInCache) {
+        isCached = true;
+        foundPdfs.add(pdfPath);
+      }
+    } else {
+      // Fast strategy 1: exact path match in cached list.
       if (cachedPdfsSet.has(pdfPath)) {
         isCached = true;
         foundPdfs.add(pdfPath);
       }
       
-      // Strategy 2: Partial match (check if any cached path ends with expected path)
+      // Fast strategy 2: path/filename fallback for compatibility.
       if (!isCached) {
         isCached = Array.from(cachedPdfsSet).some(cached => {
-          // Check if paths match (handling different URL formats)
           if (cached === pdfPath) return true;
-          // Only accept if cached path ends with expected path (not vice versa)
           if (cached.endsWith(pdfPath)) return true;
           
-          // Check filename match only if paths are similar
           const cachedFilename = cached.split('/').pop();
           const expectedFilename = pdfPath.split('/').pop();
           if (cachedFilename && expectedFilename && cachedFilename === expectedFilename) {
-            // Additional check: paths should be similar (same directory structure)
             const cachedDir = cached.replace(cachedFilename, '');
             const expectedDir = pdfPath.replace(expectedFilename, '');
             if (cachedDir && expectedDir && cachedDir.includes(expectedDir)) {
@@ -1080,12 +1094,41 @@ async function isCategoryCompletelyDownloaded(category, cachedPdfs, louvoresData
     }
 
     if (!isCached) {
-      missingCount++;
-      if (missingCount <= 3) { // Log first 3 missing PDFs to avoid spam
-        console.warn(`[Offline Store] PDF not found in cache: ${pdfUrl}`);
-        if (strictMode) {
-          console.warn(`[Offline Store] Strict mode: verified directly in cache storage - NOT FOUND`);
+      unresolvedPdfs.push({ pdfUrl, pdfPath });
+    }
+  }
+
+  // Slow pass (bounded): verify only unresolved entries directly in CacheStorage.
+  // This preserves correctness while avoiding worst-case startup stalls.
+  if (!strictMode && unresolvedPdfs.length > 0) {
+    const MAX_DIRECT_VERIFICATION = 50;
+    if (unresolvedPdfs.length <= MAX_DIRECT_VERIFICATION) {
+      for (const item of unresolvedPdfs) {
+        const existsInCache = await verifyPdfInCacheStorage(item.pdfUrl);
+        if (existsInCache) {
+          foundPdfs.add(item.pdfPath);
+        } else {
+          missingCount++;
+          if (missingCount <= 3) {
+            console.warn(`[Offline Store] PDF not found in cache: ${item.pdfUrl}`);
+          }
         }
+      }
+    } else {
+      // Too many unresolved files: keep fast-path result to protect UI responsiveness.
+      for (const item of unresolvedPdfs) {
+        missingCount++;
+        if (missingCount <= 3) {
+          console.warn(`[Offline Store] PDF not found in cache (fast mode): ${item.pdfUrl}`);
+        }
+      }
+    }
+  } else if (strictMode && unresolvedPdfs.length > 0) {
+    for (const item of unresolvedPdfs) {
+      missingCount++;
+      if (missingCount <= 3) {
+        console.warn(`[Offline Store] PDF not found in cache: ${item.pdfUrl}`);
+        console.warn('[Offline Store] Strict mode: verified directly in cache storage - NOT FOUND');
       }
     }
   }
