@@ -29,6 +29,7 @@ import {
   isQuotaExceededError,
   requestPersistentStorage
 } from '../core/OfflineStorageErrors.js';
+import { getConfig } from '../core/OfflineConfig.js';
 
 const logger = createLogger('DownloadManager');
 
@@ -436,6 +437,7 @@ export class DownloadManager {
     this.progress.start();
 
     const totalPdfs = pdfUrls.length;
+    const batchStartedAt = Date.now();
     let completed = 0;
     let failed = 0;
 
@@ -479,6 +481,7 @@ export class DownloadManager {
 
         const packageInfo = packagesInfo[packageIndex];
         const { category, part } = packageInfo;
+        const packageStartedAt = Date.now();
 
         logger.debug('DownloadManager', `Downloading package ${packageIndex + 1}/${totalPackages} for category: ${category}`);
         console.log('[DownloadManager] Downloading package:', {
@@ -604,6 +607,20 @@ export class DownloadManager {
           });
 
           logger.debug('DownloadManager', `Stored ${stored} PDFs from package ${packageIndex + 1}/${totalPackages}: ${part.filename}`);
+          logger.debug(
+            'DownloadManager',
+            `Package processed ${part.filename}`,
+            {
+              category,
+              packageIndex: packageIndex + 1,
+              totalPackages,
+              stored,
+              extracted: result.extracted
+            },
+            {
+              durationMs: Date.now() - packageStartedAt
+            }
+          );
           
           // Clean up package ZIP from cache after extraction
           // Packages are temporary and should not remain in cache storage
@@ -614,7 +631,10 @@ export class DownloadManager {
               : `${packageDownloader.basePath}/${packageUrl}`;
             
             // Remove from APP_CACHE (plpc-v4-app) where Service Worker might have cached it
-            if (typeof caches !== 'undefined') {
+            if (
+              typeof caches !== 'undefined' &&
+              getConfig('OFFLINE_READTHROUGH_CACHE_FALLBACK_ENABLED') !== false
+            ) {
               const cache = await caches.open('plpc-v4-app');
               const packageRequest = new Request(fullPackageUrl);
               const deleted = await cache.delete(packageRequest);
@@ -703,6 +723,19 @@ export class DownloadManager {
       }
       throw error;
     } finally {
+      logger.info(
+        'DownloadManager',
+        'Batch download pipeline finished',
+        {
+          categoriesCount: categories?.length || 0,
+          totalPdfs,
+          completed,
+          failed
+        },
+        {
+          durationMs: Date.now() - batchStartedAt
+        }
+      );
       // Always end batch mode, even if there was an error
       cacheStorageAdapter.endBatchMode();
     }

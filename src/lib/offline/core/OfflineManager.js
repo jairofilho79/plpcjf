@@ -18,6 +18,9 @@ import { browser } from '$app/environment';
 import { louvores } from '$lib/stores/louvores.js';
 import { get } from 'svelte/store';
 import { cacheAppPages } from '../utils/AppPagesCache.js';
+import { requestPersistentStorage } from './OfflineStorageErrors.js';
+import { getConfig } from './OfflineConfig.js';
+import legacyCacheMigrationService from '../migration/LegacyCacheMigrationService.js';
 
 const logger = createLogger('OfflineManager');
 
@@ -92,6 +95,14 @@ class OfflineManager {
           return;
         }
 
+        // Best-effort persistent storage request.
+        // Browsers may ignore this, but it improves quota stability when granted.
+        try {
+          await requestPersistentStorage();
+        } catch (error) {
+          logger.debug('OfflineManager', 'Persistent storage request failed (non-critical)', error);
+        }
+
         // Run cache migration V1 if needed
         try {
           await cacheMigration.migrate();
@@ -118,6 +129,14 @@ class OfflineManager {
           await cacheSync.sync();
         } catch (error) {
           logger.warn('OfflineManager', 'Initial cache sync failed (non-critical)', error);
+        }
+
+        // Optional background migration from legacy Cache API to IndexedDB.
+        // Fire-and-forget to avoid blocking startup.
+        if (getConfig('OFFLINE_MIGRATION_AUTO_ENABLED') === true) {
+          legacyCacheMigrationService
+            .runInBackground()
+            .catch((error) => logger.warn('OfflineManager', 'Background legacy migration failed (non-critical)', error));
         }
 
         this.initialized = true;

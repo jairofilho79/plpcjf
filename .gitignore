@@ -14,4 +14,6 @@ vite.config.ts.timestamp-*
 .idea/
 dist/
 .cache/
+/assets/
+/packages/
 

@@ -13,6 +13,8 @@ import {
   createQuotaExceededError,
   isQuotaExceededError
 } from '../core/OfflineStorageErrors.js';
+import { getConfig } from '../core/OfflineConfig.js';
+import zipWorkerClient from '../workers/ZipWorkerClient.js';
 
 const logger = createLogger('PackageDownloader');
 
@@ -272,6 +274,38 @@ export class PackageDownloader {
    */
   async downloadExtractStorePackage(packageUrl, expectedPdfs = [], options = {}) {
     const { abortSignal = null, onProgress = null, batch = true } = options;
+
+    const useZipWorker = getConfig('OFFLINE_IDB_ENABLED') === true &&
+      getConfig('OFFLINE_WORKER_ZIP_STREAMING_ENABLED') === true &&
+      typeof Worker !== 'undefined';
+
+    if (useZipWorker) {
+      logger.info('PackageDownloader', `Using ZIP worker pipeline for ${packageUrl}`);
+      const result = await zipWorkerClient.ingestZip({
+        packageUrl,
+        expectedPdfs,
+        abortSignal,
+        onProgress: (message) => {
+          if (!onProgress) return;
+          const completed = Number(message?.completed || 0);
+          const total = Number(message?.total || 0);
+          const percentage = total > 0 ? Math.floor((completed / total) * 100) : 0;
+          onProgress({
+            phase: 'storing',
+            completed,
+            total,
+            percentage
+          });
+        }
+      });
+
+      return {
+        stored: Number(result?.stored || 0),
+        extracted: Number(result?.extracted || 0),
+        bytesDownloaded: Number(result?.bytesDownloaded || 0)
+      };
+    }
+
     /** @type {ExtractedPdf[]} */
     let extractedPdfs = [];
     /** @type {Blob|null} */

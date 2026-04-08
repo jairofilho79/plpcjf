@@ -323,6 +323,10 @@
     // Inicialização assíncrona
     (async () => {
       await refreshStorageInfo();
+      // Trigger offline initialization early (includes optional background legacy migration).
+      void offlineManager.initialize().catch((error) => {
+        console.warn('[Offline Page] OfflineManager initialization warning:', error);
+      });
       // FASE 1: Operações críticas - carregam dados básicos para renderização inicial
       try {
         // Inicializar store offline explicitamente (lazy initialization)
