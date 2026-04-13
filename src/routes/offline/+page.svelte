@@ -1,7 +1,7 @@
 <script>
   import { onMount } from 'svelte';
   import { goto } from '$app/navigation';
-  import { Download, AlertCircle, CheckCircle, Info, Package, TrendingUp, RefreshCw } from 'lucide-svelte';
+  import { Download, AlertCircle, CheckCircle, Info, Package, TrendingUp, RefreshCw, Database } from 'lucide-svelte';
   import { offline, isDownloading } from '$lib/stores/offline';
   import { CATEGORY_OPTIONS } from '$lib/stores/filters';
   import { louvores, loadLouvores, louvoresLoaded } from '$lib/stores/louvores';
@@ -26,6 +26,7 @@
   import offlineEvents, { EVENTS as OFFLINE_EVENTS } from '$lib/offline/core/OfflineEvents.js';
   import offlineManager from '$lib/offline/core/OfflineManager.js';
   import cacheMigrationV2 from '$lib/offline/storage/CacheMigrationV2.js';
+  import { getConfig } from '$lib/offline/core/OfflineConfig.js';
   import { browser } from '$app/environment';
 
   // Offline available flag from localStorage
@@ -111,6 +112,13 @@
   
   // Controla se lazy loading está ativo
   let lazyLoadingEnabled = false;
+
+  /** Indicador de suporte: IndexedDB / armazenamento avançado ativo */
+  let idbAdvancedStorageActive = false;
+
+  function syncIdbAdvancedIndicator() {
+    idbAdvancedStorageActive = getConfig('OFFLINE_IDB_ENABLED') === true;
+  }
   
   /**
    * FASE 3: Setup Intersection Observer para lazy loading otimizado de stats
@@ -323,10 +331,13 @@
     // Inicialização assíncrona
     (async () => {
       await refreshStorageInfo();
-      // Trigger offline initialization early (includes optional background legacy migration).
-      void offlineManager.initialize().catch((error) => {
-        console.warn('[Offline Page] OfflineManager initialization warning:', error);
-      });
+      // Trigger offline initialization early (flags persistidas aplicadas em initialize).
+      offlineManager
+        .initialize()
+        .then(() => syncIdbAdvancedIndicator())
+        .catch((error) => {
+          console.warn('[Offline Page] OfflineManager initialization warning:', error);
+        });
       // FASE 1: Operações críticas - carregam dados básicos para renderização inicial
       try {
         // Inicializar store offline explicitamente (lazy initialization)
@@ -386,6 +397,7 @@
         
         // Marcar inicialização básica como completa - permite renderização
         isInitializing = false;
+        syncIdbAdvancedIndicator();
 
         // Validação completa em background: corrige categorias baixadas sem bloquear o carregamento.
         void (async () => {
@@ -400,6 +412,7 @@
       } catch (error) {
         console.error('[Offline Page] Error during critical initialization:', error);
         isInitializing = false;
+        syncIdbAdvancedIndicator();
       }
       
       // FASE 2: Operações não-críticas - executadas em background após renderização
@@ -1181,6 +1194,11 @@
     }
     
     try {
+      await offlineManager.enableIndexedDbRollout({
+        persist: true,
+        runMigration: true
+      });
+      syncIdbAdvancedIndicator();
       await refreshStorageInfo();
       // FASE 5: Use OfflineManager directly
       await offlineManager.downloadCategories(categoriesToDownload, {
@@ -1238,6 +1256,11 @@
     
     // Download all categories
     try {
+      await offlineManager.enableIndexedDbRollout({
+        persist: true,
+        runMigration: true
+      });
+      syncIdbAdvancedIndicator();
       await refreshStorageInfo();
       const result = await offlineManager.downloadCategories(categoriesToDownload, {
         louvoresData: $louvores
@@ -1283,6 +1306,11 @@
 
     try {
       console.log('[Offline Page] Starting download of missing PDFs');
+      await offlineManager.enableIndexedDbRollout({
+        persist: true,
+        runMigration: true
+      });
+      syncIdbAdvancedIndicator();
       await refreshStorageInfo();
 
       // Update offline state to show downloading
@@ -1511,6 +1539,13 @@
       {/if}
     
     {#if !isInitializing}
+
+      {#if idbAdvancedStorageActive}
+        <div class="idb-advanced-indicator" role="status" aria-live="polite">
+          <Database class="idb-advanced-icon" />
+          <span class="idb-advanced-text">Modo de armazenamento avançado ativo</span>
+        </div>
+      {/if}
 
       <!-- Migration progress -->
       {#if isMigrating && migrationProgress}
@@ -1934,6 +1969,31 @@
 
   .page-body {
     padding: 1.5rem;
+  }
+
+  .idb-advanced-indicator {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-bottom: 1rem;
+    padding: 0.55rem 0.85rem;
+    border-radius: 0.375rem;
+    border: 1px solid rgba(90, 103, 216, 0.35);
+    background: rgba(90, 103, 216, 0.08);
+    font-size: 0.8125rem;
+    line-height: 1.35;
+    color: var(--text-dark);
+  }
+
+  .idb-advanced-indicator :global(.idb-advanced-icon) {
+    flex-shrink: 0;
+    width: 1rem;
+    height: 1rem;
+    color: #5a67d8;
+  }
+
+  .idb-advanced-text {
+    margin: 0;
   }
 
   .offline-indicator-container {

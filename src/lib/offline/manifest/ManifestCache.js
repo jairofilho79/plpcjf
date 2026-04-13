@@ -119,6 +119,14 @@ class ManifestCache {
    * Remove manifest from cache
    * @param {string} type - Manifest type
    */
+  remove(type) {
+    this._remove(type);
+  }
+
+  /**
+   * @param {string} type - Manifest type
+   * @private
+   */
   _remove(type) {
     if (!browser) {
       return;

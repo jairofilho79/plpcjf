@@ -83,6 +83,7 @@ const config = {
   // Legacy migration settings
   OFFLINE_MIGRATION_BATCH_SIZE: 20,
   OFFLINE_MIGRATION_YIELD_MS: 16,
+  OFFLINE_IDB_ROLLOUT_KEY: 'offline_idb_rollout_enabled',
 
   // Logging
   LOG_LEVEL: 'INFO', // ERROR, WARN, INFO, DEBUG
