@@ -21,7 +21,8 @@ const VALIDATION_CACHE_PREFIX = 'pdfValidation_';
  */
 export async function checkEffectiveConnectivity(options = {}) {
   const timeoutMs = Number.isFinite(options?.timeoutMs) ? options.timeoutMs : 1500;
-  if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+  const browserOnline = typeof navigator !== 'undefined' ? navigator.onLine : false;
+  if (browserOnline === false) {
     return false;
   }
   if (typeof window === 'undefined') {
@@ -38,7 +39,8 @@ export async function checkEffectiveConnectivity(options = {}) {
     });
     return !!res && res.ok;
   } catch {
-    return false;
+    // Fallback: avoid false-offline when the probe endpoint is temporarily unavailable.
+    return browserOnline === true;
   } finally {
     clearTimeout(timeoutId);
   }
