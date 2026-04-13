@@ -711,7 +711,9 @@ async function handleDownloadPDFs(event, data) {
       type: 'COMPLETE',
       completed,
       failed,
-      total
+      total,
+      success: failed === 0 && completed >= total,
+      partialSuccess: completed > 0 && (failed > 0 || completed < total)
     });
 
   } catch (err) {

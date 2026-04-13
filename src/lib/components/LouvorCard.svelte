@@ -14,7 +14,7 @@
   import { carousel } from '$lib/stores/carousel';
   import { pdfViewer } from '$lib/stores/pdfViewer';
   import { isPdfAvailableInIndex } from '$lib/utils/pdfIndex';
-  import { ensurePdfAvailable, validatePdfWithStrategies, validatePdfAvailability, getCachedValidation } from '$lib/utils/pdfValidation';
+  import { ensurePdfAvailable, validatePdfWithStrategies, validatePdfAvailability, getCachedValidation, checkEffectiveConnectivity } from '$lib/utils/pdfValidation';
   
   export let louvor;
   /** Ex.: posição na lista guardada: "1)" */
@@ -80,9 +80,11 @@
       availabilityError = null;
       
       try {
+        let validated = false;
         // Verificar cache de validação primeiro (Fase 2)
         const cached = getCachedValidation(louvor.pdfId);
         if (cached && cached.available) {
+          validated = true;
           // Cache diz que está disponível - usar caminho original do pdfId (NÃO usar cached.url que pode estar normalizado)
           const fileParam = encodeURIComponent(`/${pdfPath}`);
           const tituloParam = encodeURIComponent(louvor.nome || '');
@@ -106,6 +108,7 @@
             const quickValidation = await validatePdfAvailability(pdfPath, louvor.pdfId);
             if (quickValidation.available) {
               shouldProceed = true;
+              validated = true;
             } else if (quickValidation.needsDownload && navigator.onLine) {
               // PDF não está offline mas pode ser baixado - permitir abertura (leitor tentará baixar)
               shouldProceed = true;
@@ -121,13 +124,15 @@
           
           if (isAvailable) {
             shouldProceed = true;
+            validated = true;
           } else {
             // Verificar se pode ser baixado online
             const validation = await validatePdfAvailability(pdfPath, louvor.pdfId);
-            if (validation.needsDownload && navigator.onLine) {
+            const effectiveOnline = await checkEffectiveConnectivity({ timeoutMs: 1500 });
+            if (validation.needsDownload && effectiveOnline) {
               // PDF não está offline mas pode ser baixado - permitir abertura
               shouldProceed = true;
-            } else if (!navigator.onLine && validation.available === false) {
+            } else if (!effectiveOnline && validation.available === false) {
               // Realmente não disponível e offline - mostrar erro
               availabilityError = 'PDF não está disponível offline. Por favor, baixe primeiro na página de configuração offline.';
               isCheckingAvailability = false;
@@ -143,12 +148,12 @@
         
         if (shouldProceed) {
           // PDF está disponível ou pode ser baixado, proceder com navegação
-          // Adicionar flag validated=true para evitar validação dupla no leitor
           const fileParam = encodeURIComponent(`/${pdfPath}`);
           const tituloParam = encodeURIComponent(louvor.nome || '');
           const subtituloText = `${louvor.categoria || ''} | ${louvor.classificacao || ''}`.trim();
           const subtituloParam = encodeURIComponent(subtituloText);
-          const url = `/leitor?file=${fileParam}&titulo=${tituloParam}&subtitulo=${subtituloParam}&validated=true`;
+          const validatedParam = validated ? '&validated=true' : '';
+          const url = `/leitor?file=${fileParam}&titulo=${tituloParam}&subtitulo=${subtituloParam}${validatedParam}`;
           goto(url);
         }
       } catch (err) {

@@ -15,3 +15,5 @@ vite.config.ts.timestamp-*
 dist/
 .cache/
 
+/assets/
+/packages/

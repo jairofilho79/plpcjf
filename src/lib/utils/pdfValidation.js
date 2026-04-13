@@ -13,6 +13,40 @@ const VALIDATION_CACHE_TTL = 24 * 60 * 60 * 1000; // 24 horas
 const VALIDATION_CACHE_PREFIX = 'pdfValidation_';
 
 /**
+ * Verifica conectividade efetiva com a rede (não apenas navigator.onLine).
+ * Usa endpoint que o SW força para rede/no-store.
+ *
+ * @param {{ timeoutMs?: number }} [options]
+ * @returns {Promise<boolean>}
+ */
+export async function checkEffectiveConnectivity(options = {}) {
+  const timeoutMs = Number.isFinite(options?.timeoutMs) ? options.timeoutMs : 1500;
+  const browserOnline = typeof navigator !== 'undefined' ? navigator.onLine : false;
+  if (browserOnline === false) {
+    return false;
+  }
+  if (typeof window === 'undefined') {
+    return false;
+  }
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch('/louvores-manifest.sha256', {
+      method: 'GET',
+      cache: 'no-store',
+      signal: controller.signal
+    });
+    return !!res && res.ok;
+  } catch {
+    // Fallback: avoid false-offline when the probe endpoint is temporarily unavailable.
+    return browserOnline === true;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+/**
  * Obtém resultado de validação do cache
  * @param {string} pdfId - PDF ID (base64)
  * @returns {{available: boolean, url: string} | null} - Resultado do cache ou null se não encontrado/expirado
@@ -148,9 +182,10 @@ export async function validatePdfAvailabilityFast(pdfPath, pdfId = null) {
   if (pdfId) {
     const cached = getCachedValidation(pdfId);
     if (cached) {
+      const effectiveOnline = await checkEffectiveConnectivity({ timeoutMs: 1000 });
       return {
         available: cached.available,
-        needsDownload: !cached.available && navigator.onLine,
+        needsDownload: !cached.available && effectiveOnline,
         url: cached.url || fullUrl
       };
     }
@@ -201,10 +236,11 @@ export async function validatePdfAvailability(pdfPath, pdfId = null) {
   }
 
   try {
+    const effectiveOnline = await checkEffectiveConnectivity({ timeoutMs: 1500 });
     // Use CompositeValidator with full validation (cache + network)
     const result = await compositeValidator.validate(normalizedPath, {
       useIndex: true,
-      checkNetwork: navigator.onLine,
+      checkNetwork: effectiveOnline,
       pdfId: pdfId
     });
     
@@ -256,7 +292,8 @@ export async function ensurePdfAvailable(pdfPath) {
     return true;
   }
 
-  if (validation.needsDownload && navigator.onLine) {
+  const effectiveOnline = await checkEffectiveConnectivity({ timeoutMs: 1500 });
+  if (validation.needsDownload && effectiveOnline) {
     // Try to download automatically
     try {
       console.log('[PDF Validation] Attempting auto-download:', validation.url);

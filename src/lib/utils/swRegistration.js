@@ -101,9 +101,10 @@ export function sendMessageToSW(message) {
  * @param {string[]} pdfUrls - Array of PDF URLs to download
  * @param {number} batchSize - Number of PDFs to download in parallel
  * @param {Function} onProgress - Progress callback
- * @returns {Promise<object>}
+ * @param {{ timeoutMs?: number }} [options] - Options
+ * @returns {Promise<{ completed: number, failed: number, total: number, cancelled?: boolean, success: boolean, partialSuccess: boolean }>}
  */
-export async function downloadPDFsViaSW(pdfUrls, batchSize = 10, onProgress = null) {
+export async function downloadPDFsViaSW(pdfUrls, batchSize = 10, onProgress = null, options = {}) {
   return new Promise((resolve, reject) => {
     if (!navigator.serviceWorker.controller) {
       reject(new Error('No service worker controller'));
@@ -111,6 +112,42 @@ export async function downloadPDFsViaSW(pdfUrls, batchSize = 10, onProgress = nu
     }
 
     const messageChannel = new MessageChannel();
+    const timeoutMs = Number.isFinite(options?.timeoutMs) ? options.timeoutMs : 120000;
+    let timeoutId = null;
+
+    const cleanup = () => {
+      try {
+        if (timeoutId) {
+          clearTimeout(timeoutId);
+          timeoutId = null;
+        }
+      } catch {}
+      try {
+        messageChannel.port1.onmessage = null;
+      } catch {}
+      try {
+        messageChannel.port1.close?.();
+      } catch {}
+      try {
+        messageChannel.port2.close?.();
+      } catch {}
+    };
+
+    const resolveWithShape = (data, extra = {}) => {
+      const completed = Number.isFinite(data?.completed) ? Number(data.completed) : 0;
+      const failed = Number.isFinite(data?.failed) ? Number(data.failed) : 0;
+      const total = Number.isFinite(data?.total) ? Number(data.total) : (Array.isArray(pdfUrls) ? pdfUrls.length : 0);
+      const success = failed === 0 && completed >= total;
+      const partialSuccess = completed > 0 && (failed > 0 || completed < total);
+      resolve({
+        completed,
+        failed,
+        total,
+        success,
+        partialSuccess,
+        ...extra
+      });
+    };
 
     messageChannel.port1.onmessage = (event) => {
       const { type, ...data } = event.data;
@@ -123,21 +160,30 @@ export async function downloadPDFsViaSW(pdfUrls, batchSize = 10, onProgress = nu
           break;
         
         case 'COMPLETE':
-          resolve(data);
+          cleanup();
+          resolveWithShape(data);
           break;
         
         case 'ERROR':
+          cleanup();
           reject(new Error(data.error || 'Download failed'));
           break;
         
         case 'CANCELLED':
-          resolve({ ...data, cancelled: true });
+          cleanup();
+          resolveWithShape(data, { cancelled: true });
           break;
         
         default:
           console.warn('[SW Message] Unknown response type:', type);
       }
     };
+
+    // Bound overall operation time to avoid UI hanging indefinitely.
+    timeoutId = setTimeout(() => {
+      cleanup();
+      reject(new Error('DOWNLOAD_PDFS timeout'));
+    }, timeoutMs);
 
     navigator.serviceWorker.controller.postMessage(
       {
