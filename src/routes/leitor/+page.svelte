@@ -295,7 +295,7 @@
             const result = await downloadPDFsViaSW(
               [validation.url],
               1,
-              null,
+              undefined,
               { timeoutMs: 30000 }
             );
 
