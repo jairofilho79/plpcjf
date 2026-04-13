@@ -424,6 +424,7 @@
         // Try retry if still have attempts
         if (retryCount < MAX_RETRIES && navigator.onLine) {
           retryCount++;
+          setTimeout(() => load(fileUrl), 2000);
           return;
         }
       }
