@@ -88,11 +88,18 @@
     const tp = filteredResults.length === 0 ? 1 : Math.max(1, Math.ceil(filteredResults.length / ipp));
     const maxPage = tp > 0 ? tp : 1;
     const pageNum = Math.max(1, Math.min(maxPage, p));
+    const pageHrefBeforeUpdate = browser && $page?.url ? $page.url.href : '';
     currentPage = pageNum;
     pageInput = pageNum.toString();
     if (browser && !skipUrlUpdate && !isUpdatingPageFromUrl && homeUrlSyncInitialized && $page?.url?.pathname === '/') {
+      // #region agent log
+      fetch('http://127.0.0.1:7440/ingest/a9d50c94-866c-49ac-b737-468ccc2df6c6',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'8c7e1b'},body:JSON.stringify({sessionId:'8c7e1b',runId:'initial',hypothesisId:'H1',location:'src/routes/+page.svelte:setPage:beforeUpdateUrlParams',message:'setPage requested URL update',data:{requestedPage:p,appliedPage:pageNum,currentPageBeforeUrlWrite:currentPage,pageHrefBeforeUpdate,skipUrlUpdate,isUpdatingPageFromUrl,homeUrlSyncInitialized},timestamp:Date.now()})}).catch(()=>{});
+      // #endregion
       updateUrlParams({ pagina: pageNum });
       lastKnownHomeUrl = { ...lastKnownHomeUrl, pagina: pageNum };
+      // #region agent log
+      fetch('http://127.0.0.1:7440/ingest/a9d50c94-866c-49ac-b737-468ccc2df6c6',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'8c7e1b'},body:JSON.stringify({sessionId:'8c7e1b',runId:'initial',hypothesisId:'H1',location:'src/routes/+page.svelte:setPage:afterUpdateUrlParams',message:'setPage dispatched URL update',data:{appliedPage:pageNum,lastKnownPage:lastKnownHomeUrl.pagina,pagePathname:$page?.url?.pathname || ''},timestamp:Date.now()})}).catch(()=>{});
+      // #endregion
     }
     if (scroll && tp > 0 && browser) {
       document.getElementById('home-louvores-results')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -324,8 +331,14 @@
     const urlPesquisa = (urlParams.pesquisa || '').trim();
     const currentPesquisa = (searchQuery || '').trim();
     if (urlPesquisa === currentPesquisa) return;
+    // #region agent log
+    fetch('http://127.0.0.1:7440/ingest/a9d50c94-866c-49ac-b737-468ccc2df6c6',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'8c7e1b'},body:JSON.stringify({sessionId:'8c7e1b',runId:'initial',hypothesisId:'H2',location:'src/routes/+page.svelte:flushSearchToUrlOnBlur:beforeUpdateUrlParams',message:'blur is forcing search URL sync',data:{urlPesquisa,currentPesquisa,currentPage,pageHref:$page.url.href,lastKnownHomeUrlPage:lastKnownHomeUrl.pagina},timestamp:Date.now()})}).catch(()=>{});
+    // #endregion
     isUpdatingFromUrl = true;
     updateUrlParams({ pesquisa: searchQuery });
+    // #region agent log
+    fetch('http://127.0.0.1:7440/ingest/a9d50c94-866c-49ac-b737-468ccc2df6c6',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'8c7e1b'},body:JSON.stringify({sessionId:'8c7e1b',runId:'initial',hypothesisId:'H2',location:'src/routes/+page.svelte:flushSearchToUrlOnBlur:afterUpdateUrlParams',message:'blur dispatched search URL sync',data:{currentPage,lastKnownHomeUrlPage:lastKnownHomeUrl.pagina,searchQuery},timestamp:Date.now()})}).catch(()=>{});
+    // #endregion
     setTimeout(() => {
       isUpdatingFromUrl = false;
     }, 0);
@@ -466,6 +479,9 @@
         }, 100);
       }
       if (urlPag !== currentPage) {
+        // #region agent log
+        fetch('http://127.0.0.1:7440/ingest/a9d50c94-866c-49ac-b737-468ccc2df6c6',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'8c7e1b'},body:JSON.stringify({sessionId:'8c7e1b',runId:'initial',hypothesisId:'H3',location:'src/routes/+page.svelte:reactiveUrlSync:applyUrlPage',message:'URL sync is overriding in-memory currentPage',data:{urlPag,currentPageBeforeSync:currentPage,urlHref:$page.url.href,lastKnownHomeUrlPage:lastKnownHomeUrl.pagina,isUpdatingFromUrl,isUpdatingItemsPerPageFromUrl,isUpdatingPageFromUrl},timestamp:Date.now()})}).catch(()=>{});
+        // #endregion
         isUpdatingPageFromUrl = true;
         currentPage = urlPag;
         pageInput = String(urlPag);
@@ -523,6 +539,9 @@
         
         // Só atualiza a URL se o valor realmente mudou
         if (urlPesquisa !== currentPesquisa) {
+          // #region agent log
+          fetch('http://127.0.0.1:7440/ingest/a9d50c94-866c-49ac-b737-468ccc2df6c6',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'8c7e1b'},body:JSON.stringify({sessionId:'8c7e1b',runId:'initial',hypothesisId:'H4',location:'src/routes/+page.svelte:searchDebounce:beforeUpdateUrlParams',message:'debounced search URL sync requested',data:{urlPesquisa,currentPesquisa,currentPage,pageHref:$page?.url?.href || '',timerDelayMs:500},timestamp:Date.now()})}).catch(()=>{});
+          // #endregion
           isUpdatingFromUrl = true;
           updateUrlParams({ pesquisa: searchQuery });
           // Resetar flag após um pequeno delay para permitir que a URL seja atualizada
