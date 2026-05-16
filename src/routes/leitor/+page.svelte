@@ -1117,6 +1117,52 @@
     }
   }
   
+  /**
+   * Alterna entre modo de navegação horizontal (página única) e vertical (scroll contínuo).
+   * Preserva o documento, página atual e escala ao trocar de modo.
+   */
+  async function toggleNavigationMode() {
+    if (!viewerAdapterInst || !_viewerNS || !eventBus) return;
+
+    const newMode = navigationMode === 'horizontal' ? 'vertical' : 'horizontal';
+    navigationMode = newMode;
+    setNavigationMode(newMode);
+    zoomCtrl.invalidateCache();
+
+    const savedPdfDoc = viewer?.pdfDocument ?? null;
+    const savedPage = (viewer as any)?.currentPageNumber ?? 1;
+    const savedScale = (viewer as any)?.currentScale ?? 1;
+
+    // Criar novo viewer com o modo escolhido
+    viewer = viewerAdapterInst.switchMode(newMode, _viewerNS);
+    linkService.setViewer(viewer);
+
+    if (!savedPdfDoc) return;
+
+    // Recarregar documento e restaurar posição
+    linkService.setDocument(savedPdfDoc);
+    viewer.setDocument(savedPdfDoc);
+
+    const restoreOnInit = () => {
+      if (preferredFitMode === 'page-width') {
+        zoomCtrl.schedulePageWidth({ viewer, containerEl: containerEl!, viewerEl: viewerEl!, forceRecalculate: true, delayMs: 80 });
+      } else {
+        viewer.currentScaleValue = preferredFitMode;
+        viewer.currentScale = savedScale;
+      }
+      if (savedPage > 1) {
+        viewer.currentPageNumber = savedPage;
+      }
+    };
+
+    // Aguardar primeiro render
+    const onPagesinit = () => {
+      eventBus.off('pagesinit', onPagesinit);
+      restoreOnInit();
+    };
+    eventBus.on('pagesinit', onPagesinit);
+  }
+
   // Reativo: atualizar altura do container quando a visibilidade da barra mudar
   $: if (containerEl) {
     if (isToolbarVisible) {
@@ -1186,6 +1232,19 @@
   .container.page-width-mode :global(.pdfViewer .page) {
     margin: 0 !important;
   }
+
+  /* ── Modo vertical (scroll contínuo) ──────────────────────────────────── */
+  /* Em modo vertical, as páginas ficam empilhadas verticalmente com gap */
+  .container.vertical-nav :global(.pdfViewer) {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding-bottom: 24px !important;
+  }
+  .container.vertical-nav :global(.pdfViewer .page) {
+    margin: 0 auto 8px !important; /* gap entre páginas */
+  }
+  /* ───────────────────────────────────────────────────────────────────────── */
   /* Removed unused nested selector to satisfy build warnings */
   .toolbar {
     position: fixed;
@@ -1194,7 +1253,7 @@
     right: 0;
     height: 56px;
     display: grid;
-    grid-template-columns: 1fr max-content max-content repeat(4, max-content);
+    grid-template-columns: 1fr max-content max-content repeat(5, max-content);
     grid-template-rows: repeat(3, 1fr);
     column-gap: 8px;
     padding: 0 calc(12px + env(safe-area-inset-right)) 0 calc(12px + env(safe-area-inset-left));
@@ -1403,6 +1462,8 @@
     height: 0;
   }
   .btn.zoom-plus { grid-column: 6; grid-row: 1 / 4; align-self: center; }
+  .btn.nav-mode-toggle { grid-column: 7; grid-row: 1 / 4; align-self: center; }
+  .btn.nav-mode-toggle.active { color: #4fc3f7; }
 
   /* Wide screens: let content breathe */
   @media (min-width: 1024px) {
@@ -1743,6 +1804,27 @@
     </svg>
   </button>
 
+  <!-- Botão de alternância de modo de navegação -->
+  <button
+    class="btn nav-mode-toggle"
+    class:active={navigationMode === 'vertical'}
+    on:click={toggleNavigationMode}
+    aria-label={navigationMode === 'vertical' ? 'Mudar para modo horizontal (página única)' : 'Mudar para modo vertical (scroll contínuo)'}
+    title={navigationMode === 'vertical' ? 'Modo vertical ativo — clique para horizontal' : 'Modo horizontal ativo — clique para scroll contínuo'}
+  >
+    {#if navigationMode === 'vertical'}
+      <!-- Ícone scroll vertical (páginas empilhadas) -->
+      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="icon">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M3 5h18M3 9h18M3 13h18M3 17h18" />
+      </svg>
+    {:else}
+      <!-- Ícone página única (horizontal/single page) -->
+      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="icon">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M9 4.5v15m6-15v15M3 9h18M3 15h18" />
+      </svg>
+    {/if}
+  </button>
+
   <!-- Abra com /leitor?file=/pdfs/exemplo.pdf&titulo=Exemplo&subtitulo=Sub -->
   <!-- Atalhos: Ctrl/Cmd +/−/0, PgUp/PgDn/↑/↓ -->
   
@@ -1788,7 +1870,7 @@
   </div>
 {/if}
 
-<div id="viewerContainer" bind:this={containerEl} class="container {containerClass}" class:hidden={pdfLoading || pdfError}>
+<div id="viewerContainer" bind:this={containerEl} class="container {containerClass}" class:vertical-nav={navigationMode === 'vertical'} class:hidden={pdfLoading || pdfError}>
   <!-- Elemento focável invisível para ativar sistema de eventos de teclado no iOS -->
   <textarea
     bind:this={keyboardFocusEl}
@@ -1803,20 +1885,36 @@
     spellcheck="false"
   ></textarea>
   
-  <!-- Zona de navegação esquerda -->
-  <div class="navigation-zone left">
-    <GestureButton
-      on:click={prevPage}
-      on:longpress={goToFirstPage}
-      longPressDuration={500}
-      hapticFeedback={true}
-      preventDefault={false}
-    >
-      <div class="touch-zone left"></div>
-    </GestureButton>
-  </div>
+  <!-- Zonas laterais: apenas no modo horizontal -->
+  {#if navigationMode === 'horizontal'}
+    <!-- Zona de navegação esquerda -->
+    <div class="navigation-zone left">
+      <GestureButton
+        on:click={prevPage}
+        on:longpress={goToFirstPage}
+        longPressDuration={500}
+        hapticFeedback={true}
+        preventDefault={false}
+      >
+        <div class="touch-zone left"></div>
+      </GestureButton>
+    </div>
 
-  <!-- Zona de navegação central -->
+    <!-- Zona de navegação direita -->
+    <div class="navigation-zone right">
+      <GestureButton
+        on:click={nextPage}
+        on:longpress={goToLastPage}
+        longPressDuration={500}
+        hapticFeedback={true}
+        preventDefault={false}
+      >
+        <div class="touch-zone right"></div>
+      </GestureButton>
+    </div>
+  {/if}
+
+  <!-- Zona central: sempre presente (long press ativa toolbar) -->
   <div class="navigation-zone center">
     <GestureButton
       on:longpress={toggleToolbar}
@@ -1825,19 +1923,6 @@
       preventDefault={false}
     >
       <div class="touch-zone center"></div>
-    </GestureButton>
-  </div>
-
-  <!-- Zona de navegação direita -->
-  <div class="navigation-zone right">
-    <GestureButton
-      on:click={nextPage}
-      on:longpress={goToLastPage}
-      longPressDuration={500}
-      hapticFeedback={true}
-      preventDefault={false}
-    >
-      <div class="touch-zone right"></div>
     </GestureButton>
   </div>
 

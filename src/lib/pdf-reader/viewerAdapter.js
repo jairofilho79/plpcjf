@@ -60,40 +60,17 @@ export class ViewerAdapter {
   }
 
   /**
-   * Recria o viewer com um novo modo, preservando o documento atual e a página.
-   * Deve ser chamado depois que um documento já foi carregado.
+   * Recria o viewer com um novo modo. Passa a responsabilidade de restaurar
+   * documento/página/escala ao chamador (via pagesinit ou diretamente).
    *
    * @param {'horizontal' | 'vertical'} newMode
    * @param {any} viewerNS
-   * @param {{ pdfDocument: any, currentPage: number, currentScale: number }} state Estado para restaurar
-   * @returns {any} novo viewer PDF.js
+   * @returns {any} novo viewer PDF.js criado
    */
-  switchMode(newMode, viewerNS, { pdfDocument, currentPage, currentScale }) {
+  switchMode(newMode, viewerNS) {
     this.mode = newMode;
-
-    // Limpar DOM do viewerEl antes de recriar
     if (this.viewerEl) this.viewerEl.replaceChildren();
-
-    const viewer = this.create(viewerNS);
-
-    // Restaurar documento e posição
-    if (pdfDocument) {
-      this.linkService.setDocument(pdfDocument);
-      this.linkService.setViewer(viewer);
-      viewer.setDocument(pdfDocument);
-
-      // Restaurar página e escala após o primeiro render
-      this.eventBus.on('pagesinit', () => {
-        if (currentScale && currentScale > 0) {
-          viewer.currentScale = currentScale;
-        }
-        if (currentPage && currentPage > 1) {
-          viewer.currentPageNumber = currentPage;
-        }
-      }, { once: true });
-    }
-
-    return viewer;
+    return this.create(viewerNS);
   }
 
   /**
