@@ -270,10 +270,13 @@ export class PackageDownloader {
    * @param {AbortSignal} [options.abortSignal]
    * @param {Function} [options.onProgress]
    * @param {boolean} [options.batch=true]
+   * @param {Map<string, {pdfId?: string, category?: string, manifestRevision?: string}>} [options.pdfMetadataMap]
+   *   Map from normalized PDF path → inventory metadata.  Passed to the IDB writer so that
+   *   every stored entry carries pdfId and category for deterministic inventory queries.
    * @returns {Promise<{stored: number, extracted: number, bytesDownloaded: number}>}
    */
   async downloadExtractStorePackage(packageUrl, expectedPdfs = [], options = {}) {
-    const { abortSignal = null, onProgress = null, batch = true } = options;
+    const { abortSignal = null, onProgress = null, batch = true, pdfMetadataMap = null } = options;
 
     const useZipWorker = getConfig('OFFLINE_IDB_ENABLED') === true &&
       getConfig('OFFLINE_WORKER_ZIP_STREAMING_ENABLED') === true &&
@@ -285,6 +288,8 @@ export class PackageDownloader {
         packageUrl,
         expectedPdfs,
         abortSignal,
+        // Serialize the Map to a plain object for postMessage transfer
+        pdfMetadata: pdfMetadataMap ? Object.fromEntries(pdfMetadataMap) : null,
         onProgress: (message) => {
           if (!onProgress) return;
           const completed = Number(message?.completed || 0);
@@ -320,7 +325,8 @@ export class PackageDownloader {
       extractedPdfs = await this.extractPdfsFromZip(zipBlob, expectedPdfs);
       const stored = await this.storePdfsInCache(extractedPdfs, {
         batch,
-        onProgress
+        onProgress,
+        pdfMetadataMap
       });
 
       return {
@@ -344,17 +350,17 @@ export class PackageDownloader {
   }
 
   /**
-   * Store extracted PDFs in cache
-   * Uses PdfPathManager to normalize paths consistently (preserves case and accents)
-   * Always uses originalName from ZIP to preserve exact path with accents and case
-   * @param {ExtractedPdf[]} pdfs - Extracted PDFs
-   * @param {Object} [options] - Storage options
-   * @param {boolean} [options.batch=false] - Use batch mode for better performance
-   * @param {Function} [options.onProgress] - Progress callback (completed, total, percentage)
-   * @returns {Promise<number>} Number of PDFs stored
+   * Store extracted PDFs in cache.
+   *
+   * @param {ExtractedPdf[]} pdfs
+   * @param {Object} [options]
+   * @param {boolean} [options.batch=false]
+   * @param {Function} [options.onProgress]
+   * @param {Map<string, {pdfId?: string, category?: string, manifestRevision?: string}>} [options.pdfMetadataMap]
+   * @returns {Promise<number>}
    */
   async storePdfsInCache(pdfs, options = {}) {
-    const { batch = false, onProgress = null } = options;
+    const { batch = false, onProgress = null, pdfMetadataMap = null } = options;
     
     // Use batch mode for better performance when storing multiple PDFs
     if (batch && pdfs.length > 1) {
@@ -379,9 +385,16 @@ export class PackageDownloader {
           continue;
         }
         
+        // Look up inventory metadata if provided
+        const meta = pdfMetadataMap?.get(`/${normalizedPath}`) ||
+                     pdfMetadataMap?.get(normalizedPath) || {};
+
         pdfsToBatch.push({
           path: normalizedPath,
-          blob: pdf.blob
+          blob: pdf.blob,
+          pdfId: meta.pdfId,
+          category: meta.category,
+          manifestRevision: meta.manifestRevision
         });
         
         preparedCount++;
@@ -404,12 +417,15 @@ export class PackageDownloader {
       let lastProgressUpdate = 0;
       
       for (let i = 0; i < pdfsToBatch.length; i++) {
-        const { path, blob } = pdfsToBatch[i];
+        const { path, blob, pdfId, category, manifestRevision } = pdfsToBatch[i];
         
         try {
           await cacheStorageAdapter._putPdfInternal(path, blob, {
             emitEvents: false,
-            notifyServiceWorker: false
+            notifyServiceWorker: false,
+            pdfId,
+            category,
+            manifestRevision
           });
           storedCount++;
           
@@ -483,7 +499,15 @@ export class PackageDownloader {
         if (isDev && (normalizedPath.includes('cifra') || normalizedPath.includes('nivel') || normalizedPath.includes('Cifra') || normalizedPath.includes('Nivel'))) {
           logger.debug('PackageDownloader', `Storing PDF (Cifra): ${originalPath} -> ${normalizedPath}`);
         }
-        await cacheStorageAdapter.putPdf(normalizedPath, pdf.blob);
+        const meta = pdfMetadataMap?.get(`/${normalizedPath}`) ||
+                     pdfMetadataMap?.get(normalizedPath) || {};
+        await cacheStorageAdapter._putPdfInternal(normalizedPath, pdf.blob, {
+          emitEvents: false,
+          notifyServiceWorker: false,
+          pdfId: meta.pdfId,
+          category: meta.category,
+          manifestRevision: meta.manifestRevision
+        });
         stored++;
         
         // Call progress callback if provided
