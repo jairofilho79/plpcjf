@@ -88,9 +88,11 @@
   let isSyncing = false;
   let lastSyncTime = null;
   
-  // Migration V2 state
+  // Migration state
   let isMigrating = false;
+  /** @type {{ processed: number, total: number, migrated: number, skipped: number, errors: number, percentage: number } | null} */
   let migrationProgress = null;
+  /** @type {{ migrated: number, skipped: number, errors: number, cancelled: boolean } | null} */
   let migrationResult = null;
   let migrationNeeded = false;
   /** @type {(() => void) | null} */
