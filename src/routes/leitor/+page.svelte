@@ -11,9 +11,10 @@
   import { clearPdfFromSwCache } from '$lib/utils/swRegistration';
   import { createObjectUrlManager } from '$lib/offline/ui/objectUrlLifecycle';
   import { checkEffectiveConnectivity } from '$lib/utils/pdfValidation';
-  import { getFitMode, setFitMode } from '$lib/pdf-reader/readerPreferences';
+  import { getFitMode, setFitMode, getNavigationMode, setNavigationMode } from '$lib/pdf-reader/readerPreferences';
   import { ZoomController } from '$lib/pdf-reader/zoomController';
   import { resolvePdfSourceUrl as resolveSource } from '$lib/pdf-reader/pdfSourceResolver';
+  import { ViewerAdapter } from '$lib/pdf-reader/viewerAdapter';
 
   // ── Performance Debug ────────────────────────────────────────────────────────
   const _perfEnabled = () =>
@@ -56,6 +57,11 @@
   let eventBus: any;
   let linkService: any;
   let viewer: any;
+  let viewerAdapterInst: ViewerAdapter | null = null;
+  /** @type {'horizontal' | 'vertical'} */
+  let navigationMode: 'horizontal' | 'vertical' = getNavigationMode();
+  // viewerNS guardado para poder recriar o viewer ao trocar de modo
+  let _viewerNS: any = null;
   let cleanup: (() => void) | null = null;
   const objectUrlManager = createObjectUrlManager();
   let activePdfObjectUrl: string | null = null;
@@ -590,18 +596,13 @@
     window.__pdfjsGetDocument = core.getDocument;
     core.GlobalWorkerOptions.workerSrc = workerUrl;
 
-    const { EventBus, PDFLinkService, PDFSinglePageViewer } = viewerNS as any;
+    const { EventBus, PDFLinkService } = viewerNS as any;
+    _viewerNS = viewerNS;
 
     eventBus = new EventBus();
     linkService = new PDFLinkService({ eventBus });
-    viewer = new PDFSinglePageViewer({
-      container: containerEl,
-      viewer: viewerEl,
-      eventBus,
-      linkService,
-      useOnlyCssZoom: true,
-      textLayerMode: 2
-    });
+    viewerAdapterInst = new ViewerAdapter({ container: containerEl!, viewerEl: viewerEl!, eventBus, linkService, mode: navigationMode });
+    viewer = viewerAdapterInst.create(viewerNS);
     linkService.setViewer(viewer);
 
     const resize = () => {
@@ -724,8 +725,7 @@
         containerEl.removeEventListener('click', handleFirstInteraction, true);
       }
       try { if (toolbarEl) ro.unobserve(toolbarEl); } catch {}
-      // No explicit destroy API; let GC collect. Clear container contents.
-      if (viewerEl) viewerEl.replaceChildren();
+      viewerAdapterInst?.destroy();
     };
   });
 
