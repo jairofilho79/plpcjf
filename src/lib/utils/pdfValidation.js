@@ -540,6 +540,22 @@ export function findRequiredPackages(missingPdfs, offlineManifest) {
 }
 
 /**
+ * Finds missing PDFs using IndexedDB as the canonical source of truth.
+ *
+ * Preferred over findMissingPdfs() because it avoids Cache API URL parsing
+ * and is deterministic: only blobs persisted in IndexedDB count as available.
+ *
+ * @param {Array} louvores - Array of louvor objects
+ * @returns {Promise<Array>} Louvores whose PDFs are not in IndexedDB
+ */
+export async function findMissingPdfsFromInventory(louvores) {
+  const { default: offlineInventoryRepository } = await import(
+    '$lib/offline/storage/OfflineInventoryRepository.js'
+  );
+  return offlineInventoryRepository.findMissingPdfs(louvores);
+}
+
+/**
  * Validates PDF availability using multiple strategies
  * @param {Object} louvor - Louvor object
  * @param {Function} indexCheck - Function to check index (optional)

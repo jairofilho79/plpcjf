@@ -308,7 +308,15 @@ export class CacheStorageAdapter extends CacheRepository {
    * @private
    */
   async _putPdfInternal(pdfPath, pdfData, options = {}) {
-    const { emitEvents = true, notifyServiceWorker = true } = options;
+    const {
+      emitEvents = true,
+      notifyServiceWorker = true,
+      // Inventory metadata — forwarded to IndexedDB so the canonical inventory
+      // is enriched with pdfId, category and manifestRevision at write time.
+      pdfId,
+      category,
+      manifestRevision
+    } = options;
     
     if (!browser) {
       throw new Error('Cache Storage API not available');
@@ -345,11 +353,15 @@ export class CacheStorageAdapter extends CacheRepository {
       try {
         const blob = pdfData instanceof Blob ? pdfData : await response.clone().blob();
         await indexedDbAssetRepository.putAsset(pdfPath, blob, {
-          mimeType: blob.type || 'application/pdf'
+          mimeType: blob.type || 'application/pdf',
+          pdfId,
+          category,
+          status: 'persisted',
+          manifestRevision
         });
       } catch (idbError) {
         logger.warn('CacheStorageAdapter', `Failed writing PDF to IndexedDB: ${normalizedPath}`, idbError);
-    }
+      }
     }
     
     logger.info('CacheStorageAdapter', `PDF stored in cache: ${normalizedPath}`);

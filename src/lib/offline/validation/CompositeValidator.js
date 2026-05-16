@@ -1,6 +1,11 @@
 /**
  * Composite Validator
- * Combines multiple validation strategies with fallback
+ *
+ * Strategy order (most authoritative first):
+ *   0. IndexedDB inventory — only this counts as "persisted offline"
+ *   1. Index (pdfIndex) — fast secondary check for pre-built index
+ *   2. Cache API — legacy / migration window only
+ *   3. Network — signals "downloadable", not "persisted"
  */
 
 import { PdfValidator } from './PdfValidator.js';
@@ -9,43 +14,35 @@ import indexValidator from './IndexValidator.js';
 import networkValidator from './NetworkValidator.js';
 import PdfPathManager from '../utils/PdfPathManager.js';
 import { createLogger } from '../utils/OfflineLogger.js';
+import offlineInventoryRepository from '../storage/OfflineInventoryRepository.js';
+import { browser } from '$app/environment';
 
 const logger = createLogger('CompositeValidator');
 
-/**
- * Composite Validator
- * Combines multiple validation strategies in order:
- * 1. Index (fastest, if available)
- * 2. Cache (reliable, always checked)
- * 3. Network (fallback, only if online)
- */
 export class CompositeValidator extends PdfValidator {
   /**
-   * @param {Array<PdfValidator>} [validators] - Custom validators (defaults to standard set)
+   * @param {Array<PdfValidator>} [validators] - Custom validators for strategies 1-3
    */
   constructor(validators = null) {
     super();
-    this.validators = validators || [
-      indexValidator,
-      cacheValidator,
-      networkValidator
-    ];
+    this.validators = validators || [indexValidator, cacheValidator, networkValidator];
   }
 
   /**
-   * Validate PDF availability using multiple strategies
-   * Order: Index (fastest) -> Cache (reliable) -> Network (fallback)
-   * 
+   * Validate PDF availability.
+   *
    * @param {string} pdfPath - PDF path to validate
-   * @param {Object} [options] - Validation options
-   * @param {boolean} [options.useIndex] - Whether to use index (default: true)
-   * @param {boolean} [options.checkNetwork] - Whether to check network (default: true if online)
-   * @param {string} [options.pdfId] - PDF ID for index lookup
-   * @returns {Promise<ValidationResult>} Validation result
+   * @param {{
+   *   useIndex?: boolean,
+   *   checkNetwork?: boolean,
+   *   pdfId?: string,
+   *   skipInventory?: boolean
+   * }} [options]
+   * @returns {Promise<import('./PdfValidator.js').ValidationResult>}
    */
   async validate(pdfPath, options = {}) {
     const startTime = performance.now();
-    
+
     if (!pdfPath || typeof pdfPath !== 'string') {
       return {
         available: false,
@@ -56,93 +53,87 @@ export class CompositeValidator extends PdfValidator {
       };
     }
 
-    const useIndex = options.useIndex !== false;
-    const checkNetwork = options.checkNetwork !== false && navigator.onLine;
-    
-    // Normalize path once using PdfPathManager (used for final result if all strategies fail)
     const normalizedPath = PdfPathManager.normalizeForStorage(pdfPath);
+    const useIndex = options.useIndex !== false;
+    const checkNetwork = options.checkNetwork !== false && typeof navigator !== 'undefined' && navigator.onLine;
 
-    // Strategy 1: Index (fastest, if available and enabled)
+    // ── Strategy 0: IndexedDB inventory ──────────────────────────────────────
+    // This is the ONLY source that means "persisted offline". If IDB has the
+    // blob, we return immediately without touching Cache API or network.
+    if (!options.skipInventory && browser) {
+      try {
+        const hasInIdb = options.pdfId
+          ? await offlineInventoryRepository._repo.hasByPdfId(options.pdfId)
+          : await offlineInventoryRepository._repo.hasAsset(pdfPath);
+
+        if (hasInIdb) {
+          const elapsed = performance.now() - startTime;
+          logger.debug('CompositeValidator', `IDB hit in ${elapsed.toFixed(2)}ms: ${pdfPath}`);
+          return {
+            available: true,
+            source: 'indexeddb',
+            normalizedPath: normalizedPath || '',
+            needsDownload: false
+          };
+        }
+      } catch (err) {
+        logger.debug('CompositeValidator', 'IDB check failed, continuing', err);
+      }
+    }
+
+    // ── Strategy 1: Pre-built PDF index ──────────────────────────────────────
     if (useIndex && options.pdfId) {
-      const indexStartTime = performance.now();
       try {
         const indexResult = await indexValidator.validate(pdfPath, options);
-        const indexDuration = performance.now() - indexStartTime;
-        
-        logger.debug('CompositeValidator', `Index validation: ${indexResult.available ? 'FOUND' : 'NOT FOUND'} (${indexDuration.toFixed(2)}ms)`);
-        
-        // If index is available and gives a definitive answer, use it
-        if (indexResult.error !== 'Index not available') {
-          if (indexResult.available) {
-            // Index says available - trust it
-            const totalDuration = performance.now() - startTime;
-            logger.debug('CompositeValidator', `PDF validated via Index in ${totalDuration.toFixed(2)}ms: ${pdfPath}`);
-            return indexResult;
-          }
-          // Index says not available - continue to cache check to be sure
+        if (indexResult.error !== 'Index not available' && indexResult.available) {
+          const elapsed = performance.now() - startTime;
+          logger.debug('CompositeValidator', `Index hit in ${elapsed.toFixed(2)}ms: ${pdfPath}`);
+          return indexResult;
         }
-      } catch (error) {
-        const indexDuration = performance.now() - indexStartTime;
-        logger.debug('CompositeValidator', `Index validation failed after ${indexDuration.toFixed(2)}ms, continuing to cache`, error);
+      } catch (err) {
+        logger.debug('CompositeValidator', 'Index validation failed, continuing', err);
       }
     }
 
-    // Strategy 2: Cache (reliable, always checked)
-    const cacheStartTime = performance.now();
+    // ── Strategy 2: Cache API (legacy / migration window) ────────────────────
+    // A Cache API hit does NOT mean "persistently offline"; it could be evicted.
+    // We return it but mark source as 'cache' so callers can treat it differently.
     try {
       const cacheResult = await cacheValidator.validate(pdfPath, options);
-      const cacheDuration = performance.now() - cacheStartTime;
-      
-      logger.debug('CompositeValidator', `Cache validation: ${cacheResult.available ? 'FOUND' : 'NOT FOUND'} (${cacheDuration.toFixed(2)}ms)`);
-      
       if (cacheResult.available) {
-        // Found in cache - return immediately
-        const totalDuration = performance.now() - startTime;
-        logger.debug('CompositeValidator', `PDF validated via Cache in ${totalDuration.toFixed(2)}ms: ${pdfPath}`);
+        const elapsed = performance.now() - startTime;
+        logger.debug('CompositeValidator', `Cache hit in ${elapsed.toFixed(2)}ms: ${pdfPath}`);
         return cacheResult;
       }
-      
-      // Not in cache - continue to network check if enabled
-    } catch (error) {
-      const cacheDuration = performance.now() - cacheStartTime;
-      logger.debug('CompositeValidator', `Cache validation failed after ${cacheDuration.toFixed(2)}ms, continuing to network`, error);
+    } catch (err) {
+      logger.debug('CompositeValidator', 'Cache validation failed, continuing', err);
     }
 
-    // Strategy 3: Network (fallback, only if online and enabled)
+    // ── Strategy 3: Network (downloadable, not persisted) ───────────────────
     if (checkNetwork) {
-      const networkStartTime = performance.now();
       try {
         const networkResult = await networkValidator.validate(pdfPath, { checkNetwork: true });
-        const networkDuration = performance.now() - networkStartTime;
-        
-        logger.debug('CompositeValidator', `Network validation: ${networkResult.available ? 'FOUND' : 'NOT FOUND'} (${networkDuration.toFixed(2)}ms)`);
-        
-        // Network check gives definitive answer
-        const totalDuration = performance.now() - startTime;
-        logger.debug('CompositeValidator', `PDF validated via Network in ${totalDuration.toFixed(2)}ms: ${pdfPath}`);
+        const elapsed = performance.now() - startTime;
+        logger.debug('CompositeValidator', `Network result in ${elapsed.toFixed(2)}ms: ${pdfPath}`);
         return networkResult;
-      } catch (error) {
-        const networkDuration = performance.now() - networkStartTime;
-        logger.debug('CompositeValidator', `Network validation failed after ${networkDuration.toFixed(2)}ms`, error);
+      } catch (err) {
+        logger.debug('CompositeValidator', 'Network validation failed', err);
       }
     }
 
-    // If all strategies failed or were skipped, return not available
-    const totalDuration = performance.now() - startTime;
-    logger.debug('CompositeValidator', `PDF validation failed after ${totalDuration.toFixed(2)}ms: ${pdfPath}`);
-    
+    const elapsed = performance.now() - startTime;
+    logger.debug('CompositeValidator', `All strategies failed in ${elapsed.toFixed(2)}ms: ${pdfPath}`);
+
     return {
       available: false,
       source: 'unknown',
       normalizedPath: normalizedPath || '',
-      needsDownload: navigator.onLine,
+      needsDownload: typeof navigator !== 'undefined' ? navigator.onLine : false,
       error: 'All validation strategies failed or were skipped'
     };
   }
 }
 
-// Create default singleton instance
 const compositeValidator = new CompositeValidator();
 
 export default compositeValidator;
-
