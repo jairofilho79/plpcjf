@@ -63,9 +63,15 @@
     const ipp = get(bibliotecaItemsPerPage);
     const maxP = results.length === 0 ? 1 : Math.max(1, Math.ceil(results.length / ipp));
     if (!pageInitializedFromUrl) {
+      // #region agent log
+      fetch('http://127.0.0.1:7440/ingest/a9d50c94-866c-49ac-b737-468ccc2df6c6',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'8c7e1b'},body:JSON.stringify({sessionId:'8c7e1b',runId:'initial-r2',hypothesisId:'H5',location:'src/routes/+page.svelte:finalizeFilteredResults:resetToFirstPage',message:'finalizeFilteredResults forced page reset to 1',data:{resultsLength:results.length,itemsPerPage:ipp,maxPage:maxP,currentPageBeforeReset:currentPage,pageInitializedFromUrl,searchQuery,lastKnownHomeUrlPage:lastKnownHomeUrl.pagina,urlHref:browser && $page?.url ? $page.url.href : ''},timestamp:Date.now()})}).catch(()=>{});
+      // #endregion
       currentPage = 1;
       pageInput = '1';
       if (browser && homeUrlSyncInitialized && $page?.url?.pathname === '/' && !isUpdatingFromUrl) {
+        // #region agent log
+        fetch('http://127.0.0.1:7440/ingest/a9d50c94-866c-49ac-b737-468ccc2df6c6',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'8c7e1b'},body:JSON.stringify({sessionId:'8c7e1b',runId:'initial-r2',hypothesisId:'H5',location:'src/routes/+page.svelte:finalizeFilteredResults:updateUrlPage1',message:'finalizeFilteredResults writing pagina=1 to URL sync',data:{searchQuery,currentPage,lastKnownHomeUrlPage:lastKnownHomeUrl.pagina,urlHref:browser && $page?.url ? $page.url.href : ''},timestamp:Date.now()})}).catch(()=>{});
+        // #endregion
         updateUrlParams({ pagina: 1 });
         lastKnownHomeUrl = { ...lastKnownHomeUrl, pagina: 1 };
       }
@@ -186,6 +192,9 @@
    * @param {CustomEvent<{ page: number; scroll?: boolean }>} e
    */
   function handleHomePaginationPage(e) {
+    // #region agent log
+    fetch('http://127.0.0.1:7440/ingest/a9d50c94-866c-49ac-b737-468ccc2df6c6',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'8c7e1b'},body:JSON.stringify({sessionId:'8c7e1b',runId:'initial-r2',hypothesisId:'H6',location:'src/routes/+page.svelte:handleHomePaginationPage',message:'pagination control requested page change',data:{requestedPage:e?.detail?.page ?? null,currentPageBeforeSetPage:currentPage,pageInputBeforeSetPage:pageInput,urlHref:browser && $page?.url ? $page.url.href : ''},timestamp:Date.now()})}).catch(()=>{});
+    // #endregion
     setPage(e.detail.page, { scroll: e.detail.scroll !== false });
   }
 
@@ -548,6 +557,9 @@
         
         // Só atualiza a URL se o valor realmente mudou
         if (urlPesquisa !== currentPesquisa) {
+          // #region agent log
+          fetch('http://127.0.0.1:7440/ingest/a9d50c94-866c-49ac-b737-468ccc2df6c6',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'8c7e1b'},body:JSON.stringify({sessionId:'8c7e1b',runId:'initial-r2',hypothesisId:'H7',location:'src/routes/+page.svelte:searchDebounce:writePesquisa',message:'search debounce writing URL params',data:{urlPesquisa,currentPesquisa,pageInitializedFromUrl,urlHref:browser && $page?.url ? $page.url.href : ''},timestamp:Date.now()})}).catch(()=>{});
+          // #endregion
           isUpdatingFromUrl = true;
           updateUrlParams(homeSearchUrlParams(searchQuery));
           // Resetar flag após um pequeno delay para permitir que a URL seja atualizada
