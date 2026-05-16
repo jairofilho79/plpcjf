@@ -1266,12 +1266,14 @@
     top: 0;
     left: 0;
     right: 0;
-    height: 56px;
+    min-height: 56px;
+    height: auto;
     display: grid;
     grid-template-columns: 1fr max-content max-content repeat(5, max-content);
     grid-template-rows: repeat(3, 1fr);
     column-gap: 8px;
-    padding: 0 calc(12px + env(safe-area-inset-right)) 0 calc(12px + env(safe-area-inset-left));
+    /* Safe area: recuo para notch/câmera (iOS/Android) */
+    padding: env(safe-area-inset-top) calc(12px + env(safe-area-inset-right)) 0 calc(12px + env(safe-area-inset-left));
     background: var(--background-color);
     color: var(--text-light);
     border-bottom: 4px solid var(--gold-color);
@@ -1385,6 +1387,24 @@
   .indicator .current { font-variant-numeric: tabular-nums; }
   .indicator .total { opacity: .9; }
 
+  /* Estilizar o GestureButton wrapper nos botões de navegação (sem button aninhado) */
+  .page-nav-prev :global(.gesture-button-wrapper),
+  .page-nav-next :global(.gesture-button-wrapper) {
+    padding: 10px 12px;
+    border-radius: 6px;
+    background: var(--btn-background-color);
+    border: 1px solid rgba(255,255,255,0.12);
+    color: var(--text-light);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .page-nav-prev :global(.gesture-button-wrapper):hover,
+  .page-nav-next :global(.gesture-button-wrapper):hover {
+    filter: brightness(1.05);
+  }
+
   /* Grid placements for controls spanning all rows */
   /* Hide prev/next buttons on mobile */
   .page-nav-prev { 
@@ -1405,7 +1425,17 @@
     display: none; /* Hidden on mobile by default */
   }
   .btn.zoom-minus { grid-column: 4; grid-row: 1 / 4; align-self: center; }
-  .btn.zoom-fit { grid-column: 5; grid-row: 1 / 4; align-self: center; position: relative; }
+  .btn.zoom-fit { grid-column: 5; grid-row: 1 / 4; align-self: center; position: relative; cursor: pointer; }
+  /* GestureButton dentro do zoom-fit preenche toda a área clicável */
+  .btn.zoom-fit :global(.gesture-button-wrapper) {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    height: 100%;
+    padding: 10px 12px;
+    position: relative;
+  }
   
   .zoom-fit-indicator {
     position: absolute;
@@ -1511,7 +1541,7 @@
   /* Tablet+ layout: brand in its own column, title/subtitle to the right */
   @media (min-width: 768px) {
     .toolbar {
-      grid-template-columns: auto 1fr max-content repeat(6, max-content);
+      grid-template-columns: auto 1fr max-content repeat(7, max-content);
     }
     .brand { grid-column: 1; grid-row: auto; align-self: center; }
     .title-wrap { grid-column: 2; grid-row: auto; }
@@ -1524,7 +1554,7 @@
     .page-nav-prev { 
       grid-column: 4;
       grid-row: auto;
-      display: flex; /* Show on tablet+ */
+      display: flex;
     }
     .indicator { 
       grid-column: 5;
@@ -1533,7 +1563,7 @@
     .page-nav-next { 
       grid-column: 6;
       grid-row: auto;
-      display: flex; /* Show on tablet+ */
+      display: flex;
     }
     .btn.zoom-minus { 
       grid-column: 7;
@@ -1545,6 +1575,10 @@
     }
     .btn.zoom-plus { 
       grid-column: 9;
+      grid-row: auto;
+    }
+    .btn.nav-mode-toggle {
+      grid-column: 10;
       grid-row: auto;
     }
   }
@@ -1757,12 +1791,11 @@
       longPressDuration={500}
       hapticFeedback={true}
       preventDefault={true}
+      ariaLabel="Página anterior (long press: primeira página)"
     >
-      <button class="btn prev" aria-label="Página anterior">
-        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="icon">
-          <path stroke-linecap="round" stroke-linejoin="round" d="M10.5 19.5 3 12m0 0 7.5-7.5M3 12h18" />
-        </svg>
-      </button>
+      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="icon">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M10.5 19.5 3 12m0 0 7.5-7.5M3 12h18" />
+      </svg>
     </GestureButton>
   </div>
   <div class="indicator" aria-label="Página atual e total">
@@ -1776,12 +1809,11 @@
       longPressDuration={500}
       hapticFeedback={true}
       preventDefault={true}
+      ariaLabel="Próxima página (long press: última página)"
     >
-      <button class="btn next" aria-label="Próxima página">
-        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="icon">
-          <path stroke-linecap="round" stroke-linejoin="round" d="M13.5 4.5 21 12m0 0-7.5 7.5M21 12H3" />
-        </svg>
-      </button>
+      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="icon">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M13.5 4.5 21 12m0 0-7.5 7.5M21 12H3" />
+      </svg>
     </GestureButton>
   </div>
 
@@ -1791,27 +1823,23 @@
     </svg>
   </button>
 
-  <GestureButton
-    on:click={zoomFit}
-    on:longpress={toggleFitMode}
-    longPressDuration={500}
-    hapticFeedback={true}
-    preventDefault={true}
-  >
-    <button 
-      class="btn zoom-fit" 
-      class:page-fit={preferredFitMode === 'page-fit'}
-      class:page-width={preferredFitMode === 'page-width'}
-      aria-label="Ajustar zoom"
+  <!-- zoom-fit: GestureButton age como o elemento interativo (sem button aninhado) -->
+  <div class="btn zoom-fit" class:page-fit={preferredFitMode === 'page-fit'} class:page-width={preferredFitMode === 'page-width'}>
+    <GestureButton
+      on:click={zoomFit}
+      on:longpress={toggleFitMode}
+      longPressDuration={500}
+      hapticFeedback={true}
+      preventDefault={true}
+      ariaLabel="Ajustar zoom (long press: alternar page-fit/page-width)"
     >
       {zoomPercent}%
-      <!-- Visual indicators for fit mode -->
       <div class="zoom-fit-indicator bar page-fit top"></div>
       <div class="zoom-fit-indicator bar page-fit bottom"></div>
       <div class="zoom-fit-indicator bar page-width left"></div>
       <div class="zoom-fit-indicator bar page-width right"></div>
-    </button>
-  </GestureButton>
+    </GestureButton>
+  </div>
 
   <button class="btn zoom-plus" on:click={zoomIn} aria-label="Aumentar zoom">
     <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="icon">
