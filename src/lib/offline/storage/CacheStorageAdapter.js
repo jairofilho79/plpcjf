@@ -15,11 +15,6 @@ import {
   encodeUrlComponentUtf8, 
   decodeUrlComponentUtf8
 } from '$lib/utils/urlEncoding.js';
-import {
-  createQuotaExceededError,
-  isQuotaExceededError
-} from '../core/OfflineStorageErrors.js';
-import indexedDbAssetRepository from './IndexedDbAssetRepository.js';
 
 const logger = createLogger('CacheStorageAdapter');
 
@@ -159,31 +154,6 @@ export class CacheStorageAdapter extends CacheRepository {
     }
 
     try {
-      const idbEnabled = getConfig('OFFLINE_IDB_ENABLED') === true;
-      const cacheFallbackEnabled = getConfig('OFFLINE_READTHROUGH_CACHE_FALLBACK_ENABLED') !== false;
-
-      // Read-through strategy: IndexedDB first.
-      if (idbEnabled) {
-        try {
-          const idbBlob = await indexedDbAssetRepository.getAssetBlob(pdfPath);
-          if (idbBlob) {
-            return new Response(idbBlob, {
-              headers: {
-                'Content-Type': idbBlob.type || 'application/pdf'
-              }
-            });
-          }
-          if (!cacheFallbackEnabled) {
-            return null;
-          }
-        } catch (idbError) {
-          logger.debug('CacheStorageAdapter', 'IndexedDB lookup failed, falling back to cache', idbError);
-          if (!cacheFallbackEnabled) {
-            return null;
-          }
-        }
-      }
-
       // Normalize path using PdfPathManager (preserves case and accents)
       const normalizedPath = PdfPathManager.normalizeForStorage(pdfPath);
       if (!normalizedPath) {
@@ -308,15 +278,7 @@ export class CacheStorageAdapter extends CacheRepository {
    * @private
    */
   async _putPdfInternal(pdfPath, pdfData, options = {}) {
-    const {
-      emitEvents = true,
-      notifyServiceWorker = true,
-      // Inventory metadata — forwarded to IndexedDB so the canonical inventory
-      // is enriched with pdfId, category and manifestRevision at write time.
-      pdfId,
-      category,
-      manifestRevision
-    } = options;
+    const { emitEvents = true, notifyServiceWorker = true } = options;
     
     if (!browser) {
       throw new Error('Cache Storage API not available');
@@ -328,41 +290,14 @@ export class CacheStorageAdapter extends CacheRepository {
       throw new Error('Invalid PDF path');
     }
 
+    const cache = await this._openCache();
     const response = this._toResponse(pdfData);
-    const idbEnabled = getConfig('OFFLINE_IDB_ENABLED') === true;
-    const idbWriteOnly = getConfig('OFFLINE_IDB_WRITE_ONLY') === true;
     
     // Create request URL using PdfPathManager (preserves encoding)
     const requestUrl = PdfPathManager.createRequestUrl(pdfPath, window.location.origin);
     const request = new Request(requestUrl);
 
-    if (!idbWriteOnly) {
-      try {
-        const cache = await this._openCache();
-        await cache.put(request, response);
-      } catch (error) {
-        if (isQuotaExceededError(error)) {
-          throw createQuotaExceededError({ causeMessage: error?.message });
-        }
-        throw error;
-      }
-    }
-
-    // Keep IndexedDB as source-of-truth when enabled.
-    if (idbEnabled) {
-      try {
-        const blob = pdfData instanceof Blob ? pdfData : await response.clone().blob();
-        await indexedDbAssetRepository.putAsset(pdfPath, blob, {
-          mimeType: blob.type || 'application/pdf',
-          pdfId,
-          category,
-          status: 'persisted',
-          manifestRevision
-        });
-      } catch (idbError) {
-        logger.warn('CacheStorageAdapter', `Failed writing PDF to IndexedDB: ${normalizedPath}`, idbError);
-      }
-    }
+    await cache.put(request, response);
     
     logger.info('CacheStorageAdapter', `PDF stored in cache: ${normalizedPath}`);
     
@@ -472,10 +407,6 @@ export class CacheStorageAdapter extends CacheRepository {
           stored++;
           storedPaths.push(result.normalizedPath);
         } catch (error) {
-          if (isQuotaExceededError(error) || error?.errorCode === 'QUOTA_EXCEEDED') {
-            logger.error('CacheStorageAdapter', `Quota exceeded while storing PDF in batch: ${path}`, error);
-            throw createQuotaExceededError({ causeMessage: error?.message });
-          }
           logger.error('CacheStorageAdapter', `Error storing PDF in batch: ${path}`, error);
           // Continue with other PDFs
         }
@@ -587,17 +518,7 @@ export class CacheStorageAdapter extends CacheRepository {
         });
       }
 
-      // Also remove from IndexedDB to keep both stores consistent.
-      let idbDeleted = false;
-      if (getConfig('OFFLINE_IDB_ENABLED') === true) {
-        try {
-          idbDeleted = await indexedDbAssetRepository.deleteAsset(pdfPath);
-        } catch (idbError) {
-          logger.debug('CacheStorageAdapter', `Failed deleting PDF in IndexedDB: ${normalizedPath}`, idbError);
-        }
-      }
-
-      return deleted || idbDeleted;
+      return deleted;
     } catch (error) {
       logger.error('CacheStorageAdapter', `Error deleting PDF: ${pdfPath}`, error);
       return false;
@@ -615,16 +536,6 @@ export class CacheStorageAdapter extends CacheRepository {
     }
 
     try {
-      const idbEnabled = getConfig('OFFLINE_IDB_ENABLED') === true;
-      const cacheFallbackEnabled = getConfig('OFFLINE_READTHROUGH_CACHE_FALLBACK_ENABLED') !== false;
-
-      if (idbEnabled) {
-        const idbPaths = await indexedDbAssetRepository.listAssets();
-        if (idbPaths.length > 0 || !cacheFallbackEnabled) {
-          return [...new Set(idbPaths)];
-        }
-      }
-
       const cache = await this._openCache();
       const keys = await cache.keys();
       
@@ -687,22 +598,14 @@ export class CacheStorageAdapter extends CacheRepository {
     }
 
     try {
-      try {
-        const cache = await this._openCache();
-        await cache.delete(this.cacheName);
-      } catch {
-        // Cache can be disabled in IDB-only rollout mode.
-      }
+      const cache = await this._openCache();
+      await cache.delete(this.cacheName);
       
       // Reset cache promise to force reopen
       this._cachePromise = null;
       
       // Clear variation cache
       this._clearVariationCache();
-
-      if (getConfig('OFFLINE_IDB_ENABLED') === true) {
-        await indexedDbAssetRepository.clear();
-      }
       
       logger.info('CacheStorageAdapter', `Cache cleared: ${this.cacheName}`);
       
