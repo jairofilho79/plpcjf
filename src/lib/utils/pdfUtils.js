@@ -1,27 +1,8 @@
-import { getConfig } from '$lib/offline/core/OfflineConfig.js';
-import indexedDbAssetRepository from '$lib/offline/storage/IndexedDbAssetRepository.js';
-import { withObjectUrl } from '$lib/offline/ui/objectUrlLifecycle.js';
-
 // Utils: PDF fetch/share/save
 export async function fetchPdfAsBlob(pdfPath) {
-  const idbEnabled = getConfig('OFFLINE_IDB_ENABLED') === true;
-  const useCacheFallback = getConfig('OFFLINE_READTHROUGH_CACHE_FALLBACK_ENABLED') !== false;
-
-  // Read-through: IndexedDB first
-  if (idbEnabled) {
-    try {
-      const idbBlob = await indexedDbAssetRepository.getAssetBlob(pdfPath);
-      if (idbBlob) {
-        return idbBlob;
-      }
-    } catch (idbError) {
-      console.warn('[fetchPdfAsBlob] Erro ao verificar IndexedDB, tentando fallback:', idbError);
-    }
-  }
-
   // Primeiro, tentar obter do Cache Storage usando CacheStorageAdapter (otimizado)
   // Isso elimina o delay de 5s quando o PDF está em cache
-  if (useCacheFallback && typeof window !== 'undefined' && typeof caches !== 'undefined') {
+  if (typeof window !== 'undefined' && typeof caches !== 'undefined') {
     try {
       const cacheStorageAdapter = await import('$lib/offline/storage/CacheStorageAdapter.js');
       const cachedResponse = await cacheStorageAdapter.default.getPdf(pdfPath);
@@ -102,11 +83,8 @@ export async function sharePdf(blob, filename, title) {
   } catch (_) {
     // segue para fallback
   }
-  withObjectUrl(blob, (url) => {
-    window.open(url, '_blank');
-  }, {
-    revokeDelayMs: 30000
-  });
+  const url = URL.createObjectURL(blob);
+  window.open(url, '_blank');
 }
 
 export async function savePdf(blob, filename) {
@@ -124,11 +102,9 @@ export async function savePdf(blob, filename) {
   } catch (_) {
     // segue para fallback
   }
-  withObjectUrl(blob, (url) => {
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = filename;
-    a.click();
-  });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename; a.click();
+  URL.revokeObjectURL(url);
 }
 

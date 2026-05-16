@@ -9,12 +9,6 @@ import cacheStorageAdapter from '../storage/CacheStorageAdapter.js';
 import offlineEvents, { EVENTS } from '../core/OfflineEvents.js';
 import { createLogger } from '../utils/OfflineLogger.js';
 import PdfPathManager from '../utils/PdfPathManager.js';
-import {
-  createQuotaExceededError,
-  isQuotaExceededError
-} from '../core/OfflineStorageErrors.js';
-import { getConfig } from '../core/OfflineConfig.js';
-import zipWorkerClient from '../workers/ZipWorkerClient.js';
 
 const logger = createLogger('PackageDownloader');
 
@@ -260,107 +254,17 @@ export class PackageDownloader {
   }
 
   /**
-   * Safe package pipeline:
-   * download -> extract -> store -> release temporary memory.
-   * Ensures each block is finalized before the next one starts.
-   *
-   * @param {string} packageUrl
-   * @param {string[]} expectedPdfs
-   * @param {Object} [options]
-   * @param {AbortSignal} [options.abortSignal]
-   * @param {Function} [options.onProgress]
-   * @param {boolean} [options.batch=true]
-   * @param {Map<string, {pdfId?: string, category?: string, manifestRevision?: string}>} [options.pdfMetadataMap]
-   *   Map from normalized PDF path → inventory metadata.  Passed to the IDB writer so that
-   *   every stored entry carries pdfId and category for deterministic inventory queries.
-   * @returns {Promise<{stored: number, extracted: number, bytesDownloaded: number}>}
-   */
-  async downloadExtractStorePackage(packageUrl, expectedPdfs = [], options = {}) {
-    const { abortSignal = null, onProgress = null, batch = true, pdfMetadataMap = null } = options;
-
-    const useZipWorker = getConfig('OFFLINE_IDB_ENABLED') === true &&
-      getConfig('OFFLINE_WORKER_ZIP_STREAMING_ENABLED') === true &&
-      typeof Worker !== 'undefined';
-
-    if (useZipWorker) {
-      logger.info('PackageDownloader', `Using ZIP worker pipeline for ${packageUrl}`);
-      const result = await zipWorkerClient.ingestZip({
-        packageUrl,
-        expectedPdfs,
-        abortSignal,
-        // Serialize the Map to a plain object for postMessage transfer
-        pdfMetadata: pdfMetadataMap ? Object.fromEntries(pdfMetadataMap) : null,
-        onProgress: (message) => {
-          if (!onProgress) return;
-          const completed = Number(message?.completed || 0);
-          const total = Number(message?.total || 0);
-          const percentage = total > 0 ? Math.floor((completed / total) * 100) : 0;
-          onProgress({
-            phase: 'storing',
-            completed,
-            total,
-            percentage
-          });
-        }
-      });
-
-      return {
-        stored: Number(result?.stored || 0),
-        extracted: Number(result?.extracted || 0),
-        bytesDownloaded: Number(result?.bytesDownloaded || 0)
-      };
-    }
-
-    /** @type {ExtractedPdf[]} */
-    let extractedPdfs = [];
-    /** @type {Blob|null} */
-    let zipBlob = null;
-    let bytesDownloaded = 0;
-
-    try {
-      const downloadResult = await this.downloadPackage(packageUrl, abortSignal);
-      zipBlob = downloadResult.blob;
-      bytesDownloaded = downloadResult.bytesDownloaded;
-
-      extractedPdfs = await this.extractPdfsFromZip(zipBlob, expectedPdfs);
-      const stored = await this.storePdfsInCache(extractedPdfs, {
-        batch,
-        onProgress,
-        pdfMetadataMap
-      });
-
-      return {
-        stored,
-        extracted: extractedPdfs.length,
-        bytesDownloaded
-      };
-    } finally {
-      // Release temporary in-memory references before moving to next package.
-      if (extractedPdfs.length > 0) {
-        for (const pdf of extractedPdfs) {
-          if (pdf && pdf.blob) {
-            // @ts-ignore - explicit cleanup of large blob reference.
-            pdf.blob = null;
-          }
-        }
-      }
-      extractedPdfs.length = 0;
-      zipBlob = null;
-    }
-  }
-
-  /**
-   * Store extracted PDFs in cache.
-   *
-   * @param {ExtractedPdf[]} pdfs
-   * @param {Object} [options]
-   * @param {boolean} [options.batch=false]
-   * @param {Function} [options.onProgress]
-   * @param {Map<string, {pdfId?: string, category?: string, manifestRevision?: string}>} [options.pdfMetadataMap]
-   * @returns {Promise<number>}
+   * Store extracted PDFs in cache
+   * Uses PdfPathManager to normalize paths consistently (preserves case and accents)
+   * Always uses originalName from ZIP to preserve exact path with accents and case
+   * @param {ExtractedPdf[]} pdfs - Extracted PDFs
+   * @param {Object} [options] - Storage options
+   * @param {boolean} [options.batch=false] - Use batch mode for better performance
+   * @param {Function} [options.onProgress] - Progress callback (completed, total, percentage)
+   * @returns {Promise<number>} Number of PDFs stored
    */
   async storePdfsInCache(pdfs, options = {}) {
-    const { batch = false, onProgress = null, pdfMetadataMap = null } = options;
+    const { batch = false, onProgress = null } = options;
     
     // Use batch mode for better performance when storing multiple PDFs
     if (batch && pdfs.length > 1) {
@@ -385,16 +289,9 @@ export class PackageDownloader {
           continue;
         }
         
-        // Look up inventory metadata if provided
-        const meta = pdfMetadataMap?.get(`/${normalizedPath}`) ||
-                     pdfMetadataMap?.get(normalizedPath) || {};
-
         pdfsToBatch.push({
           path: normalizedPath,
-          blob: pdf.blob,
-          pdfId: meta.pdfId,
-          category: meta.category,
-          manifestRevision: meta.manifestRevision
+          blob: pdf.blob
         });
         
         preparedCount++;
@@ -417,15 +314,12 @@ export class PackageDownloader {
       let lastProgressUpdate = 0;
       
       for (let i = 0; i < pdfsToBatch.length; i++) {
-        const { path, blob, pdfId, category, manifestRevision } = pdfsToBatch[i];
+        const { path, blob } = pdfsToBatch[i];
         
         try {
           await cacheStorageAdapter._putPdfInternal(path, blob, {
             emitEvents: false,
-            notifyServiceWorker: false,
-            pdfId,
-            category,
-            manifestRevision
+            notifyServiceWorker: false
           });
           storedCount++;
           
@@ -446,10 +340,6 @@ export class PackageDownloader {
             });
           }
         } catch (error) {
-          if (isQuotaExceededError(error) || error?.errorCode === 'QUOTA_EXCEEDED') {
-            logger.error('PackageDownloader', `Quota exceeded while storing PDF: ${path}`, error);
-            throw createQuotaExceededError({ causeMessage: error?.message });
-          }
           logger.error('PackageDownloader', `Error storing PDF: ${path}`, error);
           // Continue with other PDFs
         }
@@ -499,15 +389,7 @@ export class PackageDownloader {
         if (isDev && (normalizedPath.includes('cifra') || normalizedPath.includes('nivel') || normalizedPath.includes('Cifra') || normalizedPath.includes('Nivel'))) {
           logger.debug('PackageDownloader', `Storing PDF (Cifra): ${originalPath} -> ${normalizedPath}`);
         }
-        const meta = pdfMetadataMap?.get(`/${normalizedPath}`) ||
-                     pdfMetadataMap?.get(normalizedPath) || {};
-        await cacheStorageAdapter._putPdfInternal(normalizedPath, pdf.blob, {
-          emitEvents: false,
-          notifyServiceWorker: false,
-          pdfId: meta.pdfId,
-          category: meta.category,
-          manifestRevision: meta.manifestRevision
-        });
+        await cacheStorageAdapter.putPdf(normalizedPath, pdf.blob);
         stored++;
         
         // Call progress callback if provided
@@ -519,10 +401,6 @@ export class PackageDownloader {
           });
         }
       } catch (error) {
-        if (isQuotaExceededError(error) || error?.errorCode === 'QUOTA_EXCEEDED') {
-          logger.error('PackageDownloader', `Quota exceeded while storing PDF: ${pdf.originalName || pdf.normalizedPath}`, error);
-          throw createQuotaExceededError({ causeMessage: error?.message });
-        }
         logger.error('PackageDownloader', `Error storing PDF: ${pdf.originalName || pdf.normalizedPath}`, error);
         // Continue with other PDFs
       }

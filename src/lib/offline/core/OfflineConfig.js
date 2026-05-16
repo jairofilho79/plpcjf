@@ -64,27 +64,6 @@ const config = {
   MAX_RETRY_ATTEMPTS: 3,
   RETRY_DELAY: 1000, // 1 second
 
-  // Rollout flags (disabled by default for safe incremental release)
-  OFFLINE_IDB_ENABLED: false,
-  OFFLINE_WORKER_ZIP_STREAMING_ENABLED: false,
-  OFFLINE_MIGRATION_AUTO_ENABLED: false,
-  OFFLINE_READTHROUGH_CACHE_FALLBACK_ENABLED: true,
-  OFFLINE_IDB_WRITE_ONLY: false,
-
-  // IndexedDB/Dexie settings
-  OFFLINE_IDB_NAME: 'plpc-offline-db',
-  OFFLINE_IDB_VERSION: 1,
-
-  // Worker/ZIP ingest safety settings
-  OFFLINE_ZIP_WORKER_PROGRESS_EVERY: 5,
-  OFFLINE_ZIP_WORKER_YIELD_EVERY: 10,
-  OFFLINE_ZIP_WORKER_PACKAGE_TIMEOUT_MS: 120000,
-
-  // Legacy migration settings
-  OFFLINE_MIGRATION_BATCH_SIZE: 20,
-  OFFLINE_MIGRATION_YIELD_MS: 16,
-  OFFLINE_IDB_ROLLOUT_KEY: 'offline_idb_rollout_enabled',
-
   // Logging
   LOG_LEVEL: 'INFO', // ERROR, WARN, INFO, DEBUG
   ENABLE_LOGGING: true

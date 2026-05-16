@@ -1,38 +1,31 @@
-import { error, isHttpError } from '@sveltejs/kit';
-import { readDevLocalManifest } from '$lib/server/readDevLocalManifest.js';
-
-const corsHeaders = {
-  'Content-Type': 'application/json',
-  'Cache-Control': 'public, max-age=3600',
-  'Access-Control-Allow-Origin': '*'
-};
+import { error } from '@sveltejs/kit';
 
 /** @type {import('./$types').RequestHandler} */
-export async function GET({ platform }) {
+export async function GET({ url, platform }) {
   try {
+    // Try to get from R2 bucket first
     if (platform?.env?.LOUVORES_BUCKET) {
       try {
         const object = await platform.env.LOUVORES_BUCKET.get('offline-manifest.json');
-        if (object?.body) {
-          return new Response(object.body, { headers: corsHeaders });
+        if (object) {
+          return new Response(object.body, {
+            headers: {
+              'Content-Type': 'application/json',
+              'Cache-Control': 'public, max-age=3600',
+              'Access-Control-Allow-Origin': '*'
+            }
+          });
         }
       } catch (r2Error) {
-        console.warn('[offline-manifest] R2 get failed:', r2Error);
+        console.warn('Failed to get offline-manifest.json from R2:', r2Error);
       }
     }
 
-    const local = await readDevLocalManifest('offline-manifest.json');
-    if (local) {
-      return new Response(local, { headers: corsHeaders });
-    }
-
-    throw error(503, 'Manifesto offline indisponível (R2 ou ficheiros locais em dev).');
+    // If not found in R2, return 404
+    throw error(404, 'Offline manifest not found');
   } catch (err) {
-    if (isHttpError(err)) {
-      throw err;
-    }
-    console.error('[offline-manifest] Erro ao servir manifesto:', err);
-    throw error(500, 'Erro interno ao servir o manifesto offline.');
+    console.error('Error serving offline-manifest.json:', err);
+    throw error(500, 'Internal server error');
   }
 }
 
