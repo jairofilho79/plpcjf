@@ -10,9 +10,10 @@
   import { loadPdfJsComplete, loadPdfJsViewer } from '$lib/utils/pdfjsLoader';
   import { clearPdfFromSwCache } from '$lib/utils/swRegistration';
   import { createObjectUrlManager } from '$lib/offline/ui/objectUrlLifecycle';
-  import { getConfig } from '$lib/offline/core/OfflineConfig';
-  import { fetchPdfAsBlob } from '$lib/utils/pdfUtils';
   import { checkEffectiveConnectivity } from '$lib/utils/pdfValidation';
+  import { getFitMode, setFitMode } from '$lib/pdf-reader/readerPreferences';
+  import { ZoomController } from '$lib/pdf-reader/zoomController';
+  import { resolvePdfSourceUrl as resolveSource } from '$lib/pdf-reader/pdfSourceResolver';
 
   // ── Performance Debug ────────────────────────────────────────────────────────
   const _perfEnabled = () =>
@@ -74,22 +75,10 @@
   let totalPages = 0;
   let zoomPercent = 100;
   let lastLoadedFile: string | null = null;
-  // Preferred fit mode: 'page-width' or 'page-fit'
-  // Load from localStorage if available, otherwise default to 'page-fit'
-  let preferredFitMode: 'page-width' | 'page-fit' = (() => {
-    if (typeof window !== 'undefined') {
-      const saved = localStorage.getItem('pdfPreferredFitMode');
-      return (saved === 'page-width' || saved === 'page-fit') ? saved : 'page-fit';
-    }
-    return 'page-fit';
-  })();
-  // Flag to prevent PDF.js from overwriting our manual page-width calculation
-  let isManuallyAdjustingPageWidth = false;
-  let pageWidthAdjustTimeout: ReturnType<typeof setTimeout> | null = null;
-  
-  // Cache the calculated page-width scale to avoid recalculating on every page change
-  let cachedPageWidthScale: number | null = null;
-  let lastContainerWidth: number = 0;
+  // Preferred fit mode: 'page-width' or 'page-fit' — persistido via readerPreferences
+  let preferredFitMode: 'page-width' | 'page-fit' = getFitMode();
+  // Controlador de zoom: encapsula cache de escala e cálculos de page-width
+  const zoomCtrl = new ZoomController();
   
   // PDF validation states
   type PdfUiState =
@@ -123,103 +112,16 @@
   // Apply CSS class to container based on fit mode
   $: containerClass = preferredFitMode === 'page-fit' ? 'page-fit-mode' : 'page-width-mode';
   
-  // Save preferred fit mode to localStorage whenever it changes
+  // Persiste modo de ajuste sempre que mudar
   $: if (typeof window !== 'undefined') {
-    localStorage.setItem('pdfPreferredFitMode', preferredFitMode);
+    setFitMode(preferredFitMode);
   }
 
-  // Function to calculate and apply page-width zoom manually
+  // Delega ao ZoomController para calcular e aplicar page-width zoom
   function applyPageWidthZoom(forceRecalculate = false) {
     if (!viewer || !containerEl || !viewerEl) return;
     if (preferredFitMode !== 'page-width') return;
-    
-    const currentContainerWidth = containerEl.clientWidth;
-    
-    // If we have a cached scale and container width hasn't changed, reuse it
-    if (!forceRecalculate && cachedPageWidthScale !== null && lastContainerWidth === currentContainerWidth) {
-      isManuallyAdjustingPageWidth = true;
-      viewer.currentScale = cachedPageWidthScale;
-      setTimeout(() => {
-        isManuallyAdjustingPageWidth = false;
-      }, 100);
-      return;
-    }
-    
-    // Get the PDF page's natural width
-    const pageView = (viewer as any)._pages?.[(viewer as any).currentPageNumber - 1];
-    if (!pageView) return;
-    
-    // Get the page's NATURAL width at scale 1.0 (not the current scaled width)
-    // pageView.width might be scaled, we need the original viewport
-    const pdfPage = pageView.pdfPage;
-    if (!pdfPage) return;
-    
-    // Get viewport at scale 1.0 to get the natural dimensions
-    const naturalViewport = pdfPage.getViewport({ scale: 1.0 });
-    const naturalWidth = naturalViewport.width;
-    
-    // Calculate available width considering scrollbar
-    // clientWidth gives the visible width (inner width - scrollbar if present)
-    // offsetWidth gives the total width including scrollbar
-    const scrollbarWidth = containerEl.offsetWidth - containerEl.clientWidth;
-    
-    // Use clientWidth which already excludes the scrollbar width
-    let availableWidth = currentContainerWidth;
-    
-    // Check if scrollbars are overlay (mobile/Mac) or take up space (Windows desktop)
-    // On mobile and Mac with overlay scrollbars, offsetWidth === clientWidth even with scroll
-    // Only subtract scrollbar width on desktop where scrollbars take up space
-    const isMobileOrOverlayScrollbar = window.innerWidth <= 768 || scrollbarWidth === 0;
-    
-    if (!isMobileOrOverlayScrollbar && scrollbarWidth === 0) {
-      // Desktop with scrollbar that will appear - subtract typical width
-      availableWidth -= 17;
-    }
-    
-    // Calculate the scale needed to fill the available width exactly
-    // Use naturalWidth (at scale 1.0) not pageView.width which may be scaled
-    let targetScale = availableWidth / naturalWidth;
-    
-    if (targetScale > 0) {
-      // Set flag to prevent PDF.js from overwriting and prevent reapplication loops
-      isManuallyAdjustingPageWidth = true;
-      
-      // Apply the calculated scale directly (not using currentScaleValue)
-      viewer.currentScale = targetScale;
-      
-      // After PDF.js renders, check if the actual size matches and adjust if needed
-      setTimeout(() => {
-        if (!viewerEl || !containerEl || !viewer) {
-          isManuallyAdjustingPageWidth = false;
-          return;
-        }
-        
-        const pageEl = viewerEl.querySelector('.page') as HTMLElement;
-        if (pageEl && preferredFitMode === 'page-width') {
-          const actualRenderedWidth = pageEl.offsetWidth;
-          const desiredWidth = containerEl.clientWidth;
-          
-          // If the rendered width doesn't match, calculate correction factor
-          if (Math.abs(actualRenderedWidth - desiredWidth) > 1) {
-            const correctionFactor = desiredWidth / actualRenderedWidth;
-            const correctedScale = viewer.currentScale * correctionFactor;
-            
-            // Apply corrected scale
-            viewer.currentScale = correctedScale;
-            
-            // Cache the corrected scale for reuse
-            cachedPageWidthScale = correctedScale;
-            lastContainerWidth = currentContainerWidth;
-          } else {
-            // Cache the initial scale if no correction was needed
-            cachedPageWidthScale = viewer.currentScale;
-            lastContainerWidth = currentContainerWidth;
-          }
-        }
-        
-        isManuallyAdjustingPageWidth = false;
-      }, 100);
-    }
+    zoomCtrl.applyPageWidth({ viewer, containerEl, viewerEl, forceRecalculate });
   }
 
   // Gesture state for pinch to zoom
@@ -257,24 +159,12 @@
   let lastSwipePageTurnAt = 0;
 
   async function resolvePdfSourceUrl(fileUrl: string): Promise<string> {
-    if (getConfig('OFFLINE_IDB_ENABLED') !== true) {
-      return fileUrl;
-    }
-
-    try {
-      const pathname = new URL(fileUrl, window.location.origin).pathname;
-      const blob = await fetchPdfAsBlob(pathname);
-      if (!blob) return fileUrl;
-
-      if (activePdfObjectUrl) {
-        objectUrlManager.revoke(activePdfObjectUrl);
-        activePdfObjectUrl = null;
-      }
-      activePdfObjectUrl = objectUrlManager.create(blob);
-      return activePdfObjectUrl;
-    } catch {
-      return fileUrl;
-    }
+    const { url, newObjectUrl } = await resolveSource(fileUrl, {
+      objectUrlManager,
+      activeObjectUrl: activePdfObjectUrl,
+    });
+    if (newObjectUrl) activePdfObjectUrl = newObjectUrl;
+    return url;
   }
 
   // Load PDF directly without validation (optimization: skip validation if already validated)
@@ -717,15 +607,10 @@
     const resize = () => {
       // apenas notifica o viewer para recalcular o layout/textLayer
       eventBus.dispatch('resize', {});
-      // Adjust zoom after resize if in page-width mode
-      // Force recalculate on resize since container width may have changed
+      // Recalcular zoom após resize se necessário
       if (preferredFitMode === 'page-width') {
-        // Clear cache since window was resized
-        cachedPageWidthScale = null;
-        if (pageWidthAdjustTimeout) clearTimeout(pageWidthAdjustTimeout);
-        pageWidthAdjustTimeout = setTimeout(() => {
-          applyPageWidthZoom(true);
-        }, 150);
+        zoomCtrl.invalidateCache();
+        zoomCtrl.schedulePageWidth({ viewer, containerEl: containerEl!, viewerEl: viewerEl!, forceRecalculate: true, delayMs: 150 });
       }
     };
     window.addEventListener('resize', resize);
@@ -792,34 +677,24 @@
       const newScale = e?.scale ?? (viewer as any)?.currentScale ?? 1;
       zoomPercent = Math.round(newScale * 100);
       
-      // If we're manually adjusting, skip to avoid loops
-      // Don't reapply automatically - this was causing the zoom to be too large
-      if (isManuallyAdjustingPageWidth) {
+      // Se o ZoomController está no meio de um ajuste, ignorar para evitar loops
+      if (zoomCtrl.isManuallyAdjusting) {
         return;
       }
     });
     eventBus.on('pagesloaded', (e: any) => {
       totalPages = e?.pagesCount ?? totalPages;
       currentPage = (viewer as any)?.currentPageNumber ?? currentPage;
-      // Adjust zoom after pages are loaded if in page-width mode
       if (preferredFitMode === 'page-width') {
-        if (pageWidthAdjustTimeout) clearTimeout(pageWidthAdjustTimeout);
-        pageWidthAdjustTimeout = setTimeout(() => {
-          applyPageWidthZoom();
-        }, 150);
+        zoomCtrl.schedulePageWidth({ viewer, containerEl: containerEl!, viewerEl: viewerEl!, delayMs: 150 });
       }
     });
     eventBus.on('pagechanging', (e: any) => {
       currentPage = e?.pageNumber ?? currentPage;
       resetFitModeScrollPosition();
       requestAnimationFrame(() => resetFitModeScrollPosition());
-      // Adjust zoom when page changes if in page-width mode
-      // Don't force recalculate - reuse cached scale
       if (preferredFitMode === 'page-width') {
-        if (pageWidthAdjustTimeout) clearTimeout(pageWidthAdjustTimeout);
-        pageWidthAdjustTimeout = setTimeout(() => {
-          applyPageWidthZoom(false);
-        }, 50);
+        zoomCtrl.schedulePageWidth({ viewer, containerEl: containerEl!, viewerEl: viewerEl!, forceRecalculate: false, delayMs: 50 });
       }
     });
 
@@ -855,10 +730,7 @@
   });
 
   onDestroy(() => {
-    if (pageWidthAdjustTimeout) {
-      clearTimeout(pageWidthAdjustTimeout);
-      pageWidthAdjustTimeout = null;
-    }
+    zoomCtrl.cancelScheduled();
     cleanup?.();
     if (activePdfObjectUrl) {
       objectUrlManager.revoke(activePdfObjectUrl);
@@ -904,8 +776,7 @@
           applyPageWidthZoom(true);
         }, 100);
       } else {
-        // Clear cache when switching away from page-width
-        cachedPageWidthScale = null;
+        zoomCtrl.invalidateCache();
         viewer.currentScaleValue = preferredFitMode;
       }
     }
@@ -1209,19 +1080,14 @@
       eventBus.dispatch('resize', {});
     }
     
-    // Recalcular zoom baseado no modo atual após um delay para garantir que o DOM tenha atualizado
+    // Recalcular zoom após o DOM atualizar
     if (viewer) {
-      // Limpar cache de zoom para forçar recálculo
-      cachedPageWidthScale = null;
-      
+      zoomCtrl.invalidateCache();
       setTimeout(() => {
         if (!viewer) return;
-        
         if (preferredFitMode === 'page-width') {
-          // Para page-width, calcular manualmente
           applyPageWidthZoom(true);
         } else {
-          // Para page-fit, deixar o PDF.js recalcular automaticamente
           viewer.currentScaleValue = 'page-fit';
         }
       }, 150);
@@ -1230,31 +1096,21 @@
   
   // Função para mostrar a barra (desativar fullscreen)
   function showToolbar() {
-    // Garantir que a barra seja mostrada
     isToolbarVisible = true;
     if (containerEl) {
       toolbarHeight = toolbarEl ? toolbarEl.offsetHeight : 60;
       containerEl.style.top = `${toolbarHeight}px`;
     }
-
-    // Disparar evento resize para notificar o PDF.js sobre a mudança de tamanho
     if (eventBus) {
       eventBus.dispatch('resize', {});
     }
-    
-    // Recalcular zoom baseado no modo atual após um delay para garantir que o DOM tenha atualizado
     if (viewer) {
-      // Limpar cache de zoom para forçar recálculo
-      cachedPageWidthScale = null;
-      
+      zoomCtrl.invalidateCache();
       setTimeout(() => {
         if (!viewer) return;
-        
         if (preferredFitMode === 'page-width') {
-          // Para page-width, calcular manualmente
           applyPageWidthZoom(true);
         } else {
-          // Para page-fit, deixar o PDF.js recalcular automaticamente
           viewer.currentScaleValue = 'page-fit';
         }
       }, 150);
