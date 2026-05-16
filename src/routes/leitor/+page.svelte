@@ -12,6 +12,7 @@
   import { createObjectUrlManager } from '$lib/offline/ui/objectUrlLifecycle';
   import { getConfig } from '$lib/offline/core/OfflineConfig';
   import { fetchPdfAsBlob } from '$lib/utils/pdfUtils';
+  import { checkEffectiveConnectivity } from '$lib/utils/pdfValidation';
 
   // Type for PDF.js getDocument function
   type PDFJSGetDocument = (options: { url: string; withCredentials?: boolean }) => {
@@ -63,10 +64,33 @@
   let lastContainerWidth: number = 0;
   
   // PDF validation states
+  type PdfUiState =
+    | 'idle'
+    | 'loading'
+    | 'autoDownloading'
+    | 'retryableError'
+    | 'fatalError'
+    | 'forceOnlineLoading';
+
+  let pdfUiState: PdfUiState = 'idle';
+  let pdfUiMessage: string | null = null;
+  let lastPdfPathForRecovery: string | null = null;
+  let lastOriginalFullUrlForRecovery: string | null = null;
+  let activeForcedObjectUrl: string | null = null;
+
+  // Backward-compatible bindings for existing template (will be driven by state)
   let pdfLoading = false;
   let pdfError: string | null = null;
   let retryCount = 0;
   const MAX_RETRIES = 2;
+
+  function setPdfUi(state: PdfUiState, message: string | null = null) {
+    pdfUiState = state;
+    pdfUiMessage = message;
+
+    pdfLoading = state === 'loading' || state === 'autoDownloading' || state === 'forceOnlineLoading';
+    pdfError = state === 'retryableError' || state === 'fatalError' ? message : null;
+  }
   
   // Apply CSS class to container based on fit mode
   $: containerClass = preferredFitMode === 'page-fit' ? 'page-fit-mode' : 'page-width-mode';
@@ -233,8 +257,7 @@
     // Avoid duplicate loads of the same file
     if (lastLoadedFile === fileUrl && !pdfError) return;
     
-    pdfLoading = true;
-    pdfError = null;
+    setPdfUi('loading', null);
     
     try {
       // Try to load directly - Service Worker will intercept and serve from cache if available
@@ -247,13 +270,15 @@
       currentPage = 1;
       lastLoadedFile = fileUrl;
       retryCount = 0;
-      pdfError = null;
+      setPdfUi('idle', null);
     } catch (error) {
       console.warn('[Leitor] Direct load failed, falling back to validation:', error);
       // If direct load fails, fall back to full validation
       await load(fileUrl);
     } finally {
-      pdfLoading = false;
+      if (pdfUiState === 'loading') {
+        setPdfUi('idle', null);
+      }
     }
   }
 
@@ -264,14 +289,15 @@
     // Avoid duplicate loads of the same file
     if (lastLoadedFile === fileUrl && !pdfError) return;
     
-    pdfLoading = true;
-    pdfError = null;
+    setPdfUi('loading', null);
     
     // Extract PDF path from URL - usar caminho original (NÃO normalizar)
     // O PDF deve ser carregado e validado usando o caminho original (preserva case e acentos)
     const urlObj = new URL(fileUrl, window.location.origin);
     const pdfPath = urlObj.pathname.startsWith('/') ? urlObj.pathname.substring(1) : urlObj.pathname;
     const originalFullUrl = new URL(`/${pdfPath}`, window.location.origin).href;
+    lastPdfPathForRecovery = pdfPath;
+    lastOriginalFullUrlForRecovery = originalFullUrl;
     
     try {
       
@@ -283,26 +309,48 @@
       
       if (!validation.available) {
         // Try to download automatically if online
-        if (validation.needsDownload && navigator.onLine && retryCount < MAX_RETRIES) {
+        const effectiveOnline = await checkEffectiveConnectivity({ timeoutMs: 1500 });
+        if (validation.needsDownload && effectiveOnline && retryCount < MAX_RETRIES) {
           retryCount++;
-          console.log(`[Leitor] PDF não encontrado no cache, tentando baixar... (tentativa ${retryCount})`);
+          console.log('[Leitor] auto-download-start', { pdfPath, attempt: retryCount });
           
           // Show feedback
-          pdfError = 'Baixando PDF...';
+          setPdfUi('autoDownloading', 'Baixando PDF...');
           
           try {
             // Download via Service Worker
-            await downloadPDFsViaSW([validation.url], 1, (progress: any) => {
-              if (progress.completed > 0) {
-                pdfError = null;
-                // Try to load again after download
-                setTimeout(() => load(fileUrl), 500);
-                return;
-              }
-            });
+            const result = await downloadPDFsViaSW(
+              [validation.url],
+              1,
+              undefined,
+              { timeoutMs: 30000 }
+            );
+
+            if (!result.success) {
+              const msg = result.partialSuccess
+                ? 'Download parcial do PDF. Tente novamente ou use “Buscar online”.'
+                : 'Não foi possível baixar o PDF automaticamente. Tente novamente ou use “Buscar online”.';
+              console.log('[Leitor] auto-download-partial', { pdfPath, ...result });
+              setPdfUi('retryableError', msg);
+              return;
+            }
+
+            // Revalidar antes de carregar para evitar falso-sucesso
+            const recheck = await validatePdfAvailability(pdfPath);
+            if (!recheck.available) {
+              setPdfUi('retryableError', 'O PDF ainda não está disponível após o download. Tente “Buscar online”.');
+              return;
+            }
+
+            // Voltar para estado normal e seguir carregamento
+            setPdfUi('loading', null);
           } catch (downloadErr) {
+            const isTimeout = String((downloadErr as any)?.message || '').includes('timeout');
+            if (isTimeout) {
+              console.log('[Leitor] auto-download-timeout', { pdfPath });
+            }
             console.error('[Leitor] Download automático falhou:', downloadErr);
-            pdfError = 'Erro ao baixar PDF. Verifique sua conexão.';
+            setPdfUi('retryableError', 'Erro ao baixar PDF. Verifique sua conexão ou use “Buscar online”.');
             
             // FASE 2: Invalidar cache de validação quando download falha
             try {
@@ -312,14 +360,11 @@
               console.warn('[Leitor] Erro ao invalidar cache de validação:', err);
             }
             
-            pdfLoading = false;
             return;
           }
-          return;
         } else {
           // PDF not available and cannot be downloaded
-          pdfError = 'PDF não está disponível offline. Por favor, baixe primeiro na página de configuração offline.';
-          pdfLoading = false;
+          setPdfUi('fatalError', 'PDF não está disponível offline. Por favor, baixe primeiro na página de configuração offline.');
           return;
         }
       }
@@ -334,7 +379,7 @@
       currentPage = 1;
       lastLoadedFile = fileUrl;
       retryCount = 0; // Reset retry count on success
-      pdfError = null;
+      setPdfUi('idle', null);
     } catch (error) {
       console.error('[Leitor] Erro ao carregar PDF:', error);
 
@@ -393,7 +438,7 @@
       }
       
       if (!loadedSuccessfully) {
-        pdfError = 'Erro ao carregar PDF. Verifique se o arquivo está disponível.';
+        setPdfUi('retryableError', 'Erro ao carregar PDF. Verifique se o arquivo está disponível.');
         
         // FASE 2: Invalidar cache de validação quando há erro definitivo no leitor
         // Como não temos pdfId aqui, invalidamos todo o cache para forçar revalidação
@@ -412,7 +457,95 @@
         }
       }
     } finally {
-      pdfLoading = false;
+      if (pdfUiState === 'loading' || pdfUiState === 'autoDownloading') {
+        // Mantém erro se estiver em estado de erro; senão volta ao idle
+        setPdfUi(pdfError ? pdfUiState : 'idle', pdfUiMessage);
+      }
+    }
+  }
+
+  async function handleForceOnlineFetch() {
+    const getDocument = (window as any).__pdfjsGetDocument as PDFJSGetDocument | undefined;
+    if (!getDocument) return;
+
+    const effectiveOnline = await checkEffectiveConnectivity({ timeoutMs: 1500 });
+    if (!effectiveOnline) {
+      setPdfUi('fatalError', 'Sem conexão com a internet para buscar online.');
+      return;
+    }
+
+    if (!lastPdfPathForRecovery || !lastOriginalFullUrlForRecovery) {
+      setPdfUi('fatalError', 'Não foi possível identificar o PDF para buscar online.');
+      return;
+    }
+
+    setPdfUi('forceOnlineLoading', 'Buscando online...');
+    console.log('[Leitor] force-online-start', { pdfPath: lastPdfPathForRecovery });
+
+    try {
+      // Limpar entrada específica do cache do SW para forçar refetch
+      await clearPdfFromSwCache(lastPdfPathForRecovery);
+    } catch (err) {
+      // Não bloquear a tentativa online por falha de limpeza
+      console.warn('[Leitor] Falha ao limpar cache do PDF antes de buscar online:', err);
+    }
+
+    // Invalidate validation cache (best effort; we don't have pdfId here)
+    try {
+      const { clearAllValidationCache } = await import('$lib/utils/pdfValidation');
+      clearAllValidationCache();
+    } catch {}
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 8000);
+
+    try {
+      const res = await fetch(lastOriginalFullUrlForRecovery, {
+        cache: 'no-store',
+        signal: controller.signal
+      });
+
+      if (!res.ok) {
+        if (res.status === 404) {
+          setPdfUi('fatalError', 'PDF não encontrado online (404).');
+          return;
+        }
+        setPdfUi('retryableError', `Falha ao buscar PDF online (HTTP ${res.status}).`);
+        return;
+      }
+
+      const blob = await res.blob();
+      if (!blob || blob.size === 0) {
+        setPdfUi('retryableError', 'PDF online retornou vazio. Tente novamente.');
+        return;
+      }
+
+      if (activeForcedObjectUrl) {
+        try { URL.revokeObjectURL(activeForcedObjectUrl); } catch {}
+        activeForcedObjectUrl = null;
+      }
+      activeForcedObjectUrl = URL.createObjectURL(blob);
+
+      const loadingTask = getDocument({ url: activeForcedObjectUrl, withCredentials: false });
+      const pdfDocument = await loadingTask.promise;
+      linkService.setDocument(pdfDocument);
+      viewer.setDocument(pdfDocument);
+      totalPages = pdfDocument.numPages ?? 0;
+      currentPage = 1;
+      lastLoadedFile = lastOriginalFullUrlForRecovery;
+      retryCount = 0;
+      setPdfUi('idle', null);
+      console.log('[Leitor] force-online-success', { pdfPath: lastPdfPathForRecovery });
+    } catch (err: any) {
+      if (err?.name === 'AbortError') {
+        console.log('[Leitor] force-online-fail', { pdfPath: lastPdfPathForRecovery, reason: 'timeout' });
+        setPdfUi('retryableError', 'Tempo limite ao buscar o PDF online. Tente novamente.');
+        return;
+      }
+      console.log('[Leitor] force-online-fail', { pdfPath: lastPdfPathForRecovery, reason: 'error' });
+      setPdfUi('retryableError', 'Erro ao buscar o PDF online. Tente novamente.');
+    } finally {
+      clearTimeout(timeoutId);
     }
   }
 
@@ -673,7 +806,7 @@
       }
       try { if (toolbarEl) ro.unobserve(toolbarEl); } catch {}
       // No explicit destroy API; let GC collect. Clear container contents.
-      if (viewerEl) viewerEl.innerHTML = '';
+      if (viewerEl) viewerEl.replaceChildren();
     };
   });
 
@@ -688,6 +821,10 @@
       activePdfObjectUrl = null;
     }
     objectUrlManager.revokeAll();
+    if (activeForcedObjectUrl) {
+      try { URL.revokeObjectURL(activeForcedObjectUrl); } catch {}
+      activeForcedObjectUrl = null;
+    }
   });
 
   function zoomIn() {
@@ -1738,6 +1875,11 @@
 {#if pdfError}
   <div class="pdf-error-banner">
     <p>{pdfError}</p>
+    {#if pdfUiState === 'retryableError' && navigator.onLine}
+      <button class="error-button" on:click={handleForceOnlineFetch}>
+        Buscar online
+      </button>
+    {/if}
     {#if !navigator.onLine}
       <button class="error-button" on:click={() => window.location.href = '/offline'}>
         Ir para Configuração Offline

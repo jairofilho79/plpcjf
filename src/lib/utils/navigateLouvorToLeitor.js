@@ -1,7 +1,7 @@
 import { goto } from '$app/navigation';
 import { getPdfRelPath } from '$lib/utils/pathUtils';
 import { isPdfAvailableInIndex } from '$lib/utils/pdfIndex';
-import { ensurePdfAvailable, getCachedValidation } from '$lib/utils/pdfValidation';
+import { ensurePdfAvailable, getCachedValidation, checkEffectiveConnectivity } from '$lib/utils/pdfValidation';
 
 const OFFLINE_ERROR =
   'PDF não está disponível offline. Por favor, baixe primeiro na página de configuração offline.';
@@ -28,8 +28,10 @@ export async function navigateLouvorToLeitor(louvor) {
   }
 
   try {
+    let validated = false;
     const cached = getCachedValidation(louvor.pdfId);
     if (cached && cached.available) {
+      validated = true;
       const fileParam = encodeURIComponent(`/${pdfPath}`);
       const tituloParam = encodeURIComponent(louvor.nome || '');
       const subtituloText = `${louvor.categoria || ''} | ${louvor.classificacao || ''}`.trim();
@@ -48,6 +50,7 @@ export async function navigateLouvorToLeitor(louvor) {
         const quickValidation = await validatePdfAvailability(pdfPath, louvor.pdfId);
         if (quickValidation.available) {
           shouldProceed = true;
+          validated = true;
         } else if (quickValidation.needsDownload && navigator.onLine) {
           shouldProceed = true;
         }
@@ -60,12 +63,14 @@ export async function navigateLouvorToLeitor(louvor) {
 
       if (isAvailable) {
         shouldProceed = true;
+        validated = true;
       } else {
         const { validatePdfAvailability } = await import('$lib/utils/pdfValidation');
         const validation = await validatePdfAvailability(pdfPath, louvor.pdfId);
-        if (validation.needsDownload && navigator.onLine) {
+        const effectiveOnline = await checkEffectiveConnectivity({ timeoutMs: 1500 });
+        if (validation.needsDownload && effectiveOnline) {
           shouldProceed = true;
-        } else if (!navigator.onLine && validation.available === false) {
+        } else if (!effectiveOnline && validation.available === false) {
           return { navigated: false, error: OFFLINE_ERROR };
         } else {
           console.warn(
@@ -81,7 +86,8 @@ export async function navigateLouvorToLeitor(louvor) {
       const tituloParam = encodeURIComponent(louvor.nome || '');
       const subtituloText = `${louvor.categoria || ''} | ${louvor.classificacao || ''}`.trim();
       const subtituloParam = encodeURIComponent(subtituloText);
-      const url = `/leitor?file=${fileParam}&titulo=${tituloParam}&subtitulo=${subtituloParam}&validated=true`;
+      const validatedParam = validated ? '&validated=true' : '';
+      const url = `/leitor?file=${fileParam}&titulo=${tituloParam}&subtitulo=${subtituloParam}${validatedParam}`;
       await goto(url);
       return { navigated: true };
     }
