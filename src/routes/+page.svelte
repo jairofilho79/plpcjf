@@ -50,6 +50,9 @@
   /** Última pesquisa aplicada em filterLouvores; mudança explícita de texto zera paginação de deep link. */
   /** @type {string | null} */
   let lastSearchAppliedInFilter = null;
+  /** @type {string | null} */
+  let lastFilterCriteriaKey = null;
+  let shouldResetPageOnFilterResult = false;
 
   /** @type {any[]} */
   let paginatedResults = [];
@@ -62,15 +65,16 @@
     filteredResults = results;
     const ipp = get(bibliotecaItemsPerPage);
     const maxP = results.length === 0 ? 1 : Math.max(1, Math.ceil(results.length / ipp));
-    if (!pageInitializedFromUrl) {
+    if (shouldResetPageOnFilterResult) {
       // #region agent log
-      fetch('http://127.0.0.1:7440/ingest/a9d50c94-866c-49ac-b737-468ccc2df6c6',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'8c7e1b'},body:JSON.stringify({sessionId:'8c7e1b',runId:'initial-r2',hypothesisId:'H5',location:'src/routes/+page.svelte:finalizeFilteredResults:resetToFirstPage',message:'finalizeFilteredResults forced page reset to 1',data:{resultsLength:results.length,itemsPerPage:ipp,maxPage:maxP,currentPageBeforeReset:currentPage,pageInitializedFromUrl,searchQuery,lastKnownHomeUrlPage:lastKnownHomeUrl.pagina,urlHref:browser && $page?.url ? $page.url.href : ''},timestamp:Date.now()})}).catch(()=>{});
+      fetch('http://127.0.0.1:7440/ingest/a9d50c94-866c-49ac-b737-468ccc2df6c6',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'8c7e1b'},body:JSON.stringify({sessionId:'8c7e1b',runId:'post-fix',hypothesisId:'H5',location:'src/routes/+page.svelte:finalizeFilteredResults:resetToFirstPage',message:'finalizeFilteredResults reset page because criteria changed',data:{resultsLength:results.length,itemsPerPage:ipp,maxPage:maxP,currentPageBeforeReset:currentPage,pageInitializedFromUrl,searchQuery,urlHref:browser && $page?.url ? $page.url.href : ''},timestamp:Date.now()})}).catch(()=>{});
       // #endregion
       currentPage = 1;
       pageInput = '1';
+      shouldResetPageOnFilterResult = false;
       if (browser && homeUrlSyncInitialized && $page?.url?.pathname === '/' && !isUpdatingFromUrl) {
         // #region agent log
-        fetch('http://127.0.0.1:7440/ingest/a9d50c94-866c-49ac-b737-468ccc2df6c6',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'8c7e1b'},body:JSON.stringify({sessionId:'8c7e1b',runId:'initial-r2',hypothesisId:'H5',location:'src/routes/+page.svelte:finalizeFilteredResults:updateUrlPage1',message:'finalizeFilteredResults writing pagina=1 to URL sync',data:{searchQuery,currentPage,lastKnownHomeUrlPage:lastKnownHomeUrl.pagina,urlHref:browser && $page?.url ? $page.url.href : ''},timestamp:Date.now()})}).catch(()=>{});
+        fetch('http://127.0.0.1:7440/ingest/a9d50c94-866c-49ac-b737-468ccc2df6c6',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'8c7e1b'},body:JSON.stringify({sessionId:'8c7e1b',runId:'post-fix',hypothesisId:'H5',location:'src/routes/+page.svelte:finalizeFilteredResults:updateUrlPage1',message:'finalizeFilteredResults writing pagina=1 to URL',data:{searchQuery,currentPage,urlHref:browser && $page?.url ? $page.url.href : ''},timestamp:Date.now()})}).catch(()=>{});
         // #endregion
         updateUrlParams({ pagina: 1 });
         lastKnownHomeUrl = { ...lastKnownHomeUrl, pagina: 1 };
@@ -386,6 +390,19 @@
   
   function filterLouvores() {
     const qNow = (searchQuery || '').trim();
+    const categoriesKey = [...$filters].sort().join('|');
+    const classificationsKey = [...$classificationFilters].sort().join('|');
+    const criteriaKey = `${qNow}::${categoriesKey}::${classificationsKey}`;
+
+    if (lastFilterCriteriaKey !== null && criteriaKey !== lastFilterCriteriaKey) {
+      shouldResetPageOnFilterResult = true;
+      pageInitializedFromUrl = false;
+      // #region agent log
+      fetch('http://127.0.0.1:7440/ingest/a9d50c94-866c-49ac-b737-468ccc2df6c6',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'8c7e1b'},body:JSON.stringify({sessionId:'8c7e1b',runId:'post-fix',hypothesisId:'H8',location:'src/routes/+page.svelte:filterLouvores:criteriaChanged',message:'filter criteria changed; scheduling page reset',data:{criteriaKey,lastCriteriaKey:lastFilterCriteriaKey,currentPage,searchQuery},timestamp:Date.now()})}).catch(()=>{});
+      // #endregion
+    }
+    lastFilterCriteriaKey = criteriaKey;
+
     if (lastSearchAppliedInFilter !== null && qNow !== lastSearchAppliedInFilter) {
       pageInitializedFromUrl = false;
     }
