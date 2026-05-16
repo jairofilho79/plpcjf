@@ -14,6 +14,34 @@
   import { fetchPdfAsBlob } from '$lib/utils/pdfUtils';
   import { checkEffectiveConnectivity } from '$lib/utils/pdfValidation';
 
+  // ── Performance Debug ────────────────────────────────────────────────────────
+  const _perfEnabled = () =>
+    typeof window !== 'undefined' &&
+    localStorage.getItem('plpcjf_perf_debug') === '1'
+
+  function perfMark(name: string) {
+    if (!_perfEnabled()) return
+    try { performance.mark(name) } catch {}
+  }
+
+  function perfMeasure(name: string, start: string, end: string) {
+    if (!_perfEnabled()) return
+    try { performance.measure(name, start, end) } catch {}
+  }
+
+  function perfReport() {
+    if (!_perfEnabled()) return
+    try {
+      const entries = performance.getEntriesByType('measure')
+        .filter(e => e.name.startsWith('pdf'))
+      const lines = entries.map(e => `  ${e.name}: ${e.duration.toFixed(1)}ms`)
+      console.log('[PLPCJF Perf]\n' + lines.join('\n'))
+      performance.clearMarks()
+      performance.clearMeasures()
+    } catch {}
+  }
+  // ────────────────────────────────────────────────────────────────────────────
+
   // Type for PDF.js getDocument function
   type PDFJSGetDocument = (options: { url: string; withCredentials?: boolean }) => {
     promise: Promise<{ numPages?: number }>;
@@ -261,11 +289,20 @@
     
     try {
       // Try to load directly - Service Worker will intercept and serve from cache if available
+      perfMark('pdf-source-resolve-start')
       const sourceUrl = await resolvePdfSourceUrl(fileUrl);
+      perfMark('pdf-source-resolve-end')
+      perfMeasure('pdf-source-resolve', 'pdf-source-resolve-start', 'pdf-source-resolve-end')
+      perfMark('pdf-getdocument-start')
       const loadingTask = getDocument({ url: sourceUrl, withCredentials: false });
       const pdfDocument = await loadingTask.promise;
+      perfMark('pdf-getdocument-end')
+      perfMeasure('pdf-getdocument', 'pdf-getdocument-start', 'pdf-getdocument-end')
+      perfMark('pdf-setdocument-start')
       linkService.setDocument(pdfDocument);
       viewer.setDocument(pdfDocument);
+      perfMark('pdf-setdocument-end')
+      perfMeasure('pdf-setdocument', 'pdf-setdocument-start', 'pdf-setdocument-end')
       totalPages = pdfDocument.numPages ?? 0;
       currentPage = 1;
       lastLoadedFile = fileUrl;
@@ -617,6 +654,7 @@
 
     // Carregar PDF.js completo (garantir viewer disponível antes de inicializar)
     // Mostrar feedback visual durante carregamento
+    perfMark('pdfjs-load-start')
     pdfLoading = true;
     
     let core, viewerNS, workerUrl;
@@ -649,6 +687,9 @@
       return;
     }
     
+    perfMark('pdfjs-load-end')
+    perfMeasure('pdfjs-load', 'pdfjs-load-start', 'pdfjs-load-end')
+
     // Register on globals for viewer expectations
     // @ts-ignore
     globalThis.pdfjsLib = core;
@@ -743,6 +784,9 @@
           viewer.currentScaleValue = preferredFitMode;
         }
       }
+      perfMark('pdf-pagesinit')
+      perfMeasure('pdf-total-ttfr', 'pdfjs-load-start', 'pdf-pagesinit')
+      perfReport()
     });
     eventBus.on('scalechanging', (e: any) => {
       const newScale = e?.scale ?? (viewer as any)?.currentScale ?? 1;
