@@ -3,15 +3,21 @@ import { BlobReader, BlobWriter, ZipReader } from '@zip.js/zip.js';
 import { WORKER_COMMANDS, WORKER_EVENTS } from './workerProtocol.js';
 
 const DB_NAME = 'plpc-offline-db';
-const DB_VERSION = 1;
 const PROGRESS_EVERY = 5;
 const YIELD_EVERY = 10;
 
+// Mirror the same versioned schema as dexieDb.js so IDB upgrades are consistent
+// when both the main thread and the worker open the same database.
 class WorkerDexieDb extends Dexie {
   constructor() {
     super(DB_NAME);
-    this.version(DB_VERSION).stores({
+    // v1 — original schema (must be declared for upgrades from existing DBs)
+    this.version(1).stores({
       assets: '&id,path,updatedAt,mimeType,size'
+    });
+    // v2 — adds inventory indexes (pdfId, category, status, manifestRevision)
+    this.version(2).stores({
+      assets: '&id,path,pdfId,category,updatedAt,mimeType,size,status,manifestRevision'
     });
   }
 }
@@ -42,7 +48,15 @@ async function yieldMicroTask() {
   await new Promise((resolve) => setTimeout(resolve, 0));
 }
 
-async function ingestZip({ requestId, packageUrl, expectedPdfs = [] }) {
+/**
+ * @param {{
+ *   requestId: string,
+ *   packageUrl: string,
+ *   expectedPdfs?: string[],
+ *   pdfMetadata?: Record<string, {pdfId?: string, category?: string, manifestRevision?: string}>|null
+ * }} params
+ */
+async function ingestZip({ requestId, packageUrl, expectedPdfs = [], pdfMetadata = null }) {
   const controller = new AbortController();
   abortControllers.set(requestId, controller);
 
@@ -93,13 +107,24 @@ async function ingestZip({ requestId, packageUrl, expectedPdfs = [] }) {
 
       try {
         const blob = await entry.getData(new BlobWriter('application/pdf'));
+
+        // Resolve inventory metadata: try both "/path" and "path" key variants
+        const meta = pdfMetadata
+          ? (pdfMetadata[normalizedPath] || pdfMetadata[normalizedPath.slice(1)] || {})
+          : {};
+
         await assetsTable.put({
           id: normalizedPath,
           path: normalizedPath,
           mimeType: blob.type || 'application/pdf',
           size: Number(blob.size || 0),
           updatedAt: Date.now(),
-          blob
+          blob,
+          // v2 inventory fields
+          pdfId: meta.pdfId || undefined,
+          category: meta.category || undefined,
+          status: 'persisted',
+          manifestRevision: meta.manifestRevision || undefined
         });
         stored++;
 

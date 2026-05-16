@@ -25,7 +25,7 @@
   import statsCalculator from '$lib/offline/stats/StatsCalculator.js';
   import offlineEvents, { EVENTS as OFFLINE_EVENTS } from '$lib/offline/core/OfflineEvents.js';
   import offlineManager from '$lib/offline/core/OfflineManager.js';
-  import cacheMigrationV2 from '$lib/offline/storage/CacheMigrationV2.js';
+  import legacyCacheMigrationService from '$lib/offline/migration/LegacyCacheMigrationService.js';
   import { getConfig } from '$lib/offline/core/OfflineConfig.js';
   import { browser } from '$app/environment';
 
@@ -483,9 +483,8 @@
         }
       }, 30000); // Check every 30 seconds
       
-      // Check if migration V2 is needed
-      const migrationCompleted = await cacheMigrationV2.isMigrationCompleted();
-      migrationNeeded = !migrationCompleted;
+      // Check if legacy cache migration is needed (Cache API → IndexedDB)
+      migrationNeeded = await legacyCacheMigrationService.isMigrationNeeded();
       
       // ============================================
       // FASE 2: Remoção de triggers automáticos de stats
@@ -704,7 +703,8 @@
   }
 
   /**
-   * Run cache migration V2 manually
+   * Run legacy cache → IndexedDB migration manually.
+   * Resumable: if previously interrupted, continues from the saved checkpoint.
    */
   async function runMigration() {
     if (isMigrating) return;
@@ -714,19 +714,21 @@
     migrationResult = null;
     
     try {
-      console.log('[Offline Page] Starting cache migration V2...');
+      console.log('[Offline Page] Starting legacy cache migration...');
       
-      const result = await cacheMigrationV2.migrate({
-        force: false,
+      const result = await legacyCacheMigrationService.migrate({
         onProgress: (progress) => {
           migrationProgress = progress;
         }
       });
       
       migrationResult = result;
-      migrationNeeded = false;
+      migrationNeeded = result.cancelled
+        ? await legacyCacheMigrationService.isMigrationNeeded()
+        : false;
       
-      // Reload stats after migration
+      // Invalidate and reload stats after migration (IDB now has more entries)
+      statsCalculator.invalidateAll();
       await loadCategoryStats(true);
       
       console.log('[Offline Page] Migration completed:', result);
@@ -736,11 +738,18 @@
         migrated: 0,
         skipped: 0,
         errors: 1,
-        errorDetails: [error.message || 'Migration failed']
+        cancelled: false
       };
     } finally {
       isMigrating = false;
     }
+  }
+
+  /**
+   * Cancel a running migration.
+   */
+  function cancelMigration() {
+    legacyCacheMigrationService.cancel();
   }
 
   // Track last stats load time to prevent excessive calls
@@ -757,14 +766,17 @@
   };
 
   /**
-   * Load category availability statistics for specific categories
-   * @param {string[]} categories - Categories to load stats for
-   * @param {boolean} force - Force reload even if cached
+   * Load category availability statistics for specific categories.
+   *
+   * Stats are now computed directly from IndexedDB (via StatsCalculator →
+   * OfflineInventoryRepository) — no Cache API list required.
+   *
+   * @param {string[]} categories
+   * @param {boolean} force - Force recalculation, ignoring caches
    */
   async function loadCategoryStatsForCategories(categories = [], force = false) {
     if (!$louvores.length || !categories || categories.length === 0) return;
     
-    // Prevent concurrent loads
     if (isLoadingStats) {
       console.log('[Offline Page] Stats already loading, skipping');
       return;
@@ -773,40 +785,11 @@
     isLoadingStats = true;
     
     try {
-      // Always reload cached PDFs list before calculating stats
-      // This ensures we have the latest cache state, especially important with lazy loading
-      // Force reload to bypass cache and get fresh data
-      await offline.loadCachedPdfsList(false, true);
-      
-      // Wait a bit for state to update
-      await new Promise(resolve => setTimeout(resolve, 50));
-      
-      const state = $offline;
-      /** @type {string[]} */
-      let cachedPdfs = state.cachedPdfs || [];
-      
-      // If still empty after reload, try one more time with delay
-      if (!cachedPdfs || cachedPdfs.length === 0) {
-        // Small delay to allow Service Worker to process
-        await new Promise(resolve => setTimeout(resolve, 200));
-        await offline.loadCachedPdfsList(false, true);
-        await new Promise(resolve => setTimeout(resolve, 50));
-        const updatedState = $offline;
-        cachedPdfs = updatedState.cachedPdfs || [];
-      }
-      
-      // Log for debugging
-      if (force) {
-        console.log('[Offline Page] Loading stats with', cachedPdfs.length, 'cached PDFs');
-      }
-      
-      // FASE 3: Load category stats only for specified categories (usando cache otimizado)
       const newStats = { ...categoryStats };
       const statsToCalculate = [];
       const calculationStartTimes = new Map();
       
       for (const category of categories) {
-        // FASE 3: Verificar cache usando novo sistema
         if (!force) {
           const cached = getCachedStats(category);
           if (cached) {
@@ -814,45 +797,30 @@
             statsCache.set(category, cached);
             continue;
           }
-          
-          // Se não estiver no cache persistente, verificar cache em memória
           if (statsCache.has(category)) {
             newStats[category] = statsCache.get(category);
             continue;
           }
         }
-        
-        // Marcar para cálculo
         statsToCalculate.push(category);
         calculationStartTimes.set(category, performance.now());
       }
       
-      // FASE 3: Calcular stats em paralelo quando possível
       if (statsToCalculate.length > 0) {
         const calculationPromises = statsToCalculate.map(async (category) => {
-          const startTime = calculationStartTimes.get(category);
-          // FASE 4: Use StatsCalculator directly for better performance
-          // When force=true, ensure we force recalculation and don't use cache
-          const stats = await statsCalculator.getCategoryStats(
-            category,
-            {
-              louvoresData: $louvores,
-              cachedPdfs,
-              useCache: !force,
-              forceRecalculate: force
-            }
-          );
+          const startTime = calculationStartTimes.get(category) || performance.now();
+          // StatsCalculator queries IndexedDB — no cachedPdfs param needed
+          const stats = await statsCalculator.getCategoryStats(category, {
+            louvoresData: $louvores,
+            useCache: !force,
+            forceRecalculate: force
+          });
           const calcTime = performance.now() - startTime;
           recordCalculationTime(calcTime);
           
           newStats[category] = stats;
           statsCache.set(category, stats);
-          
-          // FASE 3: Salvar no cache com metadados
-          cacheStats(category, stats, {
-            louvoresCount: $louvores.length,
-            cachedPdfsCount: cachedPdfs.length
-          });
+          cacheStats(category, stats, { louvoresCount: $louvores.length });
           
           return { category, stats };
         });
@@ -861,26 +829,6 @@
       }
       
       categoryStats = newStats;
-      
-      // Get required packages info for selected categories
-      if (selectedCategories.length > 0) {
-        // FASE 5: Use OfflineManager to get manifest
-        let manifest = state.offlineManifest;
-        if (!manifest) {
-          manifest = await offlineManager.getOfflineManifest();
-        }
-        if (manifest) {
-          // FASE 5: Use OfflineManager for required packages info
-          requiredPackagesInfo = await offline.getRequiredPackagesInfo(
-            selectedCategories,
-            $louvores,
-            cachedPdfs,
-            manifest
-          );
-        }
-      } else {
-        requiredPackagesInfo = null;
-      }
     } catch (error) {
       console.error('[Offline Page] Failed to load stats for categories:', error);
     } finally {
@@ -1547,29 +1495,65 @@
         </div>
       {/if}
 
+      <!-- Migration banner: shown when legacy Cache API data has not yet been migrated -->
+      {#if migrationNeeded && !isMigrating && !migrationResult}
+        <div class="migration-banner info-box" role="alert">
+          <Database class="w-5 h-5 info-icon" />
+          <div class="info-text">
+            <p class="info-title">Migração de armazenamento disponível</p>
+            <p class="info-description">
+              Seus PDFs estão salvos no formato antigo. Migrar para o novo formato
+              garante melhor desempenho, stats precisas e evita falsos positivos.
+              Você pode interromper e retomar a qualquer momento.
+            </p>
+            <div class="action-buttons" style="margin-top: 0.75rem; justify-content: flex-start;">
+              <button class="btn btn-primary" on:click={runMigration} disabled={isMigrating}>
+                <Database class="w-4 h-4" />
+                <span>Migrar agora</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      {/if}
+
       <!-- Migration progress -->
-      {#if isMigrating && migrationProgress}
+      {#if isMigrating}
         <div class="migration-progress">
           <div class="migration-progress-header">
-            <span>Migrando cache: {migrationProgress.current} / {migrationProgress.total}</span>
-            <span class="migration-stats">
-              {migrationProgress.migrated} migrados, {migrationProgress.skipped} ignorados, {migrationProgress.errors} erros
-            </span>
+            {#if migrationProgress}
+              <span>Migrando: {migrationProgress.processed} / {migrationProgress.total || '?'}</span>
+              <span class="migration-stats">
+                {migrationProgress.migrated} migrados · {migrationProgress.skipped} ignorados · {migrationProgress.errors} erros
+              </span>
+            {:else}
+              <span>Preparando migração...</span>
+            {/if}
           </div>
           <div class="migration-progress-bar">
             <div 
               class="migration-progress-fill" 
-              style="width: {Math.round((migrationProgress.current / migrationProgress.total) * 100)}%"
+              style="width: {migrationProgress ? migrationProgress.percentage : 0}%"
             ></div>
+          </div>
+          <div class="action-buttons" style="margin-top: 0.75rem; justify-content: flex-start;">
+            <button class="btn btn-danger" on:click={cancelMigration}>
+              Interromper migração
+            </button>
           </div>
         </div>
       {/if}
 
       <!-- Migration result -->
       {#if migrationResult && !isMigrating}
-        <div class="migration-result" class:success={migrationResult.errors === 0} class:error={migrationResult.errors > 0}>
+        <div class="migration-result" class:success={migrationResult.errors === 0 && !migrationResult.cancelled} class:error={migrationResult.errors > 0}>
           <div class="migration-result-content">
-            {#if migrationResult.errors === 0}
+            {#if migrationResult.cancelled}
+              <AlertCircle class="w-5 h-5" />
+              <div class="migration-result-text">
+                <strong>Migração interrompida</strong>
+                <span>{migrationResult.migrated} migrados até agora — pode retomar a qualquer momento.</span>
+              </div>
+            {:else if migrationResult.errors === 0}
               <CheckCircle class="w-5 h-5" />
               <div class="migration-result-text">
                 <strong>Migração concluída com sucesso!</strong>

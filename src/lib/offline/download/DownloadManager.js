@@ -8,8 +8,10 @@ import DownloadProgressTracker from './DownloadProgress.js';
 import DownloadQueue from './DownloadQueue.js';
 import cacheStorageAdapter from '../storage/CacheStorageAdapter.js';
 import manifestRepository from '../manifest/ManifestRepository.js';
-import { findMissingPdfs, findRequiredPackages } from '$lib/utils/pdfValidation.js';
-import { atobUTF8 } from '$lib/utils/pathUtils.js';
+import { findRequiredPackages } from '$lib/utils/pdfValidation.js';
+import { atobUTF8, getPdfRelPath } from '$lib/utils/pathUtils.js';
+import PdfPathManager from '../utils/PdfPathManager.js';
+import offlineInventoryRepository from '../storage/OfflineInventoryRepository.js';
 import { louvores } from '$lib/stores/louvores.js';
 import { get } from 'svelte/store';
 import offlineEvents, { EVENTS } from '../core/OfflineEvents.js';
@@ -157,22 +159,12 @@ export class DownloadManager {
         };
       }
 
-      // Get cached PDFs (using getCachedPDFsFast for compatibility)
-      // Note: We could use cacheStorageAdapter.listPdfs() but getCachedPDFsFast
-      // is faster and already used throughout the codebase
-      let cachedPdfs = [];
-      try {
-        const { getCachedPDFsFast } = await import('$lib/utils/swRegistration.js');
-        cachedPdfs = await getCachedPDFsFast();
-      } catch (error) {
-        logger.warn('DownloadManager', 'Could not get cached PDFs, using empty array', error);
-        cachedPdfs = [];
-      }
+      // Identify missing PDFs using IndexedDB as the canonical source of truth.
+      // This avoids the false-positive risk of querying the Cache API.
+      const persistedSet = await offlineInventoryRepository.getPersistedLookupSet();
+      const missingPdfs = offlineInventoryRepository.computeMissingPdfs(filteredLouvores, persistedSet);
 
-      // Identify missing PDFs
-      const missingPdfs = findMissingPdfs(filteredLouvores, cachedPdfs);
-      
-      logger.info('DownloadManager', `Found ${missingPdfs.length} missing PDFs out of ${filteredLouvores.length} total`);
+      logger.info('DownloadManager', `Found ${missingPdfs.length} missing PDFs out of ${filteredLouvores.length} total (IDB-based)`);
 
       if (missingPdfs.length === 0) {
         return {
@@ -210,6 +202,22 @@ export class DownloadManager {
         partsByCategory[part.category].push(part);
       }
 
+      // Build a path→metadata map so each stored PDF gets pdfId/category in IDB.
+      /** @type {Map<string, {pdfId: string, category: string}>} */
+      const pdfMetadataMap = new Map();
+      for (const louvor of filteredLouvores) {
+        if (!louvor.pdfId) continue;
+        const relPath = getPdfRelPath(louvor);
+        if (!relPath) continue;
+        const normalized = PdfPathManager.normalizeForStorage(relPath);
+        if (normalized) {
+          const withSlash = normalized.startsWith('/') ? normalized : `/${normalized}`;
+          const meta = { pdfId: louvor.pdfId, category: louvor.categoria };
+          pdfMetadataMap.set(withSlash, meta);
+          pdfMetadataMap.set(normalized, meta);
+        }
+      }
+
       // Get PDF URLs for validation
       const pdfUrls = filteredLouvores
         .map(louvor => this._getPdfUrl(louvor))
@@ -228,6 +236,7 @@ export class DownloadManager {
         Object.keys(partsByCategory),
         pdfUrls,
         partsByCategory,
+        pdfMetadataMap,
         (progress) => {
           // Call user's progress callback if provided
           if (options.onProgress) {
@@ -427,11 +436,12 @@ export class DownloadManager {
    * @param {string[]} categories - Categories to download
    * @param {string[]} pdfUrls - Expected PDF URLs
    * @param {Object} partsByCategory - Parts grouped by category
+   * @param {Map<string, {pdfId: string, category: string}>} pdfMetadataMap
    * @param {Function} [onProgress] - Progress callback
    * @returns {Promise<{completed: number, failed: number}>} Download result
    * @private
    */
-  async _downloadPackages(categories, pdfUrls, partsByCategory, onProgress = null) {
+  async _downloadPackages(categories, pdfUrls, partsByCategory, pdfMetadataMap, onProgress = null) {
     // Initialize progress
     this.progress = new DownloadProgressTracker(pdfUrls.length);
     this.progress.start();
@@ -502,6 +512,7 @@ export class DownloadManager {
             {
               abortSignal: this.abortController?.signal,
               batch: true,
+              pdfMetadataMap,
             onProgress: (progressData) => {
               // Calculate PDFs from previous packages that are already complete
               // Use only completedPdfs (not estimatedPdfCount) to avoid inflating progress

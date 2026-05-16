@@ -45,7 +45,16 @@ export class ZipWorkerClient {
     }
   }
 
-  ingestZip({ packageUrl, expectedPdfs = [], onProgress = null, abortSignal = null }) {
+  /**
+   * @param {{
+   *   packageUrl: string,
+   *   expectedPdfs?: string[],
+   *   onProgress?: Function,
+   *   abortSignal?: AbortSignal|null,
+   *   pdfMetadata?: Record<string, {pdfId?: string, category?: string, manifestRevision?: string}>|null
+   * }} options
+   */
+  ingestZip({ packageUrl, expectedPdfs = [], onProgress = null, abortSignal = null, pdfMetadata = null }) {
     this._ensureWorker();
     const requestId = `zip-worker-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 
@@ -73,7 +82,8 @@ export class ZipWorkerClient {
         command: WORKER_COMMANDS.INGEST_ZIP,
         requestId,
         packageUrl,
-        expectedPdfs
+        expectedPdfs,
+        pdfMetadata
       });
     });
   }
