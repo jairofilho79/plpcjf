@@ -148,11 +148,55 @@ export function debug(module, message, data = null, metrics = null) {
  * @returns {Object} Logger instance with bound methods
  */
 export function createLogger(moduleName) {
+  /**
+   * Support both logger styles used in the codebase:
+   * 1) logger.error('message', error)
+   * 2) logger.error('ModuleName', 'message', error)  // legacy style
+   */
+  const normalizeArgs = (args) => {
+    if (!args || args.length === 0) {
+      return { message: '', data: null };
+    }
+
+    if (args.length >= 2 && args[0] === moduleName) {
+      return {
+        message: args[1] ?? '',
+        data: args[2] ?? null
+      };
+    }
+
+    return {
+      message: args[0] ?? '',
+      data: args[1] ?? null
+    };
+  };
+
   return {
-    error: (message, error) => error(moduleName, message, error),
-    warn: (message, data) => warn(moduleName, message, data),
-    info: (message, data) => info(moduleName, message, data),
-    debug: (message, data, metrics) => debug(moduleName, message, data, metrics)
+    error: (...args) => {
+      const { message, data } = normalizeArgs(args);
+      error(moduleName, message, data);
+    },
+    warn: (...args) => {
+      const { message, data } = normalizeArgs(args);
+      warn(moduleName, message, data);
+    },
+    info: (...args) => {
+      const { message, data } = normalizeArgs(args);
+      info(moduleName, message, data);
+    },
+    debug: (...args) => {
+      // debug may receive an extra metrics object.
+      if (args.length >= 3 && args[0] !== moduleName) {
+        debug(moduleName, args[0] ?? '', args[1] ?? null, args[2] ?? null);
+        return;
+      }
+      if (args.length >= 4 && args[0] === moduleName) {
+        debug(moduleName, args[1] ?? '', args[2] ?? null, args[3] ?? null);
+        return;
+      }
+      const { message, data } = normalizeArgs(args);
+      debug(moduleName, message, data, null);
+    }
   };
 }
 

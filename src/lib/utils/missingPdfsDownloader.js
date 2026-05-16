@@ -77,7 +77,7 @@ export async function downloadMissingPdfs(options = {}) {
     // 2. Get cached PDFs
     let cachedPdfs = [];
     try {
-      cachedPdfs = await getCachedPDFsFast();
+      cachedPdfs = await getCachedPDFsFast({ preferFresh: true });
     } catch (error) {
       console.warn('[Missing PDFs Downloader] Could not get cached PDFs, using empty array', error);
       cachedPdfs = [];

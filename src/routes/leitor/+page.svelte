@@ -9,6 +9,9 @@
   import { getPdfRelPath } from '$lib/utils/pathUtils';
   import { loadPdfJsComplete, loadPdfJsViewer } from '$lib/utils/pdfjsLoader';
   import { clearPdfFromSwCache } from '$lib/utils/swRegistration';
+  import { createObjectUrlManager } from '$lib/offline/ui/objectUrlLifecycle';
+  import { getConfig } from '$lib/offline/core/OfflineConfig';
+  import { fetchPdfAsBlob } from '$lib/utils/pdfUtils';
   import { checkEffectiveConnectivity } from '$lib/utils/pdfValidation';
 
   // Type for PDF.js getDocument function
@@ -25,6 +28,8 @@
   let linkService: any;
   let viewer: any;
   let cleanup: (() => void) | null = null;
+  const objectUrlManager = createObjectUrlManager();
+  let activePdfObjectUrl: string | null = null;
   let toolbarEl: HTMLDivElement | null = null;
   let toolbarHeight = 60;
   // Estado para controlar visibilidade da barra superior (fullscreen)
@@ -223,6 +228,27 @@
   let swipePageGestureValid = false;
   let lastSwipePageTurnAt = 0;
 
+  async function resolvePdfSourceUrl(fileUrl: string): Promise<string> {
+    if (getConfig('OFFLINE_IDB_ENABLED') !== true) {
+      return fileUrl;
+    }
+
+    try {
+      const pathname = new URL(fileUrl, window.location.origin).pathname;
+      const blob = await fetchPdfAsBlob(pathname);
+      if (!blob) return fileUrl;
+
+      if (activePdfObjectUrl) {
+        objectUrlManager.revoke(activePdfObjectUrl);
+        activePdfObjectUrl = null;
+      }
+      activePdfObjectUrl = objectUrlManager.create(blob);
+      return activePdfObjectUrl;
+    } catch {
+      return fileUrl;
+    }
+  }
+
   // Load PDF directly without validation (optimization: skip validation if already validated)
   async function loadDirectly(fileUrl: string) {
     const getDocument = (window as any).__pdfjsGetDocument as PDFJSGetDocument | undefined;
@@ -235,7 +261,8 @@
     
     try {
       // Try to load directly - Service Worker will intercept and serve from cache if available
-      const loadingTask = getDocument({ url: fileUrl, withCredentials: false });
+      const sourceUrl = await resolvePdfSourceUrl(fileUrl);
+      const loadingTask = getDocument({ url: sourceUrl, withCredentials: false });
       const pdfDocument = await loadingTask.promise;
       linkService.setDocument(pdfDocument);
       viewer.setDocument(pdfDocument);
@@ -343,7 +370,8 @@
       }
       
       // PDF is available, load using ORIGINAL URL (not normalized) to preserve exact path from pdfId
-      const loadingTask = getDocument({ url: originalFullUrl, withCredentials: false });
+      const sourceUrl = await resolvePdfSourceUrl(originalFullUrl);
+      const loadingTask = getDocument({ url: sourceUrl, withCredentials: false });
       const pdfDocument = await loadingTask.promise;
       linkService.setDocument(pdfDocument);
       viewer.setDocument(pdfDocument);
@@ -788,6 +816,11 @@
       pageWidthAdjustTimeout = null;
     }
     cleanup?.();
+    if (activePdfObjectUrl) {
+      objectUrlManager.revoke(activePdfObjectUrl);
+      activePdfObjectUrl = null;
+    }
+    objectUrlManager.revokeAll();
     if (activeForcedObjectUrl) {
       try { URL.revokeObjectURL(activeForcedObjectUrl); } catch {}
       activeForcedObjectUrl = null;

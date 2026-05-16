@@ -18,6 +18,9 @@ import { browser } from '$app/environment';
 import { louvores } from '$lib/stores/louvores.js';
 import { get } from 'svelte/store';
 import { cacheAppPages } from '../utils/AppPagesCache.js';
+import { requestPersistentStorage } from './OfflineStorageErrors.js';
+import { getConfig, setConfig } from './OfflineConfig.js';
+import legacyCacheMigrationService from '../migration/LegacyCacheMigrationService.js';
 
 const logger = createLogger('OfflineManager');
 
@@ -92,6 +95,16 @@ class OfflineManager {
           return;
         }
 
+        this._applyPersistedIdbRolloutFlags();
+
+        // Best-effort persistent storage request.
+        // Browsers may ignore this, but it improves quota stability when granted.
+        try {
+          await requestPersistentStorage();
+        } catch (error) {
+          logger.debug('OfflineManager', 'Persistent storage request failed (non-critical)', error);
+        }
+
         // Run cache migration V1 if needed
         try {
           await cacheMigration.migrate();
@@ -120,6 +133,14 @@ class OfflineManager {
           logger.warn('OfflineManager', 'Initial cache sync failed (non-critical)', error);
         }
 
+        // Optional background migration from legacy Cache API to IndexedDB.
+        // Fire-and-forget to avoid blocking startup.
+        if (getConfig('OFFLINE_MIGRATION_AUTO_ENABLED') === true) {
+          legacyCacheMigrationService
+            .runInBackground()
+            .catch((error) => logger.warn('OfflineManager', 'Background legacy migration failed (non-critical)', error));
+        }
+
         this.initialized = true;
         logger.info('OfflineManager', 'Initialization complete');
       } catch (error) {
@@ -131,6 +152,49 @@ class OfflineManager {
     })();
 
     return this.initializationPromise;
+  }
+
+  /**
+   * Enable IndexedDB/Worker rollout when user explicitly enables offline usage.
+   * Keeps Cache API fallback enabled for safe transition.
+   *
+   * @param {Object} [options]
+   * @param {boolean} [options.persist=true]
+   * @param {boolean} [options.runMigration=true]
+   * @returns {Promise<{enabled: boolean, migrationStarted: boolean}>}
+   */
+  async enableIndexedDbRollout(options = {}) {
+    const { persist = true, runMigration = true } = options;
+
+    this._enableIdbRolloutFlags();
+
+    if (browser && persist) {
+      this._persistIdbRolloutFlag(true);
+    }
+
+    try {
+      await requestPersistentStorage();
+    } catch (error) {
+      logger.debug('OfflineManager', 'Persistent storage request failed during rollout activation', error);
+    }
+
+    let migrationStarted = false;
+    if (runMigration) {
+      try {
+        await legacyCacheMigrationService.runInBackground();
+        migrationStarted = true;
+      } catch (error) {
+        logger.warn('OfflineManager', 'Could not start legacy migration in background', error);
+      }
+    }
+
+    logger.info('OfflineManager', 'IndexedDB rollout enabled', {
+      persist,
+      runMigration,
+      migrationStarted
+    });
+
+    return { enabled: true, migrationStarted };
   }
 
   /**
@@ -595,6 +659,40 @@ class OfflineManager {
     if (!this.initialized) {
       await this.initialize();
     }
+  }
+
+  /**
+   * @private
+   */
+  _enableIdbRolloutFlags() {
+    setConfig('OFFLINE_IDB_ENABLED', true);
+    setConfig('OFFLINE_WORKER_ZIP_STREAMING_ENABLED', true);
+    setConfig('OFFLINE_MIGRATION_AUTO_ENABLED', true);
+    // Keep fallback for safe progressive rollout.
+    setConfig('OFFLINE_READTHROUGH_CACHE_FALLBACK_ENABLED', true);
+  }
+
+  /**
+   * @private
+   */
+  _applyPersistedIdbRolloutFlags() {
+    if (!browser) return;
+    const rolloutKey = getConfig('OFFLINE_IDB_ROLLOUT_KEY') || 'offline_idb_rollout_enabled';
+    const persisted = localStorage.getItem(rolloutKey) === 'true';
+    if (!persisted) return;
+
+    this._enableIdbRolloutFlags();
+    logger.debug('OfflineManager', 'Applied persisted IndexedDB rollout flags');
+  }
+
+  /**
+   * @private
+   * @param {boolean} value
+   */
+  _persistIdbRolloutFlag(value) {
+    if (!browser) return;
+    const rolloutKey = getConfig('OFFLINE_IDB_ROLLOUT_KEY') || 'offline_idb_rollout_enabled';
+    localStorage.setItem(rolloutKey, value ? 'true' : 'false');
   }
 }
 
