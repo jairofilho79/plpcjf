@@ -487,12 +487,17 @@
     // Basic shortcuts
     if ((e.ctrlKey || e.metaKey) && (e.key === '+' || e.key === '=')) {
       e.preventDefault();
-      viewer.currentScale = viewer.currentScale * 1.1;
+      const newScale = viewer.currentScale * 1.1;
+      viewer.currentScale = newScale;
+      zoomCtrl.setUserScale(newScale);
     } else if ((e.ctrlKey || e.metaKey) && (e.key === '-' )) {
       e.preventDefault();
-      viewer.currentScale = viewer.currentScale / 1.1;
+      const newScale = viewer.currentScale / 1.1;
+      viewer.currentScale = newScale;
+      zoomCtrl.setUserScale(newScale);
     } else if ((e.ctrlKey || e.metaKey) && (e.key === '0')) {
       e.preventDefault();
+      zoomCtrl.clearUserScale();
       viewer.currentScaleValue = 'page-fit';
     } else if (e.key === 'ArrowDown' || e.key === 'PageDown') {
       e.preventDefault();
@@ -694,9 +699,17 @@
       currentPage = e?.pageNumber ?? currentPage;
       resetFitModeScrollPosition();
       requestAnimationFrame(() => resetFitModeScrollPosition());
-      if (preferredFitMode === 'page-width') {
+
+      if (zoomCtrl.userScale !== null) {
+        // Usuário tem zoom manual: preservar escala ao trocar de página
+        const savedScale = zoomCtrl.userScale;
+        setTimeout(() => {
+          if (viewer) viewer.currentScale = savedScale;
+        }, 50);
+      } else if (preferredFitMode === 'page-width') {
         zoomCtrl.schedulePageWidth({ viewer, containerEl: containerEl!, viewerEl: viewerEl!, forceRecalculate: false, delayMs: 50 });
       }
+      // page-fit: PDF.js mantém a escala automaticamente
     });
 
     // PDF.js carregado com sucesso, ocultar loading
@@ -745,21 +758,21 @@
 
   function zoomIn() {
     if (!viewer) return;
-    viewer.currentScale = viewer.currentScale * 1.1;
+    const newScale = viewer.currentScale * 1.1;
+    viewer.currentScale = newScale;
+    zoomCtrl.setUserScale(newScale);
   }
   function zoomOut() {
     if (!viewer) return;
-    viewer.currentScale = viewer.currentScale / 1.1;
+    const newScale = viewer.currentScale / 1.1;
+    viewer.currentScale = newScale;
+    zoomCtrl.setUserScale(newScale);
   }
   function zoomFit() {
     if (!viewer) return;
-    // Reset to the preferred fit mode
+    zoomCtrl.clearUserScale();
     if (preferredFitMode === 'page-width') {
-      // For page-width, calculate manually instead of using PDF.js algorithm
-      // Reuse cached scale if available
-      setTimeout(() => {
-        applyPageWidthZoom(false);
-      }, 100);
+      setTimeout(() => applyPageWidthZoom(false), 100);
     } else {
       viewer.currentScaleValue = preferredFitMode;
     }
@@ -767,14 +780,10 @@
   
   function toggleFitMode() {
     preferredFitMode = preferredFitMode === 'page-fit' ? 'page-width' : 'page-fit';
+    zoomCtrl.clearUserScale();
     if (viewer) {
       if (preferredFitMode === 'page-width') {
-        // For page-width, calculate manually instead of using PDF.js algorithm
-        // This prevents PDF.js from overwriting our calculation
-        // Force recalculate when switching to page-width mode
-        setTimeout(() => {
-          applyPageWidthZoom(true);
-        }, 100);
+        setTimeout(() => applyPageWidthZoom(true), 100);
       } else {
         zoomCtrl.invalidateCache();
         viewer.currentScaleValue = preferredFitMode;
@@ -821,6 +830,8 @@
    */
   function trySwipePageTurn(e: TouchEvent) {
     if (!ENABLE_SWIPE_PAGE_NAV || !viewer) return;
+    // Modo vertical: navegação por scroll, não por swipe horizontal
+    if (navigationMode === 'vertical') return;
     if (e.type === 'touchcancel') return;
     const t = e.changedTouches[0];
     if (!t) return;
@@ -977,6 +988,10 @@
     // End pinch gesture
     if (isPinching && touches.length < 2) {
       isPinching = false;
+      // Rastrear escala do usuário após o pinch
+      if (viewer) {
+        zoomCtrl.setUserScale((viewer as any).currentScale ?? 1);
+      }
       pinchInitialDistance = 0;
       pinchInitialScale = 1;
       pinchStartFocalX = 0;
