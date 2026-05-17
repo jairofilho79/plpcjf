@@ -1329,30 +1329,19 @@
   }
 
   // ─── Toolbar layer system ─────────────────────────────────────────────────────
-  $: toolbarLayerCount = deviceType === 'mobile' ? 3 : deviceType === 'tablet' ? 2 : 1;
+  $: toolbarLayerCount = deviceType === 'mobile' ? 3 : 1;
   $: if (activeToolbarLayer > toolbarLayerCount) activeToolbarLayer = 1;
 
   // Visibility per control based on active layer
-  $: showCarousel = deviceType === 'desktop' || activeToolbarLayer === 1;
-  $: showPagePrev = deviceType === 'desktop' || activeToolbarLayer === 2;
-  $: showPageNext = deviceType === 'desktop' || activeToolbarLayer === 2;
-  $: showNavMode =
-    deviceType === 'desktop' ||
-    (deviceType === 'tablet' && activeToolbarLayer === 1) ||
-    (deviceType === 'mobile' && activeToolbarLayer === 2);
-  $: showZoomMinus =
-    deviceType === 'desktop' ||
-    (deviceType === 'tablet' && activeToolbarLayer === 2) ||
-    (deviceType === 'mobile' && activeToolbarLayer === 3);
-  $: showZoomFit =
-    deviceType === 'desktop' ||
-    (deviceType === 'tablet' && activeToolbarLayer === 2) ||
-    (deviceType === 'mobile' && (activeToolbarLayer === 1 || activeToolbarLayer === 3));
-  $: showZoomPlus =
-    deviceType === 'desktop' ||
-    (deviceType === 'tablet' && activeToolbarLayer === 2) ||
-    (deviceType === 'mobile' && activeToolbarLayer === 3);
-  $: showLayerToggle = deviceType !== 'desktop';
+  $: showCarousel = deviceType !== 'mobile' || activeToolbarLayer === 1;
+  $: showPagePrev = deviceType !== 'mobile' || activeToolbarLayer === 2;
+  $: showPageNext = deviceType !== 'mobile' || activeToolbarLayer === 2;
+  $: showPageIndicator = deviceType !== 'mobile' || activeToolbarLayer === 1 || activeToolbarLayer === 2;
+  $: showNavMode = deviceType !== 'mobile' || activeToolbarLayer === 2;
+  $: showZoomMinus = deviceType !== 'mobile' || activeToolbarLayer === 3;
+  $: showZoomFit = deviceType !== 'mobile' || activeToolbarLayer === 1 || activeToolbarLayer === 3;
+  $: showZoomPlus = deviceType !== 'mobile' || activeToolbarLayer === 3;
+  $: showLayerToggle = deviceType === 'mobile';
   // ──────────────────────────────────────────────────────────────────────────────
 
   // Reativo: atualizar altura do container quando a visibilidade da barra mudar
@@ -1940,10 +1929,12 @@
       </div>
     {/if}
 
-    <div class="indicator" aria-label="Página atual e total">
-      <span class="current">{currentPage}</span>
-      <span class="total">/ {totalPages}</span>
-    </div>
+    {#if showPageIndicator}
+      <div class="indicator" aria-label="Página atual e total">
+        <span class="current">{currentPage}</span>
+        <span class="total">/ {totalPages}</span>
+      </div>
+    {/if}
 
     {#if showPageNext}
       <div class="ctrl page-nav-next">
