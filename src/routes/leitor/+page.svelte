@@ -968,17 +968,24 @@
 
     const finalScale = Math.max(0.25, Math.min(4, pinchInitialScale * pinchCurrentRatio));
 
+    // CRÍTICO: definir userScale ANTES de viewer.currentScale.
+    // O evento pagechanging disparado pelo PDF.js durante a mudança de escala consulta
+    // zoomCtrl.userScale para decidir se chama schedulePageWidth. Se userScale for null
+    // nesse momento, schedulePageWidth agenda applyPageWidth(~50ms depois), que reseta
+    // a escala para page-width e provoca o scroll voltando para (0,0).
+    zoomCtrl.setUserScale(finalScale);
+
     // Único commit no PDF.js — aqui ocorre o re-render
     if (viewer) {
       viewer.currentScale = finalScale;
     }
 
-    // Após o PDF.js reposicionar o conteúdo, corrigir scroll para manter focal
+    // Após o PDF.js reposicionar o conteúdo via scrollPageIntoView, corrigir scroll
+    // para preservar o ponto focal entre os dedos.
     requestAnimationFrame(() => {
       if (!containerEl) return;
       containerEl.scrollLeft = Math.max(0, pinchStartContentX * finalScale - pinchStartFocalX);
       containerEl.scrollTop  = Math.max(0, pinchStartContentY * finalScale - pinchStartFocalY);
-      zoomCtrl.setUserScale(finalScale);
     });
 
     // Limpar estado do pinch
