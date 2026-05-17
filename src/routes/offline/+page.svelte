@@ -1964,18 +1964,18 @@
     margin-bottom: 1rem;
     padding: 0.55rem 0.85rem;
     border-radius: 0.375rem;
-    border: 1px solid rgba(90, 103, 216, 0.35);
-    background: rgba(90, 103, 216, 0.08);
+    border: 1px solid rgba(167, 181, 255, 0.55);
+    background: rgba(90, 103, 216, 0.22);
     font-size: 0.8125rem;
     line-height: 1.35;
-    color: var(--text-dark);
+    color: var(--text-light);
   }
 
   .idb-advanced-indicator :global(.idb-advanced-icon) {
     flex-shrink: 0;
     width: 1rem;
     height: 1rem;
-    color: #5a67d8;
+    color: #c4cbff;
   }
 
   .idb-advanced-text {
@@ -1993,9 +1993,9 @@
     flex-direction: column;
     gap: 0.5rem;
     padding: 1rem;
-    border: 1px solid var(--border-color);
+    border: 1px solid rgba(212, 175, 55, 0.45);
     border-radius: 0.5rem;
-    background: var(--background-color);
+    background: rgba(0, 0, 0, 0.18);
     margin-bottom: 1rem;
   }
 
@@ -2005,22 +2005,31 @@
     gap: 0.5rem;
   }
 
+  .storage-transparency-box :global(.info-icon) {
+    color: var(--gold-color);
+    flex-shrink: 0;
+  }
+
   .storage-header h3 {
     margin: 0;
     font-size: 0.95rem;
     font-weight: 700;
-    color: var(--text-dark);
+    color: var(--text-light);
   }
 
   .refresh-storage-btn {
     margin-left: auto;
     border: none;
     background: transparent;
-    color: var(--text-dark);
+    color: var(--text-light);
     display: inline-flex;
     align-items: center;
     justify-content: center;
     cursor: pointer;
+  }
+
+  .refresh-storage-btn:hover:not(:disabled) {
+    color: var(--gold-light);
   }
 
   .refresh-storage-btn:disabled {
@@ -2028,11 +2037,22 @@
     cursor: not-allowed;
   }
 
-  .storage-line,
-  .storage-note {
+  .storage-line {
     margin: 0;
     font-size: 0.84rem;
-    color: var(--text-dark);
+    color: rgba(255, 255, 255, 0.92);
+  }
+
+  .storage-line strong {
+    color: var(--text-light);
+    font-weight: 700;
+  }
+
+  .storage-note {
+    margin: 0;
+    font-size: 0.8rem;
+    color: rgba(255, 255, 255, 0.78);
+    line-height: 1.45;
   }
 
   /* Info box */
