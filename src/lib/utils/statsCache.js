@@ -8,8 +8,14 @@
  * - Migração automática entre versões
  */
 
-const STATS_CACHE_KEY = 'offlineStatsCache_v2';
-const STATS_CACHE_VERSION = 2;
+import {
+  getCacheRevision,
+  getCurrentStatsRevision,
+  getManifestRevision
+} from '$lib/offline/core/OfflineRevision.js';
+
+const STATS_CACHE_KEY = 'offlineStatsCache_v3';
+const STATS_CACHE_VERSION = 3;
 const STATS_CACHE_TTL = 24 * 60 * 60 * 1000; // 24 horas
 
 /**
@@ -21,6 +27,9 @@ const STATS_CACHE_TTL = 24 * 60 * 60 * 1000; // 24 horas
  * @property {Object} metadata - Metadados do cache
  * @property {number} metadata.louvoresCount - Número de louvores quando cache foi criado
  * @property {number} metadata.cachedPdfsCount - Número de PDFs em cache quando foi criado
+ * @property {string} metadata.statsRevision - Revision hash used to validate cache consistency
+ * @property {string | null} metadata.manifestRevision - Manifest revision at cache time
+ * @property {number} metadata.cacheRevision - Cache revision at cache time
  */
 
 /**
@@ -55,7 +64,7 @@ export function initStatsCache() {
     const oldCacheKeys = [];
     for (let i = 0; i < localStorage.length; i++) {
       const key = localStorage.key(i);
-      if (key && key.startsWith('offlineStatsCache_') && !key.includes('_v2')) {
+      if (key && key.startsWith('offlineStatsCache_') && !key.includes('_v2') && !key.includes('_v3')) {
         oldCacheKeys.push(key);
       }
     }
@@ -150,6 +159,12 @@ function loadCacheToMemory() {
       return;
     }
 
+    if (isStatsRevisionMismatch(cacheData)) {
+      console.log('[Stats Cache] Cache revision mismatch, clearing...');
+      clearCache();
+      return;
+    }
+
     // Carregar para memória
     memoryCache.clear();
     if (cacheData.stats) {
@@ -203,6 +218,11 @@ export function getCachedStats(category) {
       return null;
     }
 
+    if (isStatsRevisionMismatch(cacheData)) {
+      metrics.misses++;
+      return null;
+    }
+
     // Buscar stats da categoria
     const stats = cacheData.stats?.[category];
     if (stats) {
@@ -244,6 +264,10 @@ export function getAllCachedStats() {
       return {};
     }
 
+    if (isStatsRevisionMismatch(cacheData)) {
+      return {};
+    }
+
     return cacheData.stats || {};
   } catch (error) {
     console.warn('[Stats Cache] Error reading all cached stats:', error);
@@ -271,7 +295,10 @@ export function cacheStats(category, stats, metadata = {}) {
       stats: {},
       metadata: {
         louvoresCount: metadata.louvoresCount || 0,
-        cachedPdfsCount: metadata.cachedPdfsCount || 0
+        cachedPdfsCount: metadata.cachedPdfsCount || 0,
+        statsRevision: getCurrentStatsRevision(),
+        manifestRevision: getManifestRevision(),
+        cacheRevision: getCacheRevision()
       }
     });
 
@@ -282,6 +309,15 @@ export function cacheStats(category, stats, metadata = {}) {
         if (existingData.version === STATS_CACHE_VERSION) {
           cacheData = existingData;
           cacheData.timestamp = Date.now(); // Atualizar timestamp
+          if (!cacheData.metadata) {
+            cacheData.metadata = {
+              louvoresCount: 0,
+              cachedPdfsCount: 0,
+              statsRevision: getCurrentStatsRevision(),
+              manifestRevision: getManifestRevision(),
+              cacheRevision: getCacheRevision()
+            };
+          }
         }
       } catch (err) {
         // Se falhar ao parsear, usar cache novo
@@ -301,6 +337,9 @@ export function cacheStats(category, stats, metadata = {}) {
     if (metadata.cachedPdfsCount !== undefined) {
       cacheData.metadata.cachedPdfsCount = metadata.cachedPdfsCount;
     }
+    cacheData.metadata.statsRevision = getCurrentStatsRevision();
+    cacheData.metadata.manifestRevision = getManifestRevision();
+    cacheData.metadata.cacheRevision = getCacheRevision();
 
     // Salvar no localStorage
     localStorage.setItem(STATS_CACHE_KEY, JSON.stringify(cacheData));
@@ -340,7 +379,10 @@ export function cacheAllStats(statsMap, metadata = {}) {
       stats: { ...statsMap },
       metadata: {
         louvoresCount: metadata.louvoresCount || 0,
-        cachedPdfsCount: metadata.cachedPdfsCount || 0
+        cachedPdfsCount: metadata.cachedPdfsCount || 0,
+        statsRevision: getCurrentStatsRevision(),
+        manifestRevision: getManifestRevision(),
+        cacheRevision: getCacheRevision()
       }
     });
 
@@ -490,9 +532,27 @@ export function isCacheValid() {
     if (cacheData.version !== STATS_CACHE_VERSION) return false;
 
     const age = Date.now() - cacheData.timestamp;
-    return age <= STATS_CACHE_TTL;
+    if (age > STATS_CACHE_TTL) return false;
+    return !isStatsRevisionMismatch(cacheData);
   } catch (error) {
     return false;
+  }
+}
+
+/**
+ * @param {CachedStatsData} cacheData
+ * @returns {boolean}
+ */
+function isStatsRevisionMismatch(cacheData) {
+  try {
+    const expected = getCurrentStatsRevision();
+    const actual = cacheData?.metadata?.statsRevision;
+    if (!actual || typeof actual !== 'string') {
+      return true;
+    }
+    return actual !== expected;
+  } catch {
+    return true;
   }
 }
 

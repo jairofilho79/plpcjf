@@ -1,12 +1,11 @@
 <script>
   import { onMount } from 'svelte';
   import { goto } from '$app/navigation';
-  import { Download, AlertCircle, CheckCircle, Info, Package, TrendingUp, RefreshCw } from 'lucide-svelte';
+  import { Download, AlertCircle, CheckCircle, Info, Package, TrendingUp, RefreshCw, Database } from 'lucide-svelte';
   import { offline, isDownloading } from '$lib/stores/offline';
   import { CATEGORY_OPTIONS } from '$lib/stores/filters';
   import { louvores, loadLouvores, louvoresLoaded } from '$lib/stores/louvores';
   import OfflineRequirementsAlert from '$lib/components/OfflineRequirementsAlert.svelte';
-  import OfflineIndicator from '$lib/components/OfflineIndicator.svelte';
   import ErrorModal from '$lib/components/ErrorModal.svelte';
   import { downloadMissingPdfs } from '$lib/utils/missingPdfsDownloader.js';
   import { setupCacheSync, onCacheSync, checkCacheVersionChanged, updateCacheVersion } from '$lib/utils/cacheSync';
@@ -26,7 +25,8 @@
   import statsCalculator from '$lib/offline/stats/StatsCalculator.js';
   import offlineEvents, { EVENTS as OFFLINE_EVENTS } from '$lib/offline/core/OfflineEvents.js';
   import offlineManager from '$lib/offline/core/OfflineManager.js';
-  import cacheMigrationV2 from '$lib/offline/storage/CacheMigrationV2.js';
+  import legacyCacheMigrationService from '$lib/offline/migration/LegacyCacheMigrationService.js';
+  import { getConfig } from '$lib/offline/core/OfflineConfig.js';
   import { browser } from '$app/environment';
 
   // Offline available flag from localStorage
@@ -69,6 +69,17 @@
      * @type {{totalParts: number, totalSize: number, partsByCategory: Object} | null}
      */
   let requiredPackagesInfo = null;
+  /** @type {string[]} */
+  let unknownCategories = [];
+  /** @type {{supported: boolean, persisted: boolean, usage: number, quota: number, free: number, loading: boolean}} */
+  let storageInfo = {
+    supported: false,
+    persisted: false,
+    usage: 0,
+    quota: 0,
+    free: 0,
+    loading: true
+  };
   
   let isLoadingStats = false;
   let isInitializing = true; // Controla estado de carregamento inicial
@@ -77,9 +88,11 @@
   let isSyncing = false;
   let lastSyncTime = null;
   
-  // Migration V2 state
+  // Migration state
   let isMigrating = false;
+  /** @type {{ processed: number, total: number, migrated: number, skipped: number, errors: number, percentage: number } | null} */
   let migrationProgress = null;
+  /** @type {{ migrated: number, skipped: number, errors: number, cancelled: boolean } | null} */
   let migrationResult = null;
   let migrationNeeded = false;
   /** @type {(() => void) | null} */
@@ -101,6 +114,13 @@
   
   // Controla se lazy loading está ativo
   let lazyLoadingEnabled = false;
+
+  /** Indicador de suporte: IndexedDB / armazenamento avançado ativo */
+  let idbAdvancedStorageActive = false;
+
+  function syncIdbAdvancedIndicator() {
+    idbAdvancedStorageActive = getConfig('OFFLINE_IDB_ENABLED') === true;
+  }
   
   /**
    * FASE 3: Setup Intersection Observer para lazy loading otimizado de stats
@@ -312,6 +332,14 @@
     
     // Inicialização assíncrona
     (async () => {
+      await refreshStorageInfo();
+      // Trigger offline initialization early (flags persistidas aplicadas em initialize).
+      offlineManager
+        .initialize()
+        .then(() => syncIdbAdvancedIndicator())
+        .catch((error) => {
+          console.warn('[Offline Page] OfflineManager initialization warning:', error);
+        });
       // FASE 1: Operações críticas - carregam dados básicos para renderização inicial
       try {
         // Inicializar store offline explicitamente (lazy initialization)
@@ -320,13 +348,14 @@
         // Carregar louvores primeiro
         await loadLouvores();
         
-        // Garantir que cachedPdfs está atualizado antes de verificar categorias baixadas
+        // Garantir que cachedPdfs está atualizado no estado local
         await offline.loadCachedPdfsList(false, true);
         await new Promise(resolve => setTimeout(resolve, 50)); // Pequeno delay para garantir atualização
         
-        // Agora verificar categorias baixadas com dados atualizados
-        const downloadedCats = await offline.checkAndUpdateDownloadedCategories();
-        downloadedCategories = downloadedCats;
+        // Fase crítica: usar snapshot salvo para liberar a UI mais rápido.
+        // A validação completa (custosa) roda em background.
+        const savedDownloaded = offline.getDownloadedCategories();
+        downloadedCategories = savedDownloaded;
         
         // Load saved categories for selection
         const saved = offline.getSavedCategories();
@@ -343,14 +372,13 @@
         lastSavedCategories = [...selectedCategories];
         hasInitializedCategories = true;
         
-        // FIX: Invalidate stats for downloaded categories since validation just completed
-        // This ensures UI shows fresh stats after validation
-        if (downloadedCats.length > 0) {
+        // Invalidate stats usando snapshot local para evitar inconsistências visuais iniciais.
+        if (savedDownloaded.length > 0) {
           // Invalidate all caches: persistent, memory, and StatsCalculator
-          invalidateCategories(downloadedCats);
-          downloadedCats.forEach(cat => statsCache.delete(cat));
+          invalidateCategories(savedDownloaded);
+          savedDownloaded.forEach(cat => statsCache.delete(cat));
           // Also invalidate StatsCalculator's internal cache
-          downloadedCats.forEach(cat => statsCalculator.invalidateCategory(cat));
+          savedDownloaded.forEach(cat => statsCalculator.invalidateCategory(cat));
         }
         
         // FASE 3: Carregar stats do cache para renderização inicial rápida
@@ -371,9 +399,22 @@
         
         // Marcar inicialização básica como completa - permite renderização
         isInitializing = false;
+        syncIdbAdvancedIndicator();
+
+        // Validação completa em background: corrige categorias baixadas sem bloquear o carregamento.
+        void (async () => {
+          try {
+            const validatedDownloaded = await offline.checkAndUpdateDownloadedCategories();
+            downloadedCategories = validatedDownloaded;
+            selectedCategories = [...new Set([...selectedCategories, ...validatedDownloaded])];
+          } catch (err) {
+            console.warn('[Offline Page] Background validation of downloaded categories failed:', err);
+          }
+        })();
       } catch (error) {
         console.error('[Offline Page] Error during critical initialization:', error);
         isInitializing = false;
+        syncIdbAdvancedIndicator();
       }
       
       // FASE 2: Operações não-críticas - executadas em background após renderização
@@ -444,9 +485,8 @@
         }
       }, 30000); // Check every 30 seconds
       
-      // Check if migration V2 is needed
-      const migrationCompleted = await cacheMigrationV2.isMigrationCompleted();
-      migrationNeeded = !migrationCompleted;
+      // Check if legacy cache migration is needed (Cache API → IndexedDB)
+      migrationNeeded = await legacyCacheMigrationService.isMigrationNeeded();
       
       // ============================================
       // FASE 2: Remoção de triggers automáticos de stats
@@ -458,6 +498,10 @@
     return () => {
       if (syncUnsubscribe) {
         syncUnsubscribe();
+      }
+      if (cacheUpdateDebounceTimer) {
+        clearTimeout(cacheUpdateDebounceTimer);
+        cacheUpdateDebounceTimer = null;
       }
       if (categoryObserver) {
         categoryObserver.disconnect();
@@ -478,6 +522,65 @@
   let lastCacheUpdateTime = 0;
   let isProcessingCacheUpdate = false;
   const MIN_CACHE_UPDATE_INTERVAL = 1000; // Minimum 1 second between cache updates
+  /** @type {ReturnType<typeof setTimeout> | null} */
+  let cacheUpdateDebounceTimer = null;
+  let hasPendingCacheUpdate = false;
+  let cacheUpdateRequestedDuringProcessing = false;
+  let pendingCacheUpdateDetail = {};
+
+  function scheduleCacheReconciliation(detail = {}) {
+    hasPendingCacheUpdate = true;
+    pendingCacheUpdateDetail = detail;
+
+    if (cacheUpdateDebounceTimer) {
+      clearTimeout(cacheUpdateDebounceTimer);
+    }
+
+    cacheUpdateDebounceTimer = setTimeout(() => {
+      cacheUpdateDebounceTimer = null;
+      void reconcileCacheUpdate();
+    }, 700);
+  }
+
+  async function reconcileCacheUpdate() {
+    if (isProcessingCacheUpdate) {
+      cacheUpdateRequestedDuringProcessing = true;
+      return;
+    }
+    if (!hasPendingCacheUpdate) {
+      return;
+    }
+
+    isProcessingCacheUpdate = true;
+    hasPendingCacheUpdate = false;
+    lastCacheUpdateTime = Date.now();
+
+    try {
+      // Use fresh source of truth for cache-dependent decisions.
+      await offline.loadCachedPdfsList(false, true, true);
+      const updatedDownloaded = await offline.checkAndUpdateDownloadedCategories();
+      downloadedCategories = updatedDownloaded;
+      selectedCategories = [...new Set([...selectedCategories, ...updatedDownloaded])];
+
+      if (updatedDownloaded.length > 0) {
+        invalidateCategories(updatedDownloaded);
+        updatedDownloaded.forEach(cat => statsCache.delete(cat));
+        updatedDownloaded.forEach(cat => statsCalculator.invalidateCategory(cat));
+        loadedCategories.clear();
+        await loadCategoryStatsForCategories(updatedDownloaded, true);
+      }
+
+      if (pendingCacheUpdateDetail?.source) {
+        console.log('[Offline Page] Cache reconciliation complete:', pendingCacheUpdateDetail);
+      }
+    } finally {
+      isProcessingCacheUpdate = false;
+      if (cacheUpdateRequestedDuringProcessing || hasPendingCacheUpdate) {
+        cacheUpdateRequestedDuringProcessing = false;
+        void reconcileCacheUpdate();
+      }
+    }
+  }
   
   /**
    * @param {Event} event
@@ -524,7 +627,6 @@
       // Check if this is a duplicate event (same source and timestamp)
       const eventDetail = event.detail || {};
       const eventSource = eventDetail.source || 'unknown';
-      const eventTimestamp = eventDetail.timestamp || now;
       
       // Skip if this is a cache-reload event that we triggered ourselves
       if (eventSource === 'cache-reload') {
@@ -541,47 +643,11 @@
       if (isBatchOperation) {
         console.log('[Offline Page] Batch operation detected - deferring stats recalculation');
         needsStatsRecalculation = true;
-        return; // Skip immediate processing for batch operations
+        scheduleCacheReconciliation(eventDetail);
+        return;
       }
-      
-      isProcessingCacheUpdate = true;
-      lastCacheUpdateTime = now;
-      
-      try {
-        console.log('[Offline Page] Cache updated event received:', eventDetail);
-        
-        // Reload cached PDFs list to get updated count (skip event to prevent loop)
-        await offline.loadCachedPdfsList(false, true);
-        
-        // Update downloaded categories
-        const updatedDownloaded = await offline.checkAndUpdateDownloadedCategories();
-        downloadedCategories = updatedDownloaded;
-        
-        // Ensure downloaded categories are selected
-        updatedDownloaded.forEach((cat) => {
-          if (!selectedCategories.includes(cat)) {
-            selectedCategories = [...selectedCategories, cat];
-          }
-        });
-        
-        // Invalidate stats cache and reload for affected categories
-        if (updatedDownloaded.length > 0) {
-          // Invalidate all caches: persistent, memory, and StatsCalculator
-          invalidateCategories(updatedDownloaded);
-          updatedDownloaded.forEach(cat => statsCache.delete(cat));
-          // Also invalidate StatsCalculator's internal cache
-          updatedDownloaded.forEach(cat => statsCalculator.invalidateCategory(cat));
-          loadedCategories.clear();
-          
-          // Force reload cached PDFs list to ensure we have latest data
-          await offline.loadCachedPdfsList(false, true);
-          
-          // Reload stats for updated categories (force recalculation)
-          await loadCategoryStatsForCategories(updatedDownloaded, true);
-        }
-      } finally {
-        isProcessingCacheUpdate = false;
-      }
+
+      scheduleCacheReconciliation(eventDetail);
     }
   }
   
@@ -639,7 +705,8 @@
   }
 
   /**
-   * Run cache migration V2 manually
+   * Run legacy cache → IndexedDB migration manually.
+   * Resumable: if previously interrupted, continues from the saved checkpoint.
    */
   async function runMigration() {
     if (isMigrating) return;
@@ -649,19 +716,21 @@
     migrationResult = null;
     
     try {
-      console.log('[Offline Page] Starting cache migration V2...');
+      console.log('[Offline Page] Starting legacy cache migration...');
       
-      const result = await cacheMigrationV2.migrate({
-        force: false,
+      const result = await legacyCacheMigrationService.migrate({
         onProgress: (progress) => {
           migrationProgress = progress;
         }
       });
       
       migrationResult = result;
-      migrationNeeded = false;
+      migrationNeeded = result.cancelled
+        ? await legacyCacheMigrationService.isMigrationNeeded()
+        : false;
       
-      // Reload stats after migration
+      // Invalidate and reload stats after migration (IDB now has more entries)
+      statsCalculator.invalidateAll();
       await loadCategoryStats(true);
       
       console.log('[Offline Page] Migration completed:', result);
@@ -671,11 +740,18 @@
         migrated: 0,
         skipped: 0,
         errors: 1,
-        errorDetails: [error.message || 'Migration failed']
+        cancelled: false
       };
     } finally {
       isMigrating = false;
     }
+  }
+
+  /**
+   * Cancel a running migration.
+   */
+  function cancelMigration() {
+    legacyCacheMigrationService.cancel();
   }
 
   // Track last stats load time to prevent excessive calls
@@ -692,14 +768,17 @@
   };
 
   /**
-   * Load category availability statistics for specific categories
-   * @param {string[]} categories - Categories to load stats for
-   * @param {boolean} force - Force reload even if cached
+   * Load category availability statistics for specific categories.
+   *
+   * Stats are now computed directly from IndexedDB (via StatsCalculator →
+   * OfflineInventoryRepository) — no Cache API list required.
+   *
+   * @param {string[]} categories
+   * @param {boolean} force - Force recalculation, ignoring caches
    */
   async function loadCategoryStatsForCategories(categories = [], force = false) {
     if (!$louvores.length || !categories || categories.length === 0) return;
     
-    // Prevent concurrent loads
     if (isLoadingStats) {
       console.log('[Offline Page] Stats already loading, skipping');
       return;
@@ -708,40 +787,11 @@
     isLoadingStats = true;
     
     try {
-      // Always reload cached PDFs list before calculating stats
-      // This ensures we have the latest cache state, especially important with lazy loading
-      // Force reload to bypass cache and get fresh data
-      await offline.loadCachedPdfsList(false, true);
-      
-      // Wait a bit for state to update
-      await new Promise(resolve => setTimeout(resolve, 50));
-      
-      const state = $offline;
-      /** @type {string[]} */
-      let cachedPdfs = state.cachedPdfs || [];
-      
-      // If still empty after reload, try one more time with delay
-      if (!cachedPdfs || cachedPdfs.length === 0) {
-        // Small delay to allow Service Worker to process
-        await new Promise(resolve => setTimeout(resolve, 200));
-        await offline.loadCachedPdfsList(false, true);
-        await new Promise(resolve => setTimeout(resolve, 50));
-        const updatedState = $offline;
-        cachedPdfs = updatedState.cachedPdfs || [];
-      }
-      
-      // Log for debugging
-      if (force) {
-        console.log('[Offline Page] Loading stats with', cachedPdfs.length, 'cached PDFs');
-      }
-      
-      // FASE 3: Load category stats only for specified categories (usando cache otimizado)
       const newStats = { ...categoryStats };
       const statsToCalculate = [];
       const calculationStartTimes = new Map();
       
       for (const category of categories) {
-        // FASE 3: Verificar cache usando novo sistema
         if (!force) {
           const cached = getCachedStats(category);
           if (cached) {
@@ -749,45 +799,30 @@
             statsCache.set(category, cached);
             continue;
           }
-          
-          // Se não estiver no cache persistente, verificar cache em memória
           if (statsCache.has(category)) {
             newStats[category] = statsCache.get(category);
             continue;
           }
         }
-        
-        // Marcar para cálculo
         statsToCalculate.push(category);
         calculationStartTimes.set(category, performance.now());
       }
       
-      // FASE 3: Calcular stats em paralelo quando possível
       if (statsToCalculate.length > 0) {
         const calculationPromises = statsToCalculate.map(async (category) => {
-          const startTime = calculationStartTimes.get(category);
-          // FASE 4: Use StatsCalculator directly for better performance
-          // When force=true, ensure we force recalculation and don't use cache
-          const stats = await statsCalculator.getCategoryStats(
-            category,
-            {
-              louvoresData: $louvores,
-              cachedPdfs,
-              useCache: !force,
-              forceRecalculate: force
-            }
-          );
+          const startTime = calculationStartTimes.get(category) || performance.now();
+          // StatsCalculator queries IndexedDB — no cachedPdfs param needed
+          const stats = await statsCalculator.getCategoryStats(category, {
+            louvoresData: $louvores,
+            useCache: !force,
+            forceRecalculate: force
+          });
           const calcTime = performance.now() - startTime;
           recordCalculationTime(calcTime);
           
           newStats[category] = stats;
           statsCache.set(category, stats);
-          
-          // FASE 3: Salvar no cache com metadados
-          cacheStats(category, stats, {
-            louvoresCount: $louvores.length,
-            cachedPdfsCount: cachedPdfs.length
-          });
+          cacheStats(category, stats, { louvoresCount: $louvores.length });
           
           return { category, stats };
         });
@@ -796,26 +831,6 @@
       }
       
       categoryStats = newStats;
-      
-      // Get required packages info for selected categories
-      if (selectedCategories.length > 0) {
-        // FASE 5: Use OfflineManager to get manifest
-        let manifest = state.offlineManifest;
-        if (!manifest) {
-          manifest = await offlineManager.getOfflineManifest();
-        }
-        if (manifest) {
-          // FASE 5: Use OfflineManager for required packages info
-          requiredPackagesInfo = await offline.getRequiredPackagesInfo(
-            selectedCategories,
-            $louvores,
-            cachedPdfs,
-            manifest
-          );
-        }
-      } else {
-        requiredPackagesInfo = null;
-      }
     } catch (error) {
       console.error('[Offline Page] Failed to load stats for categories:', error);
     } finally {
@@ -937,40 +952,21 @@
     // Only react if count actually changed (not just on initial load)
     if (lastCachedPdfsCount > 0 && currentCount !== lastCachedPdfsCount) {
       console.log('[Offline Page] Cached PDFs count changed:', lastCachedPdfsCount, '->', currentCount);
-      
-      // Prevent recursive updates
       isProcessingCacheChange = true;
-      
-      // Invalidate all stats to force recalculation with new cache state
-      const allCategories = Object.keys(categoryStats);
-      if (allCategories.length > 0) {
-        invalidateCategories(allCategories);
-        allCategories.forEach(cat => {
-          statsCache.delete(cat);
-          statsCalculator.invalidateCategory(cat);
-        });
-        loadedCategories.clear();
-        
-        // Reload stats for all categories that have been loaded
-        loadCategoryStatsForCategories(allCategories, true)
-          .then(() => {
-            isProcessingCacheChange = false;
-          })
-          .catch(err => {
-            console.error('[Offline Page] Error reloading stats after cache change:', err);
-            isProcessingCacheChange = false;
-          });
-      } else {
+      scheduleCacheReconciliation({
+        source: 'state-cached-pdfs-change',
+        batch: true,
+        previousCount: lastCachedPdfsCount,
+        currentCount
+      });
+      setTimeout(() => {
         isProcessingCacheChange = false;
-      }
+      }, 300);
     }
     lastCachedPdfsCount = currentCount;
   }
-  // Filter out already downloaded categories from selection for download button
-  // Also check if category is actually complete (100% with no missing PDFs)
+  // Only categories with real missing PDFs should be considered for download.
   $: categoriesToDownload = selectedCategories.filter(cat => {
-    // Don't include if already marked as downloaded
-    if (downloadedCategories.includes(cat)) return false;
     // Check if category is actually 100% complete
     const stats = categoryStats[cat] || { total: 0, available: 0, missing: 0, percentage: 0 };
     const isActuallyComplete = stats.percentage === 100 && stats.missing === 0;
@@ -982,6 +978,14 @@
   $: completed = state.completed || 0;
   $: failed = state.failed || 0;
   $: total = state.total || 0;
+  $: downloadPhase = state.downloadPhase || (downloading ? 'downloading' : 'idle');
+  $: phaseProgress = state.phaseProgress ?? progress;
+  $: currentPackage = state.currentPackage || 0;
+  $: totalPackages = state.totalPackages || 0;
+  $: hasDownloadStatus = downloading || progress > 0 || completed > 0 || failed > 0 || total > 0;
+  $: hasDownloadError = !!state.error || (!downloading && failed > 0);
+  $: hasQuotaError = state.errorCode === 'QUOTA_EXCEEDED';
+  $: unknownCategories = state.validationUnknownCategories || [];
   $: categorySizes = state.categorySizes || {};
   
   // Calculate total availability stats
@@ -1010,14 +1014,83 @@
     const kb = bytes / 1024;
     return `${kb.toFixed(2)} KB`;
   }
+
+  /**
+   * @param {number} bytes
+   */
+  function formatStorage(bytes) {
+    if (!bytes || bytes <= 0) return '0 MB';
+    const gb = bytes / (1024 * 1024 * 1024);
+    if (gb >= 1) return `${gb.toFixed(2)} GB`;
+    const mb = bytes / (1024 * 1024);
+    return `${mb.toFixed(0)} MB`;
+  }
+
+  async function refreshStorageInfo() {
+    const hasEstimateApi =
+      typeof navigator !== 'undefined' &&
+      navigator.storage &&
+      typeof navigator.storage.estimate === 'function';
+    const hasPersistedApi =
+      typeof navigator !== 'undefined' &&
+      navigator.storage &&
+      typeof navigator.storage.persisted === 'function';
+
+    if (!hasEstimateApi) {
+      storageInfo = {
+        supported: false,
+        persisted: false,
+        usage: 0,
+        quota: 0,
+        free: 0,
+        loading: false
+      };
+      return;
+    }
+
+    storageInfo = { ...storageInfo, loading: true };
+    try {
+      const estimate = await navigator.storage.estimate();
+      const usage = Number(estimate?.usage || 0);
+      const quota = Number(estimate?.quota || 0);
+      const persisted = hasPersistedApi ? await navigator.storage.persisted() : false;
+      storageInfo = {
+        supported: true,
+        persisted,
+        usage,
+        quota,
+        free: Math.max(0, quota - usage),
+        loading: false
+      };
+    } catch (error) {
+      console.warn('[Offline Page] Could not read storage estimate:', error);
+      storageInfo = {
+        supported: false,
+        persisted: false,
+        usage: 0,
+        quota: 0,
+        free: 0,
+        loading: false
+      };
+    }
+  }
+
+  /**
+   * @param {unknown} error
+   */
+  function getErrorInfo(error) {
+    const err = /** @type {{message?: string, errorCode?: string, code?: string}|null|undefined} */ (error);
+    return {
+      message: err?.message || null,
+      code: err?.errorCode || err?.code || null
+    };
+  }
   
   /**
-   * Get total size of selected categories (excluding already downloaded and complete ones)
+   * Get total size of selected categories that still need download.
    */
   $: totalSelectedSize = selectedCategories
     .filter((/** @type {string} */ cat) => {
-      // Don't include if already marked as downloaded
-      if (downloadedCategories.includes(cat)) return false;
       // Don't include if actually complete (100% with no missing PDFs)
       const stats = categoryStats[cat] || { total: 0, available: 0, missing: 0, percentage: 0 };
       const isActuallyComplete = stats.percentage === 100 && stats.missing === 0;
@@ -1038,8 +1111,8 @@
     const stats = categoryStats[category] || { total: 0, available: 0, missing: 0, percentage: 0 };
     const isActuallyComplete = stats.percentage === 100 && stats.missing === 0;
     
-    // Can't remove already downloaded categories or complete categories
-    if (downloadedCategories.includes(category) || isActuallyComplete) return;
+    // Can't toggle categories that are already 100% complete
+    if (isActuallyComplete) return;
 
     if (selectedCategories.includes(category)) {
       selectedCategories = selectedCategories.filter(c => c !== category);
@@ -1058,20 +1131,43 @@
 
     console.log('[Offline Page] Starting download for categories:', selectedCategories);
     
-    // Filter out already downloaded categories - they should not be downloaded again
-    const categoriesToDownload = selectedCategories.filter(cat => !downloadedCategories.includes(cat));
+    // Filter out categories that are already effectively complete.
+    const categoriesToDownload = selectedCategories.filter(cat => {
+      const stats = categoryStats[cat] || { total: 0, available: 0, missing: 0, percentage: 0 };
+      const isActuallyComplete = stats.percentage === 100 && stats.missing === 0;
+      return !isActuallyComplete;
+    });
     
     if (categoriesToDownload.length === 0) {
       console.log('[Offline Page] All selected categories are already downloaded');
       return;
     }
     
-    // FASE 5: Use OfflineManager directly
-    await offlineManager.downloadCategories(categoriesToDownload, {
-      louvoresData: $louvores
-    });
-    
-    // After download completes, categories will be updated via reactive statement
+    try {
+      await offlineManager.enableIndexedDbRollout({
+        persist: true,
+        runMigration: true
+      });
+      syncIdbAdvancedIndicator();
+      await refreshStorageInfo();
+      // FASE 5: Use OfflineManager directly
+      await offlineManager.downloadCategories(categoriesToDownload, {
+        louvoresData: $louvores
+      });
+      
+      // After download completes, categories will be updated via reactive statement
+    } catch (error) {
+      console.error('[Offline Page] Error downloading selected categories:', error);
+      const errorInfo = getErrorInfo(error);
+      offline.updateState({
+        downloading: false,
+        error: errorInfo.message || 'Falha ao disponibilizar conteúdo offline. Tente novamente mais tarde.',
+        errorCode: errorInfo.code
+      });
+      errorTitle = 'Falha no download offline';
+      errorMessage = errorInfo.message || 'Não foi possível concluir o download. Verifique sua conexão e tente novamente.';
+      showErrorModal = true;
+    }
   }
 
   /**
@@ -1110,6 +1206,12 @@
     
     // Download all categories
     try {
+      await offlineManager.enableIndexedDbRollout({
+        persist: true,
+        runMigration: true
+      });
+      syncIdbAdvancedIndicator();
+      await refreshStorageInfo();
       const result = await offlineManager.downloadCategories(categoriesToDownload, {
         louvoresData: $louvores
       });
@@ -1126,9 +1228,18 @@
       if (allDownloaded || result.success) {
         setOfflineAvailable(true);
       }
+      await refreshStorageInfo();
     } catch (error) {
       console.error('[Offline Page] Error downloading all categories:', error);
-      throw error;
+      const errorInfo = getErrorInfo(error);
+      offline.updateState({
+        downloading: false,
+        error: errorInfo.message || 'Falha ao disponibilizar conteúdo offline. Tente novamente mais tarde.',
+        errorCode: errorInfo.code
+      });
+      errorTitle = 'Falha no download offline';
+      errorMessage = errorInfo.message || 'Não foi possível concluir o download. Verifique sua conexão e tente novamente.';
+      showErrorModal = true;
     }
   }
 
@@ -1145,6 +1256,12 @@
 
     try {
       console.log('[Offline Page] Starting download of missing PDFs');
+      await offlineManager.enableIndexedDbRollout({
+        persist: true,
+        runMigration: true
+      });
+      syncIdbAdvancedIndicator();
+      await refreshStorageInfo();
 
       // Update offline state to show downloading
       offline.updateState({
@@ -1184,6 +1301,7 @@
 
       // Reload stats after download
       await loadCategoryStats(true);
+      await refreshStorageInfo();
 
       // Show error modal if there were errors
       if (!result.success || result.errors.length > 0) {
@@ -1200,16 +1318,18 @@
       }
     } catch (error) {
       console.error('[Offline Page] Error downloading missing PDFs:', error);
+      const errorInfo = getErrorInfo(error);
       
       // Update state with error
       offline.updateState({
         downloading: false,
-        error: error.message || 'Erro ao baixar PDFs faltantes.'
+        error: errorInfo.message || 'Erro ao baixar PDFs faltantes.',
+        errorCode: errorInfo.code
       });
 
       // Show error modal
       errorTitle = 'Erro ao baixar PDFs';
-      errorMessage = error.message || 'Ocorreu um erro ao tentar baixar os PDFs faltantes. Tente novamente.';
+      errorMessage = errorInfo.message || 'Ocorreu um erro ao tentar baixar os PDFs faltantes. Tente novamente.';
       showErrorModal = true;
     } finally {
       isDownloadingMissing = false;
@@ -1292,6 +1412,7 @@
       
       // Reload cached PDFs list
       await offline.loadCachedPdfsList(false, true);
+      await refreshStorageInfo();
       
       // Update downloaded categories
       const updatedDownloaded = await offline.checkAndUpdateDownloadedCategories();
@@ -1369,29 +1490,72 @@
     
     {#if !isInitializing}
 
+      {#if idbAdvancedStorageActive}
+        <div class="idb-advanced-indicator" role="status" aria-live="polite">
+          <Database class="idb-advanced-icon" />
+          <span class="idb-advanced-text">Modo de armazenamento avançado ativo</span>
+        </div>
+      {/if}
+
+      <!-- Migration banner: shown when legacy Cache API data has not yet been migrated -->
+      {#if migrationNeeded && !isMigrating && !migrationResult}
+        <div class="migration-banner info-box" role="alert">
+          <Database class="w-5 h-5 info-icon" />
+          <div class="info-text">
+            <p class="info-title">Migração de armazenamento disponível</p>
+            <p class="info-description">
+              Seus PDFs estão salvos no formato antigo. Migrar para o novo formato
+              garante melhor desempenho, stats precisas e evita falsos positivos.
+              Você pode interromper e retomar a qualquer momento.
+            </p>
+            <div class="action-buttons" style="margin-top: 0.75rem; justify-content: flex-start;">
+              <button class="btn btn-primary" on:click={runMigration} disabled={isMigrating}>
+                <Database class="w-4 h-4" />
+                <span>Migrar agora</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      {/if}
+
       <!-- Migration progress -->
-      {#if isMigrating && migrationProgress}
+      {#if isMigrating}
         <div class="migration-progress">
           <div class="migration-progress-header">
-            <span>Migrando cache: {migrationProgress.current} / {migrationProgress.total}</span>
-            <span class="migration-stats">
-              {migrationProgress.migrated} migrados, {migrationProgress.skipped} ignorados, {migrationProgress.errors} erros
-            </span>
+            {#if migrationProgress}
+              <span>Migrando: {migrationProgress.processed} / {migrationProgress.total || '?'}</span>
+              <span class="migration-stats">
+                {migrationProgress.migrated} migrados · {migrationProgress.skipped} ignorados · {migrationProgress.errors} erros
+              </span>
+            {:else}
+              <span>Preparando migração...</span>
+            {/if}
           </div>
           <div class="migration-progress-bar">
             <div 
               class="migration-progress-fill" 
-              style="width: {Math.round((migrationProgress.current / migrationProgress.total) * 100)}%"
+              style="width: {migrationProgress ? migrationProgress.percentage : 0}%"
             ></div>
+          </div>
+          <div class="action-buttons" style="margin-top: 0.75rem; justify-content: flex-start;">
+            <button class="btn btn-danger" on:click={cancelMigration}>
+              Interromper migração
+            </button>
           </div>
         </div>
       {/if}
 
       <!-- Migration result -->
       {#if migrationResult && !isMigrating}
-        <div class="migration-result" class:success={migrationResult.errors === 0} class:error={migrationResult.errors > 0}>
+        <div class="migration-result" class:success={migrationResult.errors === 0 && !migrationResult.cancelled} class:error={migrationResult.errors > 0}>
           <div class="migration-result-content">
-            {#if migrationResult.errors === 0}
+            {#if migrationResult.cancelled}
+              <AlertCircle class="w-5 h-5" />
+              <div class="migration-result-text">
+                <strong>Migração interrompida</strong>
+                <span>{migrationResult.migrated} migrados até agora — pode retomar a qualquer momento.</span>
+              </div>
+            {:else if migrationResult.errors === 0}
               <CheckCircle class="w-5 h-5" />
               <div class="migration-result-text">
                 <strong>Migração concluída com sucesso!</strong>
@@ -1466,6 +1630,40 @@
         </div>
       {/if}
 
+      <div class="storage-transparency-box">
+        <div class="storage-header">
+          <Info class="w-5 h-5 info-icon" />
+          <h3>Armazenamento do navegador</h3>
+          <button class="refresh-storage-btn" on:click={refreshStorageInfo} disabled={storageInfo.loading}>
+            {#if storageInfo.loading}
+              <RefreshCw class="w-4 h-4 spinning" />
+            {:else}
+              <RefreshCw class="w-4 h-4" />
+            {/if}
+          </button>
+        </div>
+        {#if storageInfo.supported}
+          <p class="storage-line">
+            Usado: <strong>{formatStorage(storageInfo.usage)}</strong> |
+            Quota: <strong>{formatStorage(storageInfo.quota)}</strong> |
+            Livre: <strong>{formatStorage(storageInfo.free)}</strong>
+          </p>
+          {#if requiredPackagesInfo && requiredPackagesInfo.totalSize > 0}
+            <p class="storage-line">
+              Próximo download estimado: <strong>{formatStorage(requiredPackagesInfo.totalSize)}</strong>
+            </p>
+          {/if}
+          <p class="storage-note">
+            Persistência: {storageInfo.persisted ? 'ativa' : 'não garantida'}.
+            O navegador pode limitar ou limpar cache conforme política interna.
+          </p>
+        {:else}
+          <p class="storage-note">
+            Este navegador não expõe estimativa de quota via API.
+          </p>
+        {/if}
+      </div>
+
       <!-- Info about category persistence and cache limitation -->
       <div class="info-box">
         <Info class="w-5 h-5 info-icon" />
@@ -1514,6 +1712,7 @@
             {@const stats = categoryStats[category] || { total: 0, available: 0, missing: 0, percentage: 0 }}
             {@const isActuallyComplete = stats.percentage === 100 && stats.missing === 0}
             {@const isDownloaded = downloadedCategories.includes(category)}
+            {@const isUnknown = unknownCategories.includes(category)}
             {@const shouldShowCompleteBadge = isActuallyComplete && (isDownloaded || stats.available === stats.total)}
             
             <label 
@@ -1526,13 +1725,15 @@
                 type="checkbox"
                 checked={isSelected}
                 on:change={() => toggleCategory(category)}
-                disabled={downloading || isDownloaded || isActuallyComplete}
+                disabled={downloading || isActuallyComplete}
               />
               <div class="category-info">
                 <div class="category-header">
                   <span class="category-label">{category}</span>
                   {#if shouldShowCompleteBadge}
                     <span class="downloaded-badge">✓ Completo</span>
+                  {:else if isUnknown}
+                    <span class="partial-badge unknown-badge">Validação pendente</span>
                   {:else if stats.total > 0}
                     <span class="partial-badge">{stats.percentage}% disponível</span>
                   {/if}
@@ -1633,56 +1834,96 @@
           </button>
         {/if}
       </div>
-    {:else if downloading}
-      <!-- Download progress -->
-      <div class="progress-section">
-        <div class="progress-info">
-          <p class="progress-title">Baixando PDFs...</p>
-          <p class="progress-stats">
-            {completed} de {total} PDFs baixados
-            {#if failed > 0}
-              <span class="failed-count">({failed} falharam)</span>
+
+      <!-- Download status in-page (single source of progress feedback) -->
+      {#if hasDownloadStatus}
+        <div class="progress-section">
+          <div class="progress-info">
+            <p class="progress-title">
+              {#if downloading}
+                {#if downloadPhase === 'storing'}
+                  Salvando no cache...
+                {:else if downloadPhase === 'complete'}
+                  Finalizando download...
+                {:else}
+                  Baixando pacotes...
+                {/if}
+              {:else if hasDownloadError}
+                Download com falhas
+              {:else if progress >= 100}
+                Download concluído
+              {:else}
+                Status do download
+              {/if}
+            </p>
+            <p class="progress-stats">
+              {completed} de {total} PDFs processados
+              {#if failed > 0}
+                <span class="failed-count">({failed} falharam)</span>
+              {/if}
+            </p>
+            {#if totalPackages > 0}
+              <p class="progress-note">
+                Pacote {currentPackage} de {totalPackages} | Fase: {downloadPhase} ({Math.round(phaseProgress)}%)
+              </p>
             {/if}
-          </p>
-        </div>
+          </div>
 
-        <!-- Progress bar -->
-        <div class="progress-bar-container">
-          <div class="progress-bar" style="width: {progress}%"></div>
-        </div>
+          <div class="progress-bar-container">
+            <div class="progress-bar" style="width: {Math.max(0, Math.min(100, progress))}%"></div>
+          </div>
 
-        <p class="progress-percentage">{progress}%</p>
+          <p class="progress-percentage">{Math.round(progress)}%</p>
 
-        <!-- Cancel button -->
-        <div class="action-buttons">
-          <button
-            class="btn btn-danger"
-            on:click={cancelDownload}
-          >
-            Cancelar Download
-          </button>
-        </div>
-      </div>
-    {:else if progress >= 100}
-      <!-- Download complete -->
-      <div class="complete-section">
-        <CheckCircle class="w-16 h-16 complete-icon" />
-        <p class="complete-title">Download concluído!</p>
-        <p class="complete-stats">
-          {completed} PDFs baixados com sucesso
-          {#if failed > 0}
-            <br />
-            <span class="failed-count">{failed} PDFs falharam</span>
+          {#if downloading}
+            <div class="action-buttons">
+              <button
+                class="btn btn-danger"
+                on:click={cancelDownload}
+              >
+                Cancelar download
+              </button>
+            </div>
           {/if}
-        </p>
-
-        <div class="action-buttons">
-          <!-- Download completed, user can navigate away using header -->
         </div>
-      </div>
+      {/if}
+
+      {#if hasDownloadError}
+        <div class="error-box download-error-box">
+          <AlertCircle class="w-5 h-5 error-icon" />
+          <div class="download-error-content">
+            <p class="error-text">
+              {#if hasQuotaError}
+                Sem espaço suficiente no navegador para concluir o download offline.
+              {:else}
+                {state.error || 'O processo de download falhou parcialmente. Tente novamente em alguns instantes.'}
+              {/if}
+            </p>
+            <div class="action-buttons">
+              <button
+                class="btn btn-primary"
+                on:click={offlineAvailable ? handleDownloadMissingPdfs : downloadAllCategories}
+                disabled={downloading || !louvoresReady}
+              >
+                Tentar novamente
+              </button>
+              {#if hasQuotaError}
+                <button
+                  class="btn btn-danger"
+                  on:click={clearAllCache}
+                  disabled={downloading || isClearingCache}
+                >
+                  Limpar cache offline
+                </button>
+              {/if}
+            </div>
+          </div>
+        </div>
+      {/if}
+
     {/if}
 
-    {#if state.error}
+    {#if state.error && !hasDownloadError}
       {@const hasActualMissing = Object.values(categoryStats).some(s => s && s.missing > 0)}
       {#if hasActualMissing}
         <div class="error-box">
@@ -1716,11 +1957,84 @@
     padding: 1.5rem;
   }
 
+  .idb-advanced-indicator {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-bottom: 1rem;
+    padding: 0.55rem 0.85rem;
+    border-radius: 0.375rem;
+    border: 1px solid rgba(90, 103, 216, 0.35);
+    background: rgba(90, 103, 216, 0.08);
+    font-size: 0.8125rem;
+    line-height: 1.35;
+    color: var(--text-dark);
+  }
+
+  .idb-advanced-indicator :global(.idb-advanced-icon) {
+    flex-shrink: 0;
+    width: 1rem;
+    height: 1rem;
+    color: #5a67d8;
+  }
+
+  .idb-advanced-text {
+    margin: 0;
+  }
+
   .offline-indicator-container {
     display: flex;
     justify-content: center;
     margin-bottom: 1.5rem;
   }
+
+  .storage-transparency-box {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    padding: 1rem;
+    border: 1px solid var(--border-color);
+    border-radius: 0.5rem;
+    background: var(--background-color);
+    margin-bottom: 1rem;
+  }
+
+  .storage-header {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  .storage-header h3 {
+    margin: 0;
+    font-size: 0.95rem;
+    font-weight: 700;
+    color: var(--text-dark);
+  }
+
+  .refresh-storage-btn {
+    margin-left: auto;
+    border: none;
+    background: transparent;
+    color: var(--text-dark);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+  }
+
+  .refresh-storage-btn:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+  }
+
+  .storage-line,
+  .storage-note {
+    margin: 0;
+    font-size: 0.84rem;
+    color: var(--text-dark);
+  }
+
   /* Info box */
   .info-box {
     display: flex;
@@ -1936,6 +2250,12 @@
     background-color: rgba(255, 193, 7, 0.25);
     border-radius: 0.25rem;
     border: 1px solid rgba(255, 193, 7, 0.4);
+  }
+
+  .unknown-badge {
+    color: #0c5460;
+    background-color: rgba(23, 162, 184, 0.15);
+    border-color: rgba(23, 162, 184, 0.35);
   }
   
   .category-header {
@@ -2289,6 +2609,17 @@
     margin: 0;
     font-size: 0.875rem;
     font-weight: 500;
+  }
+
+  .download-error-box {
+    align-items: flex-start;
+  }
+
+  .download-error-content {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
   }
 
   /* Action buttons */

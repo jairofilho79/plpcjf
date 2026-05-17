@@ -8,8 +8,10 @@ import DownloadProgressTracker from './DownloadProgress.js';
 import DownloadQueue from './DownloadQueue.js';
 import cacheStorageAdapter from '../storage/CacheStorageAdapter.js';
 import manifestRepository from '../manifest/ManifestRepository.js';
-import { findMissingPdfs, findRequiredPackages } from '$lib/utils/pdfValidation.js';
-import { atobUTF8 } from '$lib/utils/pathUtils.js';
+import { findRequiredPackages } from '$lib/utils/pdfValidation.js';
+import { atobUTF8, getPdfRelPath } from '$lib/utils/pathUtils.js';
+import PdfPathManager from '../utils/PdfPathManager.js';
+import offlineInventoryRepository from '../storage/OfflineInventoryRepository.js';
 import { louvores } from '$lib/stores/louvores.js';
 import { get } from 'svelte/store';
 import offlineEvents, { EVENTS } from '../core/OfflineEvents.js';
@@ -19,6 +21,17 @@ import { notifyCacheUpdate, updateCacheVersion } from '$lib/utils/cacheSync.js';
 import { invalidateCategory, invalidateCategories } from '$lib/utils/statsCache.js';
 import statsCalculator from '../stats/StatsCalculator.js';
 import cacheSync from '../storage/CacheSync.js';
+import {
+  getCurrentStatsRevision,
+  writeDownloadJobSnapshot
+} from '../core/OfflineRevision.js';
+import {
+  checkStorageCapacity,
+  createQuotaExceededError,
+  isQuotaExceededError,
+  requestPersistentStorage
+} from '../core/OfflineStorageErrors.js';
+import { getConfig } from '../core/OfflineConfig.js';
 
 const logger = createLogger('DownloadManager');
 
@@ -47,6 +60,8 @@ export class DownloadManager {
     this.progress = null;
     this.abortController = null;
     this.isDownloading = false;
+    this.currentJobId = null;
+    this.currentJobCategories = [];
   }
 
   /**
@@ -78,6 +93,20 @@ export class DownloadManager {
 
     this.isDownloading = true;
     this.abortController = new AbortController();
+    this.currentJobCategories = [...categories];
+    this.currentJobId = `offline-job-${Date.now()}`;
+    this._updateJobSnapshot({
+      jobId: this.currentJobId,
+      status: 'running',
+      categories: this.currentJobCategories,
+      completed: 0,
+      failed: 0,
+      total: 0,
+      phase: 'downloading',
+      progress: 0,
+      error: null,
+      targetStatsRevision: getCurrentStatsRevision()
+    });
 
     try {
       logger.info('DownloadManager', `Starting download for ${categories.length} categories`);
@@ -94,6 +123,7 @@ export class DownloadManager {
         total: 0,
         selectedCategories: categories,
         error: null,
+        errorCode: null,
         downloadPhase: 'downloading', // FASE 6: Reset phase to downloading
         phaseProgress: 0 // FASE 6: Reset phase progress
       });
@@ -129,22 +159,12 @@ export class DownloadManager {
         };
       }
 
-      // Get cached PDFs (using getCachedPDFsFast for compatibility)
-      // Note: We could use cacheStorageAdapter.listPdfs() but getCachedPDFsFast
-      // is faster and already used throughout the codebase
-      let cachedPdfs = [];
-      try {
-        const { getCachedPDFsFast } = await import('$lib/utils/swRegistration.js');
-        cachedPdfs = await getCachedPDFsFast();
-      } catch (error) {
-        logger.warn('DownloadManager', 'Could not get cached PDFs, using empty array', error);
-        cachedPdfs = [];
-      }
+      // Identify missing PDFs using IndexedDB as the canonical source of truth.
+      // This avoids the false-positive risk of querying the Cache API.
+      const persistedSet = await offlineInventoryRepository.getPersistedLookupSet();
+      const missingPdfs = offlineInventoryRepository.computeMissingPdfs(filteredLouvores, persistedSet);
 
-      // Identify missing PDFs
-      const missingPdfs = findMissingPdfs(filteredLouvores, cachedPdfs);
-      
-      logger.info('DownloadManager', `Found ${missingPdfs.length} missing PDFs out of ${filteredLouvores.length} total`);
+      logger.info('DownloadManager', `Found ${missingPdfs.length} missing PDFs out of ${filteredLouvores.length} total (IDB-based)`);
 
       if (missingPdfs.length === 0) {
         return {
@@ -171,6 +191,7 @@ export class DownloadManager {
       }
 
       logger.info('DownloadManager', `Identified ${requiredParts.length} package parts needed`);
+      await this._runStoragePreflight(requiredParts);
 
       // Group parts by category
       const partsByCategory = {};
@@ -179,6 +200,22 @@ export class DownloadManager {
           partsByCategory[part.category] = [];
         }
         partsByCategory[part.category].push(part);
+      }
+
+      // Build a path→metadata map so each stored PDF gets pdfId/category in IDB.
+      /** @type {Map<string, {pdfId: string, category: string}>} */
+      const pdfMetadataMap = new Map();
+      for (const louvor of filteredLouvores) {
+        if (!louvor.pdfId) continue;
+        const relPath = getPdfRelPath(louvor);
+        if (!relPath) continue;
+        const normalized = PdfPathManager.normalizeForStorage(relPath);
+        if (normalized) {
+          const withSlash = normalized.startsWith('/') ? normalized : `/${normalized}`;
+          const meta = { pdfId: louvor.pdfId, category: louvor.categoria };
+          pdfMetadataMap.set(withSlash, meta);
+          pdfMetadataMap.set(normalized, meta);
+        }
       }
 
       // Get PDF URLs for validation
@@ -190,12 +227,16 @@ export class DownloadManager {
       this._updateOfflineState({
         total: pdfUrls.length
       });
+      this._updateJobSnapshot({
+        total: pdfUrls.length
+      });
 
       // Download packages with progress callback that updates offline state
       const result = await this._downloadPackages(
         Object.keys(partsByCategory),
         pdfUrls,
         partsByCategory,
+        pdfMetadataMap,
         (progress) => {
           // Call user's progress callback if provided
           if (options.onProgress) {
@@ -241,6 +282,15 @@ export class DownloadManager {
         completed: result.completed,
         failed: result.failed
       });
+      this._updateJobSnapshot({
+        status: 'completed',
+        phase: 'complete',
+        progress: finalProgress,
+        completed: result.completed,
+        failed: result.failed,
+        total: pdfUrls.length,
+        error: null
+      });
 
       return {
         success: result.failed === 0,
@@ -251,16 +301,29 @@ export class DownloadManager {
       };
     } catch (error) {
       logger.error('DownloadManager', 'Error downloading categories', error);
+      const isCancelled = error.message === 'DOWNLOAD_CANCELLED';
+      const quotaError = isQuotaExceededError(error) || error?.errorCode === 'QUOTA_EXCEEDED';
+      const errorCode = quotaError ? 'QUOTA_EXCEEDED' : null;
+      const message = isCancelled
+        ? 'Download cancelado pelo usuário.'
+        : (quotaError
+          ? 'Sem espaço suficiente no navegador para concluir o download offline. Libere espaço e tente novamente.'
+          : error.message || 'Erro ao baixar pacotes ZIP.');
       
       // Update state with error
       this._updateOfflineState({
         downloading: false,
-        error: error.message === 'DOWNLOAD_CANCELLED' 
-          ? 'Download cancelado pelo usuário.' 
-          : error.message || 'Erro ao baixar pacotes ZIP.'
+        error: message,
+        errorCode
+      });
+
+      this._updateJobSnapshot({
+        status: isCancelled ? 'cancelled' : 'failed',
+        phase: 'complete',
+        error: message
       });
       
-      if (error.message === 'DOWNLOAD_CANCELLED') {
+      if (isCancelled) {
         return {
           success: false,
           completed: this.progress?.completed || 0,
@@ -276,6 +339,8 @@ export class DownloadManager {
       this.isDownloading = false;
       this.abortController = null;
       this.progress = null;
+      this.currentJobId = null;
+      this.currentJobCategories = [];
     }
   }
 
@@ -371,16 +436,18 @@ export class DownloadManager {
    * @param {string[]} categories - Categories to download
    * @param {string[]} pdfUrls - Expected PDF URLs
    * @param {Object} partsByCategory - Parts grouped by category
+   * @param {Map<string, {pdfId: string, category: string}>} pdfMetadataMap
    * @param {Function} [onProgress] - Progress callback
    * @returns {Promise<{completed: number, failed: number}>} Download result
    * @private
    */
-  async _downloadPackages(categories, pdfUrls, partsByCategory, onProgress = null) {
+  async _downloadPackages(categories, pdfUrls, partsByCategory, pdfMetadataMap, onProgress = null) {
     // Initialize progress
     this.progress = new DownloadProgressTracker(pdfUrls.length);
     this.progress.start();
 
     const totalPdfs = pdfUrls.length;
+    const batchStartedAt = Date.now();
     let completed = 0;
     let failed = 0;
 
@@ -424,6 +491,7 @@ export class DownloadManager {
 
         const packageInfo = packagesInfo[packageIndex];
         const { category, part } = packageInfo;
+        const packageStartedAt = Date.now();
 
         logger.debug('DownloadManager', `Downloading package ${packageIndex + 1}/${totalPackages} for category: ${category}`);
         console.log('[DownloadManager] Downloading package:', {
@@ -436,19 +504,15 @@ export class DownloadManager {
         });
 
         try {
-          // Download and extract package
-          const result = await packageDownloader.downloadAndExtract(
+          // Strict per-package flow:
+          // download -> extract -> store -> release memory before next package.
+          const result = await packageDownloader.downloadExtractStorePackage(
             part.url || part.filename,
             pdfUrls,
-            this.abortController?.signal
-          );
-
-          // Update actual PDF count for this package
-          packageInfo.estimatedPdfCount = result.pdfs.length;
-          
-          // FASE 5: Store PDFs in cache using batch mode with progress callback
-          const stored = await packageDownloader.storePdfsInCache(result.pdfs, { 
-            batch: true,  // Enable batch mode for performance
+            {
+              abortSignal: this.abortController?.signal,
+              batch: true,
+              pdfMetadataMap,
             onProgress: (progressData) => {
               // Calculate PDFs from previous packages that are already complete
               // Use only completedPdfs (not estimatedPdfCount) to avoid inflating progress
@@ -491,11 +555,22 @@ export class DownloadManager {
                   totalPackages: totalPackages
                 });
               }
+              this._updateJobSnapshot({
+                status: 'running',
+                phase: downloadPhase,
+                progress: globalPercentage,
+                completed: globalCompleted,
+                failed,
+                total: totalPdfs
+              });
             }
-          });
+            }
+          );
+          const stored = result.stored;
           
           // Update package info with actual completed count
           packageInfo.completedPdfs = stored;
+          packageInfo.estimatedPdfCount = result.extracted;
           completed += stored;
           // Update progress tracker with correct total (not increment, to avoid double counting)
           // Calculate total completed: sum of all previous packages + current package
@@ -511,19 +586,17 @@ export class DownloadManager {
           bytesDownloaded: this.progress.bytesDownloaded + result.bytesDownloaded
           });
 
-          // Always update progress after package completes, even if callback didn't fire
-          // This ensures UI is updated even if the interval wasn't reached
+          // Always update progress after package completes, even if callback didn't fire.
+          // Keep these values outside `if (onProgress)` because snapshot update also uses them.
+          const pdfsInPreviousPackages = packagesInfo
+            .slice(0, packageIndex)
+            .reduce((sum, pkg) => sum + (pkg.completedPdfs || 0), 0);
+          const finalGlobalCompleted = pdfsInPreviousPackages + stored;
+          const finalGlobalPercentage = totalPdfs > 0
+            ? Math.min(99, Math.floor((finalGlobalCompleted / totalPdfs) * 100))
+            : 0;
+
           if (onProgress) {
-            // Calculate final progress for this package
-            const pdfsInPreviousPackages = packagesInfo
-              .slice(0, packageIndex)
-              .reduce((sum, pkg) => sum + (pkg.completedPdfs || 0), 0);
-            
-            const finalGlobalCompleted = pdfsInPreviousPackages + stored;
-            const finalGlobalPercentage = totalPdfs > 0 
-              ? Math.min(99, Math.floor((finalGlobalCompleted / totalPdfs) * 100))
-              : 0;
-            
             onProgress({
               completed: finalGlobalCompleted,
               total: totalPdfs,
@@ -535,8 +608,30 @@ export class DownloadManager {
               totalPackages: totalPackages
             });
           }
+          this._updateJobSnapshot({
+            status: 'running',
+            phase: 'storing',
+            progress: finalGlobalPercentage,
+            completed: finalGlobalCompleted,
+            failed,
+            total: totalPdfs
+          });
 
           logger.debug('DownloadManager', `Stored ${stored} PDFs from package ${packageIndex + 1}/${totalPackages}: ${part.filename}`);
+          logger.debug(
+            'DownloadManager',
+            `Package processed ${part.filename}`,
+            {
+              category,
+              packageIndex: packageIndex + 1,
+              totalPackages,
+              stored,
+              extracted: result.extracted
+            },
+            {
+              durationMs: Date.now() - packageStartedAt
+            }
+          );
           
           // Clean up package ZIP from cache after extraction
           // Packages are temporary and should not remain in cache storage
@@ -547,7 +642,10 @@ export class DownloadManager {
               : `${packageDownloader.basePath}/${packageUrl}`;
             
             // Remove from APP_CACHE (plpc-v4-app) where Service Worker might have cached it
-            if (typeof caches !== 'undefined') {
+            if (
+              typeof caches !== 'undefined' &&
+              getConfig('OFFLINE_READTHROUGH_CACHE_FALLBACK_ENABLED') !== false
+            ) {
               const cache = await caches.open('plpc-v4-app');
               const packageRequest = new Request(fullPackageUrl);
               const deleted = await cache.delete(packageRequest);
@@ -559,9 +657,15 @@ export class DownloadManager {
             // Non-critical error - package might not be in cache or cache API might not be available
             logger.debug('DownloadManager', `Could not remove package ZIP from cache (non-critical): ${part.filename}`, error);
           }
+
+          // Yield before moving to next package to avoid long main-thread pressure.
+          await new Promise(resolve => setTimeout(resolve, 0));
         } catch (error) {
           if (error.message === 'DOWNLOAD_CANCELLED') {
             throw error;
+          }
+          if (isQuotaExceededError(error) || error?.errorCode === 'QUOTA_EXCEEDED') {
+            throw createQuotaExceededError({ causeMessage: error?.message });
           }
 
           logger.error('DownloadManager', `Error downloading package ${packageIndex + 1}/${totalPackages}: ${part.filename}`, error);
@@ -600,6 +704,14 @@ export class DownloadManager {
           totalPackages: totalPackages
         });
       }
+      this._updateJobSnapshot({
+        status: 'running',
+        phase: 'complete',
+        progress: 100,
+        completed,
+        failed,
+        total: totalPdfs
+      });
 
       // Emit complete event with categories info and batch flag
       offlineEvents.emit(EVENTS.DOWNLOAD_COMPLETE, {
@@ -615,10 +727,26 @@ export class DownloadManager {
       if (error.message === 'DOWNLOAD_CANCELLED') {
         offlineEvents.emit(EVENTS.DOWNLOAD_ERROR, { error: 'Download cancelled' });
       } else {
-        offlineEvents.emit(EVENTS.DOWNLOAD_ERROR, { error: error.message });
+        offlineEvents.emit(EVENTS.DOWNLOAD_ERROR, {
+          error: error.message,
+          errorCode: (isQuotaExceededError(error) || error?.errorCode === 'QUOTA_EXCEEDED') ? 'QUOTA_EXCEEDED' : undefined
+        });
       }
       throw error;
     } finally {
+      logger.info(
+        'DownloadManager',
+        'Batch download pipeline finished',
+        {
+          categoriesCount: categories?.length || 0,
+          totalPdfs,
+          completed,
+          failed
+        },
+        {
+          durationMs: Date.now() - batchStartedAt
+        }
+      );
       // Always end batch mode, even if there was an error
       cacheStorageAdapter.endBatchMode();
     }
@@ -666,6 +794,60 @@ export class DownloadManager {
       });
     } catch (error) {
       logger.warn('DownloadManager', 'Could not update offline state', error);
+    }
+  }
+
+  /**
+   * @param {Array<{size?: number}>} requiredParts
+   * @returns {Promise<void>}
+   * @private
+   */
+  async _runStoragePreflight(requiredParts) {
+    const estimatedBytes = requiredParts.reduce((sum, part) => sum + Number(part?.size || 0), 0);
+    if (estimatedBytes <= 0) return;
+
+    // Try to persist storage before estimating quota. This is best-effort.
+    await requestPersistentStorage();
+
+    const result = await checkStorageCapacity(estimatedBytes);
+    if (result.supported && !result.ok) {
+      logger.warn('DownloadManager', 'Storage preflight blocked download', {
+        neededBytes: result.neededBytes,
+        usageBytes: result.usageBytes,
+        quotaBytes: result.quotaBytes
+      });
+      throw createQuotaExceededError({
+        neededBytes: result.neededBytes,
+        usageBytes: result.usageBytes,
+        quotaBytes: result.quotaBytes
+      });
+    }
+  }
+
+  /**
+   * Persist minimal job snapshot for recovery and UX continuity.
+   * @param {Object} updates
+   * @private
+   */
+  _updateJobSnapshot(updates) {
+    try {
+      const snapshot = {
+        jobId: this.currentJobId || updates.jobId || `offline-job-${Date.now()}`,
+        status: updates.status || 'running',
+        categories: updates.categories || this.currentJobCategories || [],
+        phase: updates.phase || 'downloading',
+        error: updates.error ?? null,
+        targetStatsRevision: updates.targetStatsRevision || getCurrentStatsRevision()
+      };
+
+      if ('completed' in updates) snapshot.completed = updates.completed ?? 0;
+      if ('failed' in updates) snapshot.failed = updates.failed ?? 0;
+      if ('total' in updates) snapshot.total = updates.total ?? 0;
+      if ('progress' in updates) snapshot.progress = updates.progress ?? 0;
+
+      writeDownloadJobSnapshot(snapshot);
+    } catch (error) {
+      logger.warn('DownloadManager', 'Could not persist download job snapshot', error);
     }
   }
 

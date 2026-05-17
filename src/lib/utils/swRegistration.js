@@ -74,7 +74,8 @@ export async function unregisterServiceWorker() {
  * @param {object} message - Message to send
  * @returns {Promise<any>}
  */
-export function sendMessageToSW(message) {
+export function sendMessageToSW(message, options = {}) {
+  const timeoutMs = Number.isFinite(options.timeoutMs) ? options.timeoutMs : 15000;
   return new Promise((resolve, reject) => {
     if (!navigator.serviceWorker.controller) {
       reject(new Error('No service worker controller'));
@@ -89,10 +90,10 @@ export function sendMessageToSW(message) {
 
     navigator.serviceWorker.controller.postMessage(message, [messageChannel.port2]);
 
-    // Timeout after 5 minutes for long operations
+    // Use bounded timeout to avoid UI hanging indefinitely.
     setTimeout(() => {
       reject(new Error('Service worker message timeout'));
-    }, 5 * 60 * 1000);
+    }, timeoutMs);
   });
 }
 
@@ -166,7 +167,14 @@ export async function downloadPDFsViaSW(pdfUrls, batchSize = 10, onProgress = nu
         
         case 'ERROR':
           cleanup();
-          reject(new Error(data.error || 'Download failed'));
+          {
+            const error = /** @type {any} */ (new Error(data.error || 'Download failed'));
+            if (data.errorCode) {
+              error.errorCode = data.errorCode;
+              error.code = data.errorCode;
+            }
+            reject(/** @type {Error} */ (error));
+          }
           break;
         
         case 'CANCELLED':
@@ -237,9 +245,12 @@ async function isCacheStorageAvailable() {
  * Get list of cached PDFs with local cache optimization
  * Uses localStorage cache first, then falls back to Service Worker
  * IMPORTANT: Invalidates localStorage cache if cache storage is not available
+ * @param {{ preferFresh?: boolean }} [options]
  * @returns {Promise<string[]>}
  */
-export async function getCachedPDFsFast() {
+export async function getCachedPDFsFast(options = {}) {
+  const preferFresh = options.preferFresh === true;
+
   // Verificar se cache storage está disponível
   const cacheStorageAvailable = await isCacheStorageAvailable();
   
@@ -250,8 +261,8 @@ export async function getCachedPDFsFast() {
     return [];
   }
   
-  // Verificar cache local primeiro
-  if (typeof window !== 'undefined' && typeof localStorage !== 'undefined') {
+  // Verificar cache local primeiro (exceto quando fluxo crítico pede leitura fresca)
+  if (!preferFresh && typeof window !== 'undefined' && typeof localStorage !== 'undefined') {
     try {
       const cached = localStorage.getItem(CACHED_PDFS_LOCAL_KEY);
       if (cached) {
@@ -351,7 +362,11 @@ export async function getCachedPDFs() {
       return [];
     }
 
-    const response = await sendMessageToSW({ type: 'GET_CACHED_PDFS', data: {} });
+    // Keep timeout short for read operations; if SW is unhealthy, fail fast.
+    const response = await sendMessageToSW(
+      { type: 'GET_CACHED_PDFS', data: {} },
+      { timeoutMs: navigator.onLine ? 5000 : 2000 }
+    );
     return response.pdfs || [];
   } catch (error) {
     // Log apenas se for erro diferente de "no controller"
