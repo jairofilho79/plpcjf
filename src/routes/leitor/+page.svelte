@@ -131,13 +131,21 @@
   }
 
   // Gesture state for pinch to zoom
-  const ENABLE_PINCH_FOCAL_FIX = true;
   let pinchInitialDistance = 0;
   let pinchInitialScale = 1;
+  // Ponto focal (centro dos dedos) relativo ao canto superior-esquerdo do container visível
   let pinchStartFocalX = 0;
   let pinchStartFocalY = 0;
+  // Coordenada de conteúdo sob o ponto focal na escala inicial (usada para restaurar scroll)
   let pinchStartContentX = 0;
   let pinchStartContentY = 0;
+  // Ponto focal em coordenadas do viewerEl (para transform-origin)
+  let pinchFocalXInViewer = 0;
+  let pinchFocalYInViewer = 0;
+  // Ratio acumulado pelo touchmove (lido pelo rAF)
+  let pinchCurrentRatio = 1;
+  // Handle do requestAnimationFrame pendente do preview
+  let pinchRafId: number | null = null;
   let isPinching = false;
   
   // Gesture state for single touch navigation
@@ -872,37 +880,135 @@
     e.preventDefault();
   }
 
+  // ── Pinch-to-zoom ──────────────────────────────────────────────────────────
+  // A estratégia de preview-then-commit separa o feedback visual (rAF + CSS transform)
+  // do re-render do PDF.js (feito uma única vez no final do gesto), dando ~60fps fluidos.
+
+  /**
+   * Inicia estado do gesto de pinch ao detectar 2 dedos.
+   * Funciona em ambos os modos (horizontal e vertical).
+   */
+  function startPinch(e: TouchEvent) {
+    if (!viewer || !containerEl) return;
+    const touches = e.touches;
+    isPinching = true;
+    swipePageGestureValid = false;
+    pinchInitialDistance = getTouchDistance(touches[0], touches[1]);
+    pinchInitialScale = (viewer as any).currentScale ?? 1;
+    pinchCurrentRatio = 1;
+
+    const containerRect = containerEl.getBoundingClientRect();
+    const focalViewportX = (touches[0].clientX + touches[1].clientX) / 2;
+    const focalViewportY = (touches[0].clientY + touches[1].clientY) / 2;
+
+    // Posição do focal relativa à área visível do container
+    pinchStartFocalX = focalViewportX - containerRect.left;
+    pinchStartFocalY = focalViewportY - containerRect.top;
+
+    // Coordenada de conteúdo sob o focal (para calcular scroll ao commitar)
+    pinchStartContentX = (containerEl.scrollLeft + pinchStartFocalX) / Math.max(pinchInitialScale, 0.0001);
+    pinchStartContentY = (containerEl.scrollTop + pinchStartFocalY) / Math.max(pinchInitialScale, 0.0001);
+
+    // Ponto focal em coordenadas do viewerEl (para transform-origin do CSS preview)
+    pinchFocalXInViewer = containerEl.scrollLeft + pinchStartFocalX;
+    pinchFocalYInViewer = containerEl.scrollTop + pinchStartFocalY;
+
+    e.preventDefault();
+  }
+
+  /**
+   * Acumula o novo ratio a cada touchmove e agenda 1 frame rAF para o preview.
+   * Nunca chama viewer.currentScale durante o movimento.
+   */
+  function movePinch(e: TouchEvent) {
+    if (!isPinching || !viewerEl || !containerEl) return;
+    const currentDistance = getTouchDistance(e.touches[0], e.touches[1]);
+    if (currentDistance && pinchInitialDistance) {
+      pinchCurrentRatio = currentDistance / pinchInitialDistance;
+    }
+    // Agendar preview apenas se não há rAF pendente
+    if (!pinchRafId) {
+      pinchRafId = requestAnimationFrame(applyPinchPreview);
+    }
+    e.preventDefault();
+  }
+
+  /**
+   * Aplica CSS transform no viewerEl como preview visual barato (~60fps, sem re-render do PDF.js).
+   * Chamado via rAF para garantir no máximo 1 update por frame.
+   */
+  function applyPinchPreview() {
+    pinchRafId = null;
+    if (!viewerEl || !isPinching) return;
+    const clampedScale = Math.max(0.25, Math.min(4, pinchInitialScale * pinchCurrentRatio));
+    const ratio = clampedScale / pinchInitialScale;
+    viewerEl.style.transformOrigin = `${pinchFocalXInViewer}px ${pinchFocalYInViewer}px`;
+    viewerEl.style.transform = `scale(${ratio})`;
+  }
+
+  /**
+   * Remove o preview CSS e faz um único commit da escala final no PDF.js.
+   * Chamado quando os dedos são levantados (touches.length < 2).
+   */
+  function commitPinch() {
+    if (!isPinching) return;
+    isPinching = false;
+
+    // Cancelar rAF pendente
+    if (pinchRafId !== null) {
+      cancelAnimationFrame(pinchRafId);
+      pinchRafId = null;
+    }
+
+    // Remover preview CSS antes do commit
+    if (viewerEl) {
+      viewerEl.style.transform = '';
+      viewerEl.style.transformOrigin = '';
+    }
+
+    const finalScale = Math.max(0.25, Math.min(4, pinchInitialScale * pinchCurrentRatio));
+
+    // Único commit no PDF.js — aqui ocorre o re-render
+    if (viewer) {
+      viewer.currentScale = finalScale;
+    }
+
+    // Após o PDF.js reposicionar o conteúdo, corrigir scroll para manter focal
+    requestAnimationFrame(() => {
+      if (!containerEl) return;
+      containerEl.scrollLeft = Math.max(0, pinchStartContentX * finalScale - pinchStartFocalX);
+      containerEl.scrollTop  = Math.max(0, pinchStartContentY * finalScale - pinchStartFocalY);
+      zoomCtrl.setUserScale(finalScale);
+    });
+
+    // Limpar estado do pinch
+    pinchInitialDistance = 0;
+    pinchInitialScale = 1;
+    pinchCurrentRatio = 1;
+    pinchStartFocalX = 0;
+    pinchStartFocalY = 0;
+    pinchStartContentX = 0;
+    pinchStartContentY = 0;
+    pinchFocalXInViewer = 0;
+    pinchFocalYInViewer = 0;
+  }
+  // ──────────────────────────────────────────────────────────────────────────
+
   // Handle touch start for gestures
   function onTouchStart(e: TouchEvent) {
     if (!viewer || !containerEl) return;
-    // Modo vertical: scroll e pan nativos — sem gestos customizados
-    if (navigationMode === 'vertical') return;
-    
-    const touches = e.touches;
-    
-    // PRIORIDADE 1: Pinch to zoom (2 dedos) - processar primeiro
-    if (touches.length === 2) {
-      isPinching = true;
-      swipePageGestureValid = false;
-      pinchInitialDistance = getTouchDistance(touches[0], touches[1]);
-      pinchInitialScale = viewer.currentScale;
-      if (ENABLE_PINCH_FOCAL_FIX) {
-        const containerRect = containerEl.getBoundingClientRect();
-        pinchStartFocalX =
-          (touches[0].clientX + touches[1].clientX) / 2 - containerRect.left;
-        pinchStartFocalY =
-          (touches[0].clientY + touches[1].clientY) / 2 - containerRect.top;
 
-        // Mapear o ponto focal para coordenadas de conteúdo na escala inicial.
-        pinchStartContentX =
-          (containerEl.scrollLeft + pinchStartFocalX) / Math.max(pinchInitialScale, 0.0001);
-        pinchStartContentY =
-          (containerEl.scrollTop + pinchStartFocalY) / Math.max(pinchInitialScale, 0.0001);
-      }
-      e.preventDefault();
-      return; // Não processar GestureButton quando em pinch
+    // PINCH (2 dedos) — funciona em ambos os modos
+    if (e.touches.length === 2) {
+      startPinch(e);
+      return;
     }
-    
+
+    // Modo vertical: gestos de 1 dedo são nativos — scroll/pan do browser
+    if (navigationMode === 'vertical') return;
+
+    const touches = e.touches;
+
     // Um dedo: candidato a swipe em todo o canvas (sobreposto a zonas ou PDF)
     if (touches.length === 1 && ENABLE_SWIPE_PAGE_NAV) {
       swipePageGestureValid = true;
@@ -916,14 +1022,14 @@
       const containerRect = containerEl.getBoundingClientRect();
       const relativeX = touches[0].clientX - containerRect.left;
       const quarterWidth = containerRect.width / 4;
-      
+
       const isInLeftZone = relativeX < quarterWidth;
       const isInRightZone = relativeX > containerRect.width - quarterWidth;
-      
+
       if (!isInLeftZone && !isInRightZone) {
         return;
       }
-      
+
       touchStartX = touches[0].clientX;
       touchStartY = touches[0].clientY;
       touchStartTime = Date.now();
@@ -934,37 +1040,18 @@
   // Handle touch move for gestures
   function onTouchMove(e: TouchEvent) {
     if (!viewer || !containerEl) return;
-    // Modo vertical: scroll e pan nativos — sem gestos customizados
-    if (navigationMode === 'vertical') return;
-    
-    const touches = e.touches;
-    
-    // Pinch to zoom: 2 touches
-    if (touches.length === 2 && isPinching) {
-      const currentDistance = getTouchDistance(touches[0], touches[1]);
-      if (!currentDistance || !pinchInitialDistance) {
-        e.preventDefault();
-        return;
-      }
-      const scaleRatio = currentDistance / pinchInitialDistance;
-      const newScale = pinchInitialScale * scaleRatio;
-      
-      // Clamp scale to reasonable bounds (0.25x to 4x)
-      const clampedScale = Math.max(0.25, Math.min(4, newScale));
-      viewer.currentScale = clampedScale;
 
-      if (ENABLE_PINCH_FOCAL_FIX) {
-        // Reaplica o ponto de conteúdo inicial sob o centro dos dedos.
-        const targetScrollLeft = pinchStartContentX * clampedScale - pinchStartFocalX;
-        const targetScrollTop = pinchStartContentY * clampedScale - pinchStartFocalY;
-        containerEl.scrollLeft = Math.max(0, targetScrollLeft);
-        containerEl.scrollTop = Math.max(0, targetScrollTop);
-      }
-      
-      e.preventDefault();
+    // PINCH (2 dedos) — funciona em ambos os modos
+    if (e.touches.length === 2 && isPinching) {
+      movePinch(e);
       return;
     }
-    
+
+    // Modo vertical: gestos de 1 dedo são nativos — scroll/pan do browser
+    if (navigationMode === 'vertical') return;
+
+    const touches = e.touches;
+
     // Single touch: check if it moved significantly
     if (touches.length === 1 && !isPinching) {
       // Impede pan nativo da viewport durante swipe horizontal entre páginas.
@@ -983,7 +1070,7 @@
 
       const dx = Math.abs(touches[0].clientX - touchStartX);
       const dy = Math.abs(touches[0].clientY - touchStartY);
-      
+
       if (dx > TOUCH_MOVE_THRESHOLD || dy > TOUCH_MOVE_THRESHOLD) {
         hasMoved = true;
       }
@@ -993,32 +1080,22 @@
   // Handle touch end for gestures
   function onTouchEnd(e: TouchEvent) {
     if (!viewer || !containerEl) return;
-    // Modo vertical: scroll e pan nativos — sem gestos customizados
-    if (navigationMode === 'vertical') return;
-    
-    const touches = e.touches;
-    
-    // End pinch gesture
-    if (isPinching && touches.length < 2) {
-      isPinching = false;
-      // Rastrear escala do usuário após o pinch
-      if (viewer) {
-        zoomCtrl.setUserScale((viewer as any).currentScale ?? 1);
-      }
-      pinchInitialDistance = 0;
-      pinchInitialScale = 1;
-      pinchStartFocalX = 0;
-      pinchStartFocalY = 0;
-      pinchStartContentX = 0;
-      pinchStartContentY = 0;
+
+    // PINCH terminou (dedos levantados abaixo de 2)
+    if (isPinching && e.touches.length < 2) {
+      commitPinch();
       swipePageGestureValid = false;
-      e.preventDefault();
       touchStartX = 0;
       touchStartY = 0;
       touchStartTime = 0;
       hasMoved = false;
       return;
     }
+
+    // Modo vertical: gestos de 1 dedo são nativos
+    if (navigationMode === 'vertical') return;
+
+    const touches = e.touches;
 
     if (e.type === 'touchcancel') {
       swipePageGestureValid = false;
@@ -1032,7 +1109,7 @@
     }
 
     swipePageGestureValid = false;
-    
+
     // Navegação por toque simples é processada pelos GestureButtons
     touchStartX = 0;
     touchStartY = 0;
@@ -1278,11 +1355,18 @@
   .container.vertical-nav :global(.pdfViewer) {
     display: flex;
     flex-direction: column;
-    align-items: center;
+    /*
+     * flex-start em vez de center: quando a página é mais larga que o container
+     * (após zoom), ela começa no bordo esquerdo e o overflow vai para a direita,
+     * tornando-o acessível via scrollLeft. O margin: 0 auto nas páginas cuida
+     * da centralização quando elas cabem no container.
+     */
+    align-items: flex-start;
+    min-width: 100%;
     padding-bottom: 24px !important;
   }
   .container.vertical-nav :global(.pdfViewer .page) {
-    margin: 0 auto 8px !important; /* gap entre páginas */
+    margin: 0 auto 8px !important; /* centraliza quando cabe; auto=0 quando overflow */
   }
   /* ───────────────────────────────────────────────────────────────────────── */
   /* Removed unused nested selector to satisfy build warnings */
