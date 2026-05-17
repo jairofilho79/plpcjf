@@ -697,8 +697,11 @@
     });
     eventBus.on('pagechanging', (e: any) => {
       currentPage = e?.pageNumber ?? currentPage;
-      resetFitModeScrollPosition();
-      requestAnimationFrame(() => resetFitModeScrollPosition());
+      // Modo vertical: o scroll nativo conduz a troca de página — não resetar
+      if (navigationMode === 'horizontal') {
+        resetFitModeScrollPosition();
+        requestAnimationFrame(() => resetFitModeScrollPosition());
+      }
 
       if (zoomCtrl.userScale !== null) {
         // Usuário tem zoom manual: preservar escala ao trocar de página
@@ -802,8 +805,8 @@
     (viewer as any).currentPageNumber = prev;
   }
   function resetFitModeScrollPosition() {
-    if (!containerEl || preferredFitMode !== 'page-fit') return;
-    // Em page-fit, evita deslocamento residual após swipe/troca de página.
+    // Apenas no modo horizontal e page-fit: evita deslocamento residual após swipe/troca de página.
+    if (!containerEl || navigationMode !== 'horizontal' || preferredFitMode !== 'page-fit') return;
     containerEl.scrollLeft = 0;
     containerEl.scrollTop = 0;
   }
