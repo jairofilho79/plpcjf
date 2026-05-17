@@ -71,6 +71,12 @@
   // Sempre começa como true (barra visível) quando a página é carregada
   let isToolbarVisible = true;
 
+  // Toolbar layer system
+  type DeviceType = 'mobile' | 'tablet' | 'desktop';
+  let deviceType: DeviceType = 'desktop';
+  let activeToolbarLayer = 1;
+  let _mqlCleanup: (() => void) | null = null;
+
   $: searchParams = new URLSearchParams($page.url.search);
   $: file = searchParams.get('file') ?? '/pdfs/exemplo.pdf';
   $: titulo = searchParams.get('titulo') ?? '';
@@ -490,6 +496,27 @@
     }
   }
 
+  function updateDeviceType() {
+    if (typeof window === 'undefined') return;
+    if (window.matchMedia('(max-width: 767px)').matches) {
+      deviceType = 'mobile';
+    } else if (window.matchMedia('(max-width: 1023px)').matches) {
+      deviceType = 'tablet';
+    } else {
+      deviceType = 'desktop';
+    }
+  }
+
+  function cycleToolbarLayer() {
+    activeToolbarLayer = (activeToolbarLayer % toolbarLayerCount) + 1;
+    requestAnimationFrame(() => {
+      if (toolbarEl && containerEl) {
+        toolbarHeight = toolbarEl.offsetHeight;
+        containerEl.style.top = `${toolbarHeight}px`;
+      }
+    });
+  }
+
   function onKeyDown(e: KeyboardEvent) {
     if (!viewer) return;
     // Basic shortcuts
@@ -530,6 +557,18 @@
     
     // Sempre garantir que a barra esteja visível ao carregar a página
     isToolbarVisible = true;
+
+    // Setup device type detection for toolbar layers
+    updateDeviceType();
+    const mqlMobile = window.matchMedia('(max-width: 767px)');
+    const mqlTablet = window.matchMedia('(max-width: 1023px)');
+    const handleMediaChange = () => { updateDeviceType(); };
+    mqlMobile.addEventListener('change', handleMediaChange);
+    mqlTablet.addEventListener('change', handleMediaChange);
+    _mqlCleanup = () => {
+      mqlMobile.removeEventListener('change', handleMediaChange);
+      mqlTablet.removeEventListener('change', handleMediaChange);
+    };
     
     // Add storage event listener for carousel synchronization between tabs
     let storageHandler: ((e: StorageEvent) => void) | null = null;
@@ -760,6 +799,7 @@
   onDestroy(() => {
     zoomCtrl.cancelScheduled();
     cleanup?.();
+    _mqlCleanup?.();
     if (activePdfObjectUrl) {
       objectUrlManager.revoke(activePdfObjectUrl);
       activePdfObjectUrl = null;
@@ -1288,6 +1328,33 @@
     eventBus.on('pagesinit', onPagesinit);
   }
 
+  // ─── Toolbar layer system ─────────────────────────────────────────────────────
+  $: toolbarLayerCount = deviceType === 'mobile' ? 3 : deviceType === 'tablet' ? 2 : 1;
+  $: if (activeToolbarLayer > toolbarLayerCount) activeToolbarLayer = 1;
+
+  // Visibility per control based on active layer
+  $: showCarousel = deviceType === 'desktop' || activeToolbarLayer === 1;
+  $: showPagePrev = deviceType === 'desktop' || activeToolbarLayer === 2;
+  $: showPageNext = deviceType === 'desktop' || activeToolbarLayer === 2;
+  $: showNavMode =
+    deviceType === 'desktop' ||
+    (deviceType === 'tablet' && activeToolbarLayer === 1) ||
+    (deviceType === 'mobile' && activeToolbarLayer === 2);
+  $: showZoomMinus =
+    deviceType === 'desktop' ||
+    (deviceType === 'tablet' && activeToolbarLayer === 2) ||
+    (deviceType === 'mobile' && activeToolbarLayer === 3);
+  $: showZoomFit =
+    deviceType === 'desktop' ||
+    (deviceType === 'tablet' && activeToolbarLayer === 2) ||
+    (deviceType === 'mobile' && (activeToolbarLayer === 1 || activeToolbarLayer === 3));
+  $: showZoomPlus =
+    deviceType === 'desktop' ||
+    (deviceType === 'tablet' && activeToolbarLayer === 2) ||
+    (deviceType === 'mobile' && activeToolbarLayer === 3);
+  $: showLayerToggle = deviceType !== 'desktop';
+  // ──────────────────────────────────────────────────────────────────────────────
+
   // Reativo: atualizar altura do container quando a visibilidade da barra mudar
   $: if (containerEl) {
     if (isToolbarVisible) {
@@ -1383,332 +1450,272 @@
     margin: 0 auto 8px !important; /* centraliza quando cabe; auto=0 quando overflow */
   }
   /* ───────────────────────────────────────────────────────────────────────── */
-  /* Removed unused nested selector to satisfy build warnings */
+  /* ─── Toolbar layout ─────────────────────────────────────────────────────── */
   .toolbar {
+    --tbtn-h: 36px;
+    --tbtn-px: 10px;
+    --tbtn-r: 6px;
+    --tbtn-gap: 6px;
     position: fixed;
     top: 0;
     left: 0;
     right: 0;
-    min-height: 56px;
-    height: auto;
-    display: grid;
-    grid-template-columns: 1fr max-content max-content repeat(5, max-content);
-    grid-template-rows: repeat(3, 1fr);
-    column-gap: 8px;
+    display: flex;
+    align-items: center;
+    gap: var(--tbtn-gap);
     /* Safe area: recuo para notch/câmera (iOS/Android) */
-    padding: env(safe-area-inset-top) calc(12px + env(safe-area-inset-right)) 0 calc(12px + env(safe-area-inset-left));
+    padding: env(safe-area-inset-top, 0px) calc(8px + env(safe-area-inset-right, 0px)) 6px calc(8px + env(safe-area-inset-left, 0px));
     background: var(--background-color);
     color: var(--text-light);
     border-bottom: 4px solid var(--gold-color);
     z-index: 1000;
-    align-items: center;
     box-sizing: border-box;
     width: 100%;
     max-width: 100vw;
     overflow: hidden;
     transition: transform 0.3s ease, opacity 0.3s ease;
   }
-  
+
   .toolbar.hidden {
     transform: translateY(-100%);
     opacity: 0;
     pointer-events: none;
   }
-  .btn {
-    padding: 10px 12px;
-    border-radius: 6px;
-    background: var(--btn-background-color);
-    border: 1px solid rgba(255,255,255,0.12);
-    color: var(--text-light);
-    cursor: pointer;
+
+  /* Área esquerda: marca + título */
+  .toolbar-left {
     display: flex;
     align-items: center;
-    justify-content: center;
-    user-select: none;
-    -webkit-user-select: none;
-    -moz-user-select: none;
-    -ms-user-select: none;
-  }
-  .btn:hover { filter: brightness(1.05); }
-  .btn .icon {
-    width: 20px;
-    height: 20px;
-    stroke: currentColor;
-  }
-  .title-wrap { display: flex; flex-direction: column; justify-content: center; min-width: 0; grid-column: 1; grid-row: 2 / 4; }
-  
-  /* Carousel navigator positioning */
-  :global(.toolbar > :global(.carousel-navigator)) {
-    grid-column: 2;
-    grid-row: 1 / 4;
-    align-self: center;
-  }
-  .title-main {
-    font-weight: 600;
-    line-height: 1;
-    white-space: nowrap;
-    text-overflow: ellipsis;
+    gap: 4px;
+    min-width: 0;
+    flex: 0 1 auto;
     overflow: hidden;
   }
-  .title-sub {
-    font-size: 12px;
-    opacity: .8;
-    white-space: nowrap;
-    text-overflow: ellipsis;
-    overflow: hidden;
+
+  /* Área de controles à direita */
+  .toolbar-controls {
+    display: flex;
+    align-items: center;
+    gap: var(--tbtn-gap);
+    flex: 1 0 auto;
+    justify-content: flex-end;
+    min-width: 0;
   }
-  .indicator { opacity: .9; }
+
+  /* Marca PLPCG */
   .brand {
-    grid-column: 1;
-    grid-row: 1;
     white-space: nowrap;
     font-weight: 700;
-    font-family: "EB Garamond", Garamond, Georgia, serif; /* similar ao header */
-    font-size: 1.5rem; /* ~text-3xl no contexto da barra */
+    font-family: "EB Garamond", Garamond, Georgia, serif;
+    font-size: 1.25rem;
     line-height: 1;
     color: var(--placeholder-color);
-    letter-spacing: .03em; /* tracking-wide */
-    text-shadow: 2px 2px 4px rgba(0,0,0,0.5), 0 0 8px rgba(0,0,0,0.3); /* Sombra mais pronunciada para destacar */
+    letter-spacing: .03em;
+    text-shadow: 2px 2px 4px rgba(0,0,0,0.5), 0 0 8px rgba(0,0,0,0.3);
     cursor: pointer;
     user-select: none;
     -webkit-user-select: none;
     position: relative;
-    padding: 10px;
+    padding: 6px 8px;
     display: inline-flex;
     align-items: center;
     justify-content: center;
+    flex-shrink: 0;
   }
-  
-  /* Feixe de luz - sempre ativo */
+
   .brand .light-beam {
     position: absolute;
     bottom: -2px;
     left: 50%;
     transform: translateX(-50%);
-    height: 4px;
-    width: calc(100% - 2rem);
-    background: linear-gradient(to right, 
-      transparent 0%, 
+    height: 3px;
+    width: calc(100% - 1rem);
+    background: linear-gradient(to right,
+      transparent 0%,
       rgba(255, 240, 160, 0.95) 15%,
       rgba(255, 230, 120, 1) 30%,
-      rgba(255, 220, 100, 1) 50%, 
+      rgba(255, 220, 100, 1) 50%,
       rgba(255, 230, 120, 1) 70%,
       rgba(255, 240, 160, 0.95) 85%,
       transparent 100%);
-    box-shadow: 
-      0 0 12px rgba(255, 220, 100, 1),
-      0 0 24px rgba(255, 220, 100, 0.8),
-      0 0 36px rgba(255, 220, 100, 0.6),
-      0 0 48px rgba(255, 220, 100, 0.4),
-      0 2px 8px rgba(255, 220, 100, 0.7);
+    box-shadow:
+      0 0 8px rgba(255, 220, 100, 1),
+      0 0 16px rgba(255, 220, 100, 0.8),
+      0 0 24px rgba(255, 220, 100, 0.6),
+      0 2px 6px rgba(255, 220, 100, 0.7);
     border-radius: 50%;
     opacity: 1;
     z-index: 1;
   }
 
-  .indicator { display: flex; align-items: center; gap: 4px; min-width: 56px; justify-content: center; }
-  .indicator .current { font-variant-numeric: tabular-nums; }
-  .indicator .total { opacity: .9; }
+  /* Título */
+  .title-wrap {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    min-width: 0;
+    overflow: hidden;
+  }
+  .title-main {
+    font-weight: 600;
+    font-size: 0.875rem;
+    line-height: 1.1;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    overflow: hidden;
+  }
+  .title-sub {
+    font-size: 0.75rem;
+    opacity: .8;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    overflow: hidden;
+  }
 
-  /* Estilizar o GestureButton wrapper nos botões de navegação (sem button aninhado) */
-  .page-nav-prev :global(.gesture-button-wrapper),
-  .page-nav-next :global(.gesture-button-wrapper) {
-    padding: 10px 12px;
-    border-radius: 6px;
+  /* Botões padronizados */
+  .btn {
+    height: var(--tbtn-h);
+    min-width: var(--tbtn-h);
+    padding: 0 var(--tbtn-px);
+    border-radius: var(--tbtn-r);
     background: var(--btn-background-color);
     border: 1px solid rgba(255,255,255,0.12);
     color: var(--text-light);
     cursor: pointer;
-    display: flex;
+    display: inline-flex;
     align-items: center;
     justify-content: center;
+    user-select: none;
+    -webkit-user-select: none;
+    box-sizing: border-box;
+    flex-shrink: 0;
   }
-  .page-nav-prev :global(.gesture-button-wrapper):hover,
-  .page-nav-next :global(.gesture-button-wrapper):hover {
-    filter: brightness(1.05);
+  .btn:hover { filter: brightness(1.05); }
+  .btn .icon {
+    width: 18px;
+    height: 18px;
+    stroke: currentColor;
+    flex-shrink: 0;
   }
 
-  /* Grid placements for controls spanning all rows */
-  /* Hide prev/next buttons on mobile */
-  .page-nav-prev { 
-    grid-column: 3; 
-    grid-row: 1 / 4; 
-    align-self: center;
-    display: none; /* Hidden on mobile by default */
+  /* Indicador de página */
+  .indicator {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    font-size: 0.875rem;
+    opacity: .9;
+    white-space: nowrap;
+    flex-shrink: 0;
   }
-  .indicator { 
-    grid-column: 3; 
-    grid-row: 1 / 4; 
-    align-self: center; 
-  }
-  .page-nav-next { 
-    grid-column: 3; 
-    grid-row: 1 / 4; 
-    align-self: center;
-    display: none; /* Hidden on mobile by default */
-  }
-  .btn.zoom-minus { grid-column: 4; grid-row: 1 / 4; align-self: center; }
-  .btn.zoom-fit { grid-column: 5; grid-row: 1 / 4; align-self: center; position: relative; cursor: pointer; }
-  /* GestureButton dentro do zoom-fit preenche toda a área clicável */
-  .btn.zoom-fit :global(.gesture-button-wrapper) {
-    display: flex;
+  .indicator .current { font-variant-numeric: tabular-nums; }
+  .indicator .total { opacity: .9; }
+
+  /* Wrappers GestureButton nas setas de página (.ctrl) */
+  .ctrl :global(.gesture-button-wrapper) {
+    height: var(--tbtn-h);
+    min-width: var(--tbtn-h);
+    padding: 0 var(--tbtn-px);
+    border-radius: var(--tbtn-r);
+    background: var(--btn-background-color);
+    border: 1px solid rgba(255,255,255,0.12);
+    color: var(--text-light);
+    cursor: pointer;
+    display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 100%;
-    height: 100%;
-    padding: 10px 12px;
+    box-sizing: border-box;
+    flex-shrink: 0;
+  }
+  .ctrl :global(.gesture-button-wrapper):hover { filter: brightness(1.05); }
+  .ctrl .icon {
+    width: 18px;
+    height: 18px;
+    stroke: currentColor;
+    flex-shrink: 0;
+  }
+
+  /* zoom-fit: GestureButton preenche toda a área clicável do .btn */
+  .btn.zoom-fit {
+    padding: 0;
+    cursor: pointer;
     position: relative;
   }
-  
+  .btn.zoom-fit :global(.gesture-button-wrapper) {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+    min-width: var(--tbtn-h);
+    padding: 0 var(--tbtn-px);
+    position: relative;
+    box-sizing: border-box;
+  }
+
+  /* nav-mode-toggle active */
+  .btn.nav-mode-toggle.active { color: #4fc3f7; }
+
+  /* Botão de camada (layer toggle) */
+  .btn.layer-toggle {
+    font-weight: 700;
+    font-size: 0.875rem;
+    min-width: var(--tbtn-h);
+  }
+
+  /* Indicadores de modo no zoom-fit */
   .zoom-fit-indicator {
     position: absolute;
     pointer-events: none;
     transition: all 0.3s ease;
   }
-  
   .zoom-fit-indicator.bar {
     background: white;
     border-radius: 1px;
   }
-  
-  /* Page-fit: horizontal bars (top and bottom) */
   .btn.zoom-fit.page-fit .zoom-fit-indicator.page-fit.top,
-  .btn.zoom-fit.page-fit .zoom-fit-indicator.page-fit.bottom {
-    opacity: 1;
-  }
-  
+  .btn.zoom-fit.page-fit .zoom-fit-indicator.page-fit.bottom { opacity: 1; }
   .btn.zoom-fit.page-fit .zoom-fit-indicator.page-fit.top {
-    top: 8px;
-    left: 50%;
-    transform: translateX(-50%);
-    width: 20px;
-    height: 2px;
+    top: 6px; left: 50%; transform: translateX(-50%); width: 16px; height: 2px;
   }
-  
   .btn.zoom-fit.page-fit .zoom-fit-indicator.page-fit.bottom {
-    bottom: 8px;
-    left: 50%;
-    transform: translateX(-50%);
-    width: 20px;
-    height: 2px;
+    bottom: 6px; left: 50%; transform: translateX(-50%); width: 16px; height: 2px;
   }
-  
-  /* Page-width: vertical bars (left and right) */
   .btn.zoom-fit.page-width .zoom-fit-indicator.page-width.left,
-  .btn.zoom-fit.page-width .zoom-fit-indicator.page-width.right {
-    opacity: 1;
-  }
-  
+  .btn.zoom-fit.page-width .zoom-fit-indicator.page-width.right { opacity: 1; }
   .btn.zoom-fit.page-width .zoom-fit-indicator.page-width.left {
-    left: 8px;
-    top: 50%;
-    transform: translateY(-50%);
-    width: 2px;
-    height: 20px;
+    left: 6px; top: 50%; transform: translateY(-50%); width: 2px; height: 16px;
   }
-  
   .btn.zoom-fit.page-width .zoom-fit-indicator.page-width.right {
-    right: 8px;
-    top: 50%;
-    transform: translateY(-50%);
-    width: 2px;
-    height: 20px;
+    right: 6px; top: 50%; transform: translateY(-50%); width: 2px; height: 16px;
   }
-  
-  /* Hide bars when not in corresponding mode */
   .btn.zoom-fit.page-fit .zoom-fit-indicator.page-width.left,
-  .btn.zoom-fit.page-fit .zoom-fit-indicator.page-width.right {
-    opacity: 0;
-    width: 0;
-    height: 0;
-  }
-  
+  .btn.zoom-fit.page-fit .zoom-fit-indicator.page-width.right { opacity: 0; width: 0; height: 0; }
   .btn.zoom-fit.page-width .zoom-fit-indicator.page-fit.top,
-  .btn.zoom-fit.page-width .zoom-fit-indicator.page-fit.bottom {
-    opacity: 0;
-    width: 0;
-    height: 0;
-  }
-  .btn.zoom-plus { grid-column: 6; grid-row: 1 / 4; align-self: center; }
-  .btn.nav-mode-toggle { grid-column: 7; grid-row: 1 / 4; align-self: center; }
-  .btn.nav-mode-toggle.active { color: #4fc3f7; }
+  .btn.zoom-fit.page-width .zoom-fit-indicator.page-fit.bottom { opacity: 0; width: 0; height: 0; }
 
-  /* Wide screens: let content breathe */
+  /* Compatibilidade do CarouselNavigator com a toolbar */
+  :global(.toolbar-controls .carousel-control) {
+    height: var(--tbtn-h, 36px);
+    padding: 0 var(--tbtn-px, 10px);
+    border-radius: var(--tbtn-r, 6px);
+    box-sizing: border-box;
+  }
+  :global(.toolbar-controls .carousel-navigator .gesture-button-wrapper) {
+    display: inline-flex !important;
+    align-items: center;
+    flex-shrink: 0;
+  }
+
+  /* Desktop: botões ligeiramente maiores */
   @media (min-width: 1024px) {
-    .brand { font-size: 1.75rem; }
-    .btn { padding: 12px 14px; }
+    .toolbar { --tbtn-h: 40px; --tbtn-px: 12px; }
+    .brand { font-size: 1.5rem; padding: 8px 10px; }
     .title-main { font-size: 1rem; }
   }
 
-  /* Mobile screens: limit PLPCG button to half toolbar height */
+  /* Mobile: ocultar subtítulo para economizar espaço */
   @media (max-width: 767px) {
-    .brand {
-      max-height: 24px; /* Ajustado para 24px considerando os paddings */
-      align-self: start; /* Alinhar ao topo da célula do grid */
-      margin-bottom: 12px;
-      padding: 4px; /* Padding ajustado sem espaço para seta */
-      font-size: 1.25rem; /* Reduzir ligeiramente o tamanho da fonte */
-    }
-    
-    .brand .light-beam {
-      height: 3px;
-      width: calc(100% - 1rem);
-      box-shadow: 
-        0 0 8px rgba(255, 220, 100, 1),
-        0 0 16px rgba(255, 220, 100, 0.8),
-        0 0 24px rgba(255, 220, 100, 0.6),
-        0 2px 6px rgba(255, 220, 100, 0.7);
-    }
-  }
-
-  /* Tablet+ layout: brand in its own column, title/subtitle to the right */
-  @media (min-width: 768px) {
-    .toolbar {
-      grid-template-columns: auto 1fr max-content repeat(7, max-content);
-    }
-    .brand { grid-column: 1; grid-row: auto; align-self: center; }
-    .title-wrap { grid-column: 2; grid-row: auto; }
-    /* Carousel navigator in column 3 - after title-wrap */
-    :global(.toolbar > :global(.carousel-navigator)) {
-      grid-column: 3;
-      grid-row: auto;
-    }
-    /* Show prev/next buttons on tablet+ */
-    .page-nav-prev { 
-      grid-column: 4;
-      grid-row: auto;
-      display: flex;
-    }
-    .indicator { 
-      grid-column: 5;
-      grid-row: auto;
-    }
-    .page-nav-next { 
-      grid-column: 6;
-      grid-row: auto;
-      display: flex;
-    }
-    .btn.zoom-minus { 
-      grid-column: 7;
-      grid-row: auto;
-    }
-    .btn.zoom-fit { 
-      grid-column: 8;
-      grid-row: auto;
-    }
-    .btn.zoom-plus { 
-      grid-column: 9;
-      grid-row: auto;
-    }
-    .btn.nav-mode-toggle {
-      grid-column: 10;
-      grid-row: auto;
-    }
-  }
-
-  /* Compact screens: stack title under PLPC, stack indicator, hide +/- */
-  @media (max-width: 600px) {
-    .btn.zoom-minus, .btn.zoom-plus { display: none; }
+    .title-sub { display: none; }
   }
   
   .pdf-loading-overlay {
@@ -1881,119 +1888,148 @@
 </style>
 
 <div class="toolbar" bind:this={toolbarEl} class:hidden={!isToolbarVisible}>
-  <GestureButton
-    on:click={goToHome}
-    on:longpress={goToHomeNewHistory}
-    longPressDuration={500}
-    hapticFeedback={true}
-    preventDefault={true}
-    preventClickOnLongPress={true}
-  >
-    <div class="brand">PLPCG<div class="light-beam"></div></div>
-  </GestureButton>
 
-  <div class="title-wrap">
-    {#if titulo}
-      <div class="title-main" title={titulo}>{titulo}</div>
-    {/if}
-    {#if subtitulo}
-      <div class="title-sub" title={subtitulo}>{subtitulo}</div>
-    {/if}
-  </div>
-
-  <CarouselNavigator
-    currentFile={file}
-    carousel={$carousel}
-    on:navigate={(e) => navigateToPdf(e.detail.louvor)}
-  />
-
-  <div class="page-nav-prev">
+  <!-- Área esquerda: marca + título (sempre visíveis) -->
+  <div class="toolbar-left">
     <GestureButton
-      on:click={prevPage}
-      on:longpress={goToFirstPage}
+      on:click={goToHome}
+      on:longpress={goToHomeNewHistory}
       longPressDuration={500}
       hapticFeedback={true}
       preventDefault={true}
-      ariaLabel="Página anterior (long press: primeira página)"
+      preventClickOnLongPress={true}
     >
-      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="icon">
-        <path stroke-linecap="round" stroke-linejoin="round" d="M10.5 19.5 3 12m0 0 7.5-7.5M3 12h18" />
-      </svg>
+      <div class="brand">PLPCG<div class="light-beam"></div></div>
     </GestureButton>
-  </div>
-  <div class="indicator" aria-label="Página atual e total">
-    <span class="current">{currentPage}</span>
-    <span class="total">/ {totalPages}</span>
-  </div>
-  <div class="page-nav-next">
-    <GestureButton
-      on:click={nextPage}
-      on:longpress={goToLastPage}
-      longPressDuration={500}
-      hapticFeedback={true}
-      preventDefault={true}
-      ariaLabel="Próxima página (long press: última página)"
-    >
-      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="icon">
-        <path stroke-linecap="round" stroke-linejoin="round" d="M13.5 4.5 21 12m0 0-7.5 7.5M21 12H3" />
-      </svg>
-    </GestureButton>
+
+    <div class="title-wrap">
+      {#if titulo}
+        <div class="title-main" title={titulo}>{titulo}</div>
+      {/if}
+      {#if subtitulo}
+        <div class="title-sub" title={subtitulo}>{subtitulo}</div>
+      {/if}
+    </div>
   </div>
 
-  <button class="btn zoom-minus" on:click={zoomOut} aria-label="Diminuir zoom">
-    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="icon">
-      <path stroke-linecap="round" stroke-linejoin="round" d="M5 12h14" />
-    </svg>
-  </button>
+  <!-- Área de controles: conteúdo varia por camada ativa -->
+  <div class="toolbar-controls">
 
-  <!-- zoom-fit: GestureButton age como o elemento interativo (sem button aninhado) -->
-  <div class="btn zoom-fit" class:page-fit={preferredFitMode === 'page-fit'} class:page-width={preferredFitMode === 'page-width'}>
-    <GestureButton
-      on:click={zoomFit}
-      on:longpress={toggleFitMode}
-      longPressDuration={500}
-      hapticFeedback={true}
-      preventDefault={true}
-      ariaLabel="Ajustar zoom (long press: alternar page-fit/page-width)"
-    >
-      {zoomPercent}%
-      <div class="zoom-fit-indicator bar page-fit top"></div>
-      <div class="zoom-fit-indicator bar page-fit bottom"></div>
-      <div class="zoom-fit-indicator bar page-width left"></div>
-      <div class="zoom-fit-indicator bar page-width right"></div>
-    </GestureButton>
-  </div>
-
-  <button class="btn zoom-plus" on:click={zoomIn} aria-label="Aumentar zoom">
-    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="icon">
-      <path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
-    </svg>
-  </button>
-
-  <!-- Botão de alternância de modo de navegação -->
-  <button
-    class="btn nav-mode-toggle"
-    class:active={navigationMode === 'vertical'}
-    on:click={toggleNavigationMode}
-    aria-label={navigationMode === 'vertical' ? 'Mudar para modo horizontal (página única)' : 'Mudar para modo vertical (scroll contínuo)'}
-    title={navigationMode === 'vertical' ? 'Modo vertical ativo — clique para horizontal' : 'Modo horizontal ativo — clique para scroll contínuo'}
-  >
-    {#if navigationMode === 'vertical'}
-      <!-- Ícone scroll vertical (páginas empilhadas) -->
-      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="icon">
-        <path stroke-linecap="round" stroke-linejoin="round" d="M3 5h18M3 9h18M3 13h18M3 17h18" />
-      </svg>
-    {:else}
-      <!-- Ícone página única (horizontal/single page) -->
-      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="icon">
-        <path stroke-linecap="round" stroke-linejoin="round" d="M9 4.5v15m6-15v15M3 9h18M3 15h18" />
-      </svg>
+    {#if showCarousel}
+      <CarouselNavigator
+        currentFile={file}
+        carousel={$carousel}
+        on:navigate={(e) => navigateToPdf(e.detail.louvor)}
+      />
     {/if}
-  </button>
 
-  <!-- Abra com /leitor?file=/pdfs/exemplo.pdf&titulo=Exemplo&subtitulo=Sub -->
-  <!-- Atalhos: Ctrl/Cmd +/−/0, PgUp/PgDn/↑/↓ -->
-  
+    {#if showPagePrev}
+      <div class="ctrl page-nav-prev">
+        <GestureButton
+          on:click={prevPage}
+          on:longpress={goToFirstPage}
+          longPressDuration={500}
+          hapticFeedback={true}
+          preventDefault={true}
+          ariaLabel="Página anterior (long press: primeira página)"
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="icon">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M10.5 19.5 3 12m0 0 7.5-7.5M3 12h18" />
+          </svg>
+        </GestureButton>
+      </div>
+    {/if}
+
+    <div class="indicator" aria-label="Página atual e total">
+      <span class="current">{currentPage}</span>
+      <span class="total">/ {totalPages}</span>
+    </div>
+
+    {#if showPageNext}
+      <div class="ctrl page-nav-next">
+        <GestureButton
+          on:click={nextPage}
+          on:longpress={goToLastPage}
+          longPressDuration={500}
+          hapticFeedback={true}
+          preventDefault={true}
+          ariaLabel="Próxima página (long press: última página)"
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="icon">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M13.5 4.5 21 12m0 0-7.5 7.5M21 12H3" />
+          </svg>
+        </GestureButton>
+      </div>
+    {/if}
+
+    {#if showZoomMinus}
+      <button class="btn zoom-minus" on:click={zoomOut} aria-label="Diminuir zoom">
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="icon">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M5 12h14" />
+        </svg>
+      </button>
+    {/if}
+
+    {#if showZoomFit}
+      <!-- zoom-fit: GestureButton age como o elemento interativo (sem button aninhado) -->
+      <div class="btn zoom-fit" class:page-fit={preferredFitMode === 'page-fit'} class:page-width={preferredFitMode === 'page-width'}>
+        <GestureButton
+          on:click={zoomFit}
+          on:longpress={toggleFitMode}
+          longPressDuration={500}
+          hapticFeedback={true}
+          preventDefault={true}
+          ariaLabel="Ajustar zoom (long press: alternar page-fit/page-width)"
+        >
+          {zoomPercent}%
+          <div class="zoom-fit-indicator bar page-fit top"></div>
+          <div class="zoom-fit-indicator bar page-fit bottom"></div>
+          <div class="zoom-fit-indicator bar page-width left"></div>
+          <div class="zoom-fit-indicator bar page-width right"></div>
+        </GestureButton>
+      </div>
+    {/if}
+
+    {#if showZoomPlus}
+      <button class="btn zoom-plus" on:click={zoomIn} aria-label="Aumentar zoom">
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="icon">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
+        </svg>
+      </button>
+    {/if}
+
+    {#if showNavMode}
+      <button
+        class="btn nav-mode-toggle"
+        class:active={navigationMode === 'vertical'}
+        on:click={toggleNavigationMode}
+        aria-label={navigationMode === 'vertical' ? 'Mudar para modo horizontal (página única)' : 'Mudar para modo vertical (scroll contínuo)'}
+        title={navigationMode === 'vertical' ? 'Modo vertical ativo — clique para horizontal' : 'Modo horizontal ativo — clique para scroll contínuo'}
+      >
+        {#if navigationMode === 'vertical'}
+          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="icon">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M3 5h18M3 9h18M3 13h18M3 17h18" />
+          </svg>
+        {:else}
+          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="icon">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M9 4.5v15m6-15v15M3 9h18M3 15h18" />
+          </svg>
+        {/if}
+      </button>
+    {/if}
+
+    {#if showLayerToggle}
+      <button
+        class="btn layer-toggle"
+        on:click={cycleToolbarLayer}
+        aria-label="Camada {activeToolbarLayer} de {toolbarLayerCount} — clique para alternar controles"
+        title="Camada {activeToolbarLayer} de {toolbarLayerCount}"
+      >
+        {activeToolbarLayer}
+      </button>
+    {/if}
+
+  </div>
 </div>
 
 <!-- FAB para desativar fullscreen -->
