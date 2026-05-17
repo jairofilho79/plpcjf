@@ -665,14 +665,18 @@
     // Define escala inicial e sincroniza estados
     eventBus.on('pagesinit', () => {
       if (viewer) {
-        if (preferredFitMode === 'page-width') {
-          // For page-width, calculate manually instead of using PDF.js algorithm
-          // Force recalculate on initial load
-          setTimeout(() => {
-            applyPageWidthZoom(true);
-          }, 100);
+        // Modo vertical usa page-width por padrão para melhor leitura contínua
+        const effectiveFitMode = navigationMode === 'vertical' ? 'page-width' : preferredFitMode;
+        if (effectiveFitMode === 'page-width') {
+          if (navigationMode === 'vertical') {
+            // Garantir que a preferência também fique salva como page-width no vertical
+            preferredFitMode = 'page-width';
+            setFitMode('page-width');
+            zoomCtrl.clearUserScale();
+          }
+          setTimeout(() => { applyPageWidthZoom(true); }, 100);
         } else {
-          viewer.currentScaleValue = preferredFitMode;
+          viewer.currentScaleValue = effectiveFitMode;
         }
       }
       perfMark('pdf-pagesinit')
@@ -871,6 +875,8 @@
   // Handle touch start for gestures
   function onTouchStart(e: TouchEvent) {
     if (!viewer || !containerEl) return;
+    // Modo vertical: scroll e pan nativos — sem gestos customizados
+    if (navigationMode === 'vertical') return;
     
     const touches = e.touches;
     
@@ -928,6 +934,8 @@
   // Handle touch move for gestures
   function onTouchMove(e: TouchEvent) {
     if (!viewer || !containerEl) return;
+    // Modo vertical: scroll e pan nativos — sem gestos customizados
+    if (navigationMode === 'vertical') return;
     
     const touches = e.touches;
     
@@ -985,6 +993,8 @@
   // Handle touch end for gestures
   function onTouchEnd(e: TouchEvent) {
     if (!viewer || !containerEl) return;
+    // Modo vertical: scroll e pan nativos — sem gestos customizados
+    if (navigationMode === 'vertical') return;
     
     const touches = e.touches;
     
@@ -1146,10 +1156,16 @@
     navigationMode = newMode;
     setNavigationMode(newMode);
     zoomCtrl.invalidateCache();
+    zoomCtrl.clearUserScale();
+
+    // Modo vertical sempre começa com page-width para leitura contínua
+    if (newMode === 'vertical') {
+      preferredFitMode = 'page-width';
+      setFitMode('page-width');
+    }
 
     const savedPdfDoc = viewer?.pdfDocument ?? null;
     const savedPage = (viewer as any)?.currentPageNumber ?? 1;
-    const savedScale = (viewer as any)?.currentScale ?? 1;
 
     // Criar novo viewer com o modo escolhido
     viewer = viewerAdapterInst.switchMode(newMode, _viewerNS);
@@ -1162,11 +1178,11 @@
     viewer.setDocument(savedPdfDoc);
 
     const restoreOnInit = () => {
+      // Aplicar page-width sempre ao entrar no vertical; no horizontal respeitar preferência
       if (preferredFitMode === 'page-width') {
         zoomCtrl.schedulePageWidth({ viewer, containerEl: containerEl!, viewerEl: viewerEl!, forceRecalculate: true, delayMs: 80 });
       } else {
         viewer.currentScaleValue = preferredFitMode;
-        viewer.currentScale = savedScale;
       }
       if (savedPage > 1) {
         viewer.currentPageNumber = savedPage;
@@ -1202,11 +1218,13 @@
 </svelte:head>
 
 <style>
-  /* Ensure body and html don't have margins/padding that could create gaps */
-  :global(body), :global(html) {
+  /* Travar scroll de html/body no leitor para evitar scroll residual no iOS */
+  :global(html), :global(body) {
     margin: 0;
     padding: 0;
     overflow-x: hidden;
+    height: 100%;
+    overscroll-behavior: none;
   }
 
   .container {
@@ -1223,6 +1241,10 @@
     max-width: 100vw;
     z-index: 1; /* ensure it overlays page background */
     touch-action: pan-x pan-y; /* Allow scrolling but prevent default pinch */
+    /* Impede que o scroll do PDF se propague para a página — crítico no iOS */
+    overscroll-behavior: contain;
+    /* Scroll suave e inercia no iOS/Safari */
+    -webkit-overflow-scrolling: touch;
   }
 
   /* Viewer base width equals viewport; zooms can overflow horizontally for scroll */
@@ -1931,7 +1953,7 @@
     spellcheck="false"
   ></textarea>
   
-  <!-- Zonas laterais: apenas no modo horizontal -->
+  <!-- Zonas de navegação: apenas no modo horizontal -->
   {#if navigationMode === 'horizontal'}
     <!-- Zona de navegação esquerda -->
     <div class="navigation-zone left">
@@ -1958,19 +1980,19 @@
         <div class="touch-zone right"></div>
       </GestureButton>
     </div>
-  {/if}
 
-  <!-- Zona central: sempre presente (long press ativa toolbar) -->
-  <div class="navigation-zone center">
-    <GestureButton
-      on:longpress={toggleToolbar}
-      longPressDuration={500}
-      hapticFeedback={true}
-      preventDefault={false}
-    >
-      <div class="touch-zone center"></div>
-    </GestureButton>
-  </div>
+    <!-- Zona central: long press ativa/desativa toolbar -->
+    <div class="navigation-zone center">
+      <GestureButton
+        on:longpress={toggleToolbar}
+        longPressDuration={500}
+        hapticFeedback={true}
+        preventDefault={false}
+      >
+        <div class="touch-zone center"></div>
+      </GestureButton>
+    </div>
+  {/if}
 
   <div bind:this={viewerEl} class="viewer pdfViewer"></div>
   <!-- pdfjs-dist css hooks on .pdfViewer and .viewer -->
