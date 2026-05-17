@@ -3,6 +3,7 @@
  * Tests for PdfPathManager normalization preserving case and accents
  */
 
+import { describe, test, expect } from 'vitest';
 import PdfPathManager from './PdfPathManager.js';
 
 describe('PdfPathManager', () => {

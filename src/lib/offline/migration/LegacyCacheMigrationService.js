@@ -309,20 +309,17 @@ export class LegacyCacheMigrationService {
                   status: 'migrated'
                 });
                 migrated++;
+                // Only delete from Cache API AFTER IDB write succeeds.
+                try {
+                  await cache.delete(request);
+                } catch {
+                  // Non-critical: stale Cache API entry; ignore.
+                }
               } else {
                 skipped++;
               }
             } else {
               skipped++;
-            }
-
-            // Only delete from Cache API AFTER IDB write succeeds.
-            // Failures above skip the delete so the entry remains for the next attempt.
-            try {
-              const cache = await caches.open(cacheName);
-              await cache.delete(request);
-            } catch {
-              // Non-critical: stale Cache API entry; ignore.
             }
           }
         } catch (entryError) {

@@ -80,9 +80,8 @@ describe('PdfValidator Integration Tests', () => {
       expect(result.available).toBe(true);
       expect(result.source).toBe('cache');
       expect(result.normalizedPath).toBeTruthy();
-      expect(cacheStorageAdapter.hasPdf).toHaveBeenCalledWith(
-        urlNormalizer.normalizeForCache(pdfPath)
-      );
+      // CacheValidator uses PdfPathManager.normalizeForStorage which preserves case
+      expect(cacheStorageAdapter.hasPdf).toHaveBeenCalledWith('assets/ColAdultos/001.pdf');
     });
 
     it('should return false when PDF is not in cache', async () => {
@@ -105,9 +104,8 @@ describe('PdfValidator Integration Tests', () => {
       
       await cacheValidator.validate(pdfPath);
       
-      // Verify normalization was applied
-      const normalizedPath = urlNormalizer.normalizeForCache(pdfPath);
-      expect(cacheStorageAdapter.hasPdf).toHaveBeenCalledWith(normalizedPath);
+      // CacheValidator uses PdfPathManager.normalizeForStorage: removes leading slash, preserves case
+      expect(cacheStorageAdapter.hasPdf).toHaveBeenCalledWith('assets/ColAdultos/001.pdf');
     });
   });
 
@@ -152,16 +150,16 @@ describe('PdfValidator Integration Tests', () => {
     it('should validate PDF availability via network when online', async () => {
       const pdfPath = 'assets/ColAdultos/001.pdf';
       
-      // Mock fetch to return success
-      global.fetch = vi.fn().mockResolvedValue({
-        ok: true,
-        status: 200
-      });
+      // Use vi.stubGlobal so the module also sees the mock
+      const mockFetch = vi.fn().mockResolvedValue({ ok: true, status: 200 });
+      vi.stubGlobal('fetch', mockFetch);
       
       const result = await networkValidator.validate(pdfPath, { checkNetwork: true });
       
       expect(result.source).toBe('network');
-      expect(global.fetch).toHaveBeenCalled();
+      expect(mockFetch).toHaveBeenCalled();
+      
+      vi.unstubAllGlobals();
     });
 
     it('should skip network check when offline', async () => {
@@ -228,11 +226,9 @@ describe('PdfValidator Integration Tests', () => {
       isPdfAvailableInIndex.mockReturnValue(null); // Index unavailable
       cacheStorageAdapter.hasPdf.mockResolvedValue(false); // Not in cache
       
-      // Mock network to return success
-      global.fetch = vi.fn().mockResolvedValue({
-        ok: true,
-        status: 200
-      });
+      // Use vi.stubGlobal so the module also sees the mock
+      const mockFetch = vi.fn().mockResolvedValue({ ok: true, status: 200 });
+      vi.stubGlobal('fetch', mockFetch);
       
       const result = await compositeValidator.validate(pdfPath, {
         useIndex: true,
@@ -241,6 +237,8 @@ describe('PdfValidator Integration Tests', () => {
       });
       
       expect(result.source).toBe('network');
+      
+      vi.unstubAllGlobals();
     });
   });
 
@@ -253,26 +251,25 @@ describe('PdfValidator Integration Tests', () => {
       
       const result = await compositeValidator.validate(pdfPath, { pdfId });
       
-      // Verify normalization was applied
-      const normalizedPath = urlNormalizer.normalizeForCache(pdfPath);
-      expect(cacheStorageAdapter.hasPdf).toHaveBeenCalledWith(normalizedPath);
-      expect(result.normalizedPath).toBe(normalizedPath);
+      // PdfPathManager.normalizeForStorage removes leading slash and preserves case
+      const expectedPath = 'assets/ColAdultos/001.pdf';
+      expect(cacheStorageAdapter.hasPdf).toHaveBeenCalledWith(expectedPath);
+      expect(result.normalizedPath).toBe(expectedPath);
     });
 
     it('should handle different URL formats and normalize correctly', async () => {
-      const variations = [
-        'assets/ColAdultos/001.pdf',
-        '/assets/ColAdultos/001.pdf',
-        'Assets/ColAdultos/001.pdf'
-      ];
-      
       cacheStorageAdapter.hasPdf.mockResolvedValue(true);
       
-      for (const pdfPath of variations) {
-        const result = await cacheValidator.validate(pdfPath);
-        
-        // All should normalize to the same path
-        expect(result.normalizedPath).toBe('assets/coladultos/001.pdf');
+      // PdfPathManager.normalizeForStorage preserves original case, removes leading slashes
+      const cases = [
+        { input: 'assets/ColAdultos/001.pdf', expected: 'assets/ColAdultos/001.pdf' },
+        { input: '/assets/ColAdultos/001.pdf', expected: 'assets/ColAdultos/001.pdf' },
+        { input: 'Assets/ColAdultos/001.pdf', expected: 'Assets/ColAdultos/001.pdf' }
+      ];
+      
+      for (const { input, expected } of cases) {
+        const result = await cacheValidator.validate(input);
+        expect(result.normalizedPath).toBe(expected);
       }
     });
   });

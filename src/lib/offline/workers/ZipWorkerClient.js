@@ -22,26 +22,33 @@ export class ZipWorkerClient {
     const handlers = this.pending.get(requestId);
     if (!handlers) return;
 
-    if (event === WORKER_EVENTS.PROGRESS || event === WORKER_EVENTS.ENTRY_ERROR || event === WORKER_EVENTS.STARTED) {
-      handlers.onProgress?.(message);
-      return;
-    }
+    switch (event) {
+      case WORKER_EVENTS.DOWNLOADING:
+      case WORKER_EVENTS.EXTRACTING:
+      case WORKER_EVENTS.STORING:
+      case WORKER_EVENTS.PROGRESS:
+      case WORKER_EVENTS.ENTRY_ERROR:
+      case WORKER_EVENTS.STARTED:
+        handlers.onProgress?.(message);
+        return;
 
-    if (event === WORKER_EVENTS.COMPLETE) {
-      this.pending.delete(requestId);
-      handlers.resolve(message);
-      return;
-    }
+      case WORKER_EVENTS.COMPLETE:
+        this.pending.delete(requestId);
+        handlers.resolve(message);
+        return;
 
-    if (event === WORKER_EVENTS.CANCELLED) {
-      this.pending.delete(requestId);
-      handlers.reject(new Error('DOWNLOAD_CANCELLED'));
-      return;
-    }
+      case WORKER_EVENTS.CANCELLED:
+        this.pending.delete(requestId);
+        handlers.reject(new Error('DOWNLOAD_CANCELLED'));
+        return;
 
-    if (event === WORKER_EVENTS.ERROR) {
-      this.pending.delete(requestId);
-      handlers.reject(new Error(message?.error || 'Erro no worker de ZIP'));
+      case WORKER_EVENTS.ERROR:
+        this.pending.delete(requestId);
+        handlers.reject(new Error(message?.error || 'Erro no worker de ZIP'));
+        return;
+
+      default:
+        break;
     }
   }
 
@@ -50,11 +57,12 @@ export class ZipWorkerClient {
    *   packageUrl: string,
    *   expectedPdfs?: string[],
    *   onProgress?: Function,
-   *   abortSignal?: AbortSignal|null,
-   *   pdfMetadata?: Record<string, {pdfId?: string, category?: string, manifestRevision?: string}>|null
+   *   abortSignal?: AbortSignal | null,
+   *   pdfMetadata?: Record<string, {pdfId?: string, category?: string, manifestRevision?: string}> | null,
+   *   contentLength?: number
    * }} options
    */
-  ingestZip({ packageUrl, expectedPdfs = [], onProgress = null, abortSignal = null, pdfMetadata = null }) {
+  ingestZip({ packageUrl, expectedPdfs = [], onProgress = null, abortSignal = null, pdfMetadata = null, contentLength = 0 }) {
     this._ensureWorker();
     const requestId = `zip-worker-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 
@@ -83,7 +91,8 @@ export class ZipWorkerClient {
         requestId,
         packageUrl,
         expectedPdfs,
-        pdfMetadata
+        pdfMetadata,
+        contentLength
       });
     });
   }

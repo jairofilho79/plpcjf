@@ -84,21 +84,19 @@
       </div>
     {/if}
     
-    <!-- Progress ring for download with two phases -->
+    <!-- Progress ring for download with two phases (download/extract = first half, storing = second half) -->
     {#if downloading && progress > 0}
-      <!-- Phase 1: Download (first half of ring, 0-180 degrees) -->
-      {@const phase1Completed = downloadPhase === 'storing' || downloadPhase === 'complete'}
-      {@const phase1Progress = phase1Completed ? 100 : (downloadPhase === 'downloading' ? phaseProgress : 0)}
-      {@const phase1Circumference = 44} <!-- Half circle: PI * 14 -->
+      {@const isDownloadPhase = downloadPhase === 'downloading' || downloadPhase === 'extracting'}
+      {@const isStorePhase = downloadPhase === 'storing' || downloadPhase === 'complete'}
+      {@const phase1Progress = isStorePhase ? 100 : (isDownloadPhase ? phaseProgress : 0)}
+      {@const phase1Circumference = 44}
       {@const phase1Offset = phase1Circumference - (phase1Circumference * phase1Progress) / 100}
-      {@const phase1Opacity = downloadPhase === 'downloading' ? 1 : 0.6}
-      
-      <!-- Phase 2: Storing (second half of ring, 180-360 degrees) -->
-      {@const phase2Progress = (downloadPhase === 'storing' || downloadPhase === 'complete') ? phaseProgress : 0}
-      {@const phase2Circumference = 44} <!-- Half circle: PI * 14 -->
+      {@const phase1Opacity = isDownloadPhase ? 1 : 0.6}
+      {@const phase2Progress = isStorePhase ? phaseProgress : 0}
+      {@const phase2Circumference = 44}
       {@const phase2Offset = phase2Circumference - (phase2Circumference * phase2Progress) / 100}
-      {@const phase2Opacity = (downloadPhase === 'storing' || downloadPhase === 'complete') ? 1 : 0.3}
-      
+      {@const phase2Opacity = isStorePhase ? 1 : 0.3}
+
       <svg class="progress-ring" width="32" height="32" viewBox="0 0 32 32">
         <circle
           class="progress-ring-circle phase-1"
@@ -122,25 +120,26 @@
         />
       </svg>
     {/if}
-    
+
     <!-- Tooltip -->
     {#if showTooltip}
       <div class="tooltip">
         {#if downloading}
           <p class="tooltip-title">
-            {downloadPhase === 'downloading' ? 'Baixando Packages...' : 
-             downloadPhase === 'storing' ? 'Salvando em Cache...' : 
-             downloadPhase === 'complete' ? 'Finalizando...' :
-             'Baixando PDFs...'}
+            {downloadPhase === 'downloading' ? 'Baixando pacotes...' :
+             downloadPhase === 'extracting' ? 'Extraindo arquivos...' :
+             downloadPhase === 'storing'    ? 'Salvando em cache...' :
+             downloadPhase === 'complete'   ? 'Finalizando...' :
+             'Preparando download...'}
           </p>
           {#if currentPackage > 0 && totalPackages > 0}
-            <p class="tooltip-text">Package {currentPackage} de {totalPackages}</p>
+            <p class="tooltip-text">Pacote {currentPackage} de {totalPackages}</p>
           {/if}
           <p class="tooltip-text">{progress}% concluído</p>
-          {#if downloadPhase === 'storing' && phaseProgress > 0}
-            <p class="tooltip-text">Fase: Salvamento ({phaseProgress}%)</p>
-          {:else if downloadPhase === 'downloading' && phaseProgress > 0}
-            <p class="tooltip-text">Fase: Download ({phaseProgress}%)</p>
+          {#if phaseProgress > 0}
+            <p class="tooltip-text">
+              {downloadPhase === 'storing' ? `Salvamento: ${phaseProgress}%` : `Download: ${phaseProgress}%`}
+            </p>
           {/if}
         {:else if isOfflineReady}
           <p class="tooltip-title">App Preparada para Offline</p>

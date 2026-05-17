@@ -1,6 +1,6 @@
 import { browser } from '$app/environment';
 import { createLogger } from '../utils/OfflineLogger.js';
-import PdfPathManager from '../utils/PdfPathManager.js';
+import { normalizeIdbId } from '../utils/offlinePathNormalize.js';
 import offlineDexieDb from './dexieDb.js';
 
 const logger = createLogger('IndexedDbAssetRepository');
@@ -11,9 +11,7 @@ export class IndexedDbAssetRepository {
   }
 
   _normalizeId(path) {
-    const normalized = PdfPathManager.normalizeForStorage(path);
-    if (!normalized) return '';
-    return normalized.startsWith('/') ? normalized : `/${normalized}`;
+    return normalizeIdbId(path);
   }
 
   /**

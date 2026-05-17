@@ -265,7 +265,8 @@ export class DownloadManager {
           }
           
           this._updateOfflineState(stateUpdate);
-        }
+        },
+        filteredLouvores
       );
 
       // Sync cache after download
@@ -280,7 +281,8 @@ export class DownloadManager {
         downloading: false,
         progress: finalProgress,
         completed: result.completed,
-        failed: result.failed
+        failed: result.failed,
+        stillMissing: result.stillMissing || 0
       });
       this._updateJobSnapshot({
         status: 'completed',
@@ -293,9 +295,10 @@ export class DownloadManager {
       });
 
       return {
-        success: result.failed === 0,
+        success: (result.failed === 0) && ((result.stillMissing || 0) === 0),
         completed: result.completed,
         failed: result.failed,
+        stillMissing: result.stillMissing || 0,
         total: pdfUrls.length,
         categories
       };
@@ -441,7 +444,7 @@ export class DownloadManager {
    * @returns {Promise<{completed: number, failed: number}>} Download result
    * @private
    */
-  async _downloadPackages(categories, pdfUrls, partsByCategory, pdfMetadataMap, onProgress = null) {
+  async _downloadPackages(categories, pdfUrls, partsByCategory, pdfMetadataMap, onProgress = null, filteredLouvores = null) {
     // Initialize progress
     this.progress = new DownloadProgressTracker(pdfUrls.length);
     this.progress.start();
@@ -504,6 +507,12 @@ export class DownloadManager {
         });
 
         try {
+          // Calculate cumulative bytes across all packages for weighted progress
+          const totalBytes = packagesInfo.reduce((sum, pkg) => sum + (pkg.part?.size || 0), 0);
+          const bytesBeforeThisPackage = packagesInfo
+            .slice(0, packageIndex)
+            .reduce((sum, pkg) => sum + (pkg.part?.size || 0), 0);
+
           // Strict per-package flow:
           // download -> extract -> store -> release memory before next package.
           const result = await packageDownloader.downloadExtractStorePackage(
@@ -513,57 +522,66 @@ export class DownloadManager {
               abortSignal: this.abortController?.signal,
               batch: true,
               pdfMetadataMap,
-            onProgress: (progressData) => {
-              // Calculate PDFs from previous packages that are already complete
-              // Use only completedPdfs (not estimatedPdfCount) to avoid inflating progress
-              // when a package legitimately stored 0 PDFs
-              const pdfsInPreviousPackages = packagesInfo
-                .slice(0, packageIndex)
-                .reduce((sum, pkg) => sum + (pkg.completedPdfs || 0), 0);
-              
-              // Global progress = PDFs from previous packages + PDFs completed in current package
-              const globalCompleted = pdfsInPreviousPackages + progressData.completed;
-              
-              // Calculate global percentage based on total PDFs
-              const globalPercentage = totalPdfs > 0 
-                ? Math.min(99, Math.floor((globalCompleted / totalPdfs) * 100))
-                : 0;
-              
-              // Note: Don't update this.progress.completed here - it will be updated when storage completes
-// to avoid double counting. Use globalCompleted only for UI callback.
-              
-              // Detect phase based on progressData.phase
-              let downloadPhase = 'downloading';
-              if (progressData.phase === 'storing') {
-                downloadPhase = 'storing';
-              } else if (progressData.phase === 'complete') {
-                downloadPhase = 'storing'; // Keep storing phase until package finishes
-              }
-              
-              // Update UI through callback with phase information and package info
-              if (onProgress) {
-                onProgress({
+              contentLength: part.size || 0,
+              onProgress: (progressData) => {
+                const phase = progressData.phase || 'downloading';
+
+                // Map download phase to UI phase names
+                const downloadPhase =
+                  phase === 'extracting' ? 'downloading' :
+                  phase === 'storing'   ? 'storing' :
+                  phase === 'complete'  ? 'storing' :
+                  'downloading';
+
+                // Byte-weighted global percentage during download/extract phases
+                let globalPercentage;
+                if (phase === 'downloading' || phase === 'extracting') {
+                  const partSize = part.size || 0;
+                  const bytesThisPackage = partSize > 0
+                    ? Math.floor(partSize * ((progressData.percentage || 0) / 100))
+                    : 0;
+                  const globalBytes = bytesBeforeThisPackage + bytesThisPackage;
+                  globalPercentage = totalBytes > 0
+                    ? Math.min(49, Math.floor((globalBytes / totalBytes) * 50))  // First 50% = download
+                    : 0;
+                } else {
+                  // Storing phase: use PDF count for the second half (50–99%)
+                  const pdfsInPreviousPackages = packagesInfo
+                    .slice(0, packageIndex)
+                    .reduce((sum, pkg) => sum + (pkg.completedPdfs || 0), 0);
+                  const globalCompleted = pdfsInPreviousPackages + (progressData.completed || 0);
+                  globalPercentage = totalPdfs > 0
+                    ? Math.min(99, 50 + Math.floor((globalCompleted / totalPdfs) * 49))
+                    : 50;
+                }
+
+                const pdfsInPreviousPackages = packagesInfo
+                  .slice(0, packageIndex)
+                  .reduce((sum, pkg) => sum + (pkg.completedPdfs || 0), 0);
+                const globalCompleted = pdfsInPreviousPackages +
+                  (phase === 'storing' ? (progressData.completed || 0) : 0);
+
+                if (onProgress) {
+                  onProgress({
+                    completed: globalCompleted,
+                    total: totalPdfs,
+                    percentage: globalPercentage,
+                    failed,
+                    downloadPhase,
+                    phaseProgress: progressData.percentage || 0,
+                    currentPackage: packageIndex + 1,
+                    totalPackages
+                  });
+                }
+                this._updateJobSnapshot({
+                  status: 'running',
+                  phase: downloadPhase,
+                  progress: globalPercentage,
                   completed: globalCompleted,
-                  total: totalPdfs,
-                  percentage: globalPercentage,
-                  failed: failed,
-                  storagePhase: progressData.phase,
-                  packageProgress: progressData.percentage,
-                  downloadPhase: downloadPhase,
-                  phaseProgress: progressData.percentage, // Progress of current phase
-                  currentPackage: packageIndex + 1,
-                  totalPackages: totalPackages
+                  failed,
+                  total: totalPdfs
                 });
               }
-              this._updateJobSnapshot({
-                status: 'running',
-                phase: downloadPhase,
-                progress: globalPercentage,
-                completed: globalCompleted,
-                failed,
-                total: totalPdfs
-              });
-            }
             }
           );
           const stored = result.stored;
@@ -688,20 +706,36 @@ export class DownloadManager {
       // Sync cache after download (batch mode prevents intermediate syncs)
       await cacheSync.sync();
 
-      // FASE 2: Mark download as complete and update final progress
+      // Post-download verification: check whether any expected PDFs are still missing.
+      // This catches silent failures (stored=0, network issues, path mismatches, etc.)
+      let stillMissing = 0;
+      try {
+        const persistedSet = await offlineInventoryRepository.getPersistedLookupSet();
+        const missingAfter = offlineInventoryRepository.computeMissingPdfs(
+          filteredLouvores ?? [],
+          persistedSet
+        );
+        stillMissing = missingAfter.length;
+        if (stillMissing > 0) {
+          logger.warn('DownloadManager',
+            `Post-download: ${stillMissing} PDFs still missing after downloading ${totalPackages} packages`);
+          failed = Math.max(failed, stillMissing);
+        }
+      } catch (verifyError) {
+        logger.warn('DownloadManager', 'Post-download verification failed (non-critical)', verifyError);
+      }
+
+      // Mark download as complete and update final progress
       if (onProgress) {
-        const finalProgress = this.progress.getProgress();
-        const finalPercentage = totalPdfs > 0 
-          ? Math.floor((completed / totalPdfs) * 100)
-          : 100;
-        
         onProgress({
-          ...finalProgress,
-          percentage: finalPercentage,
+          completed,
+          total: totalPdfs,
+          percentage: 100,
+          failed,
           downloadPhase: 'complete',
           phaseProgress: 100,
           currentPackage: totalPackages,
-          totalPackages: totalPackages
+          totalPackages
         });
       }
       this._updateJobSnapshot({
@@ -718,11 +752,12 @@ export class DownloadManager {
         completed,
         failed,
         total: pdfUrls.length,
+        stillMissing,
         categories: categories || [],
-        batch: true  // Indicate this was a batch operation
+        batch: true
       });
 
-      return { completed, failed };
+      return { completed, failed, stillMissing };
     } catch (error) {
       if (error.message === 'DOWNLOAD_CANCELLED') {
         offlineEvents.emit(EVENTS.DOWNLOAD_ERROR, { error: 'Download cancelled' });

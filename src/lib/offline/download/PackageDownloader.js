@@ -276,40 +276,111 @@ export class PackageDownloader {
    * @returns {Promise<{stored: number, extracted: number, bytesDownloaded: number}>}
    */
   async downloadExtractStorePackage(packageUrl, expectedPdfs = [], options = {}) {
-    const { abortSignal = null, onProgress = null, batch = true, pdfMetadataMap = null } = options;
+    const {
+      abortSignal = null,
+      onProgress = null,
+      batch = true,
+      pdfMetadataMap = null,
+      contentLength = 0
+    } = options;
 
     const useZipWorker = getConfig('OFFLINE_IDB_ENABLED') === true &&
       getConfig('OFFLINE_WORKER_ZIP_STREAMING_ENABLED') === true &&
       typeof Worker !== 'undefined';
 
+    // Build absolute URL once — used by both the worker path and the fallback
+    const absoluteUrl = this._resolveAbsoluteUrl(packageUrl);
+
     if (useZipWorker) {
-      logger.info('PackageDownloader', `Using ZIP worker pipeline for ${packageUrl}`);
+      logger.info('PackageDownloader', `Using ZIP worker pipeline for ${absoluteUrl}`);
+
       const result = await zipWorkerClient.ingestZip({
-        packageUrl,
+        packageUrl: absoluteUrl,
         expectedPdfs,
         abortSignal,
-        // Serialize the Map to a plain object for postMessage transfer
         pdfMetadata: pdfMetadataMap ? Object.fromEntries(pdfMetadataMap) : null,
+        contentLength,
         onProgress: (message) => {
           if (!onProgress) return;
-          const completed = Number(message?.completed || 0);
-          const total = Number(message?.total || 0);
-          const percentage = total > 0 ? Math.floor((completed / total) * 100) : 0;
-          onProgress({
-            phase: 'storing',
-            completed,
-            total,
-            percentage
-          });
+          const { event, completed = 0, total = 0, percentage = 0,
+                  receivedBytes = 0, totalBytes = 0 } = message || {};
+
+          // Map worker events to download phases
+          if (event === 'DOWNLOADING') {
+            onProgress({
+              phase: 'downloading',
+              completed: receivedBytes,
+              total: totalBytes,
+              percentage
+            });
+          } else if (event === 'EXTRACTING') {
+            onProgress({
+              phase: 'extracting',
+              completed,
+              total,
+              percentage
+            });
+          } else if (event === 'STORING' || event === 'PROGRESS') {
+            const pct = total > 0 ? Math.floor((completed / total) * 100) : percentage;
+            onProgress({
+              phase: 'storing',
+              completed,
+              total,
+              percentage: pct
+            });
+          }
         }
       });
 
-      return {
-        stored: Number(result?.stored || 0),
-        extracted: Number(result?.extracted || 0),
-        bytesDownloaded: Number(result?.bytesDownloaded || 0)
-      };
+      const stored = Number(result?.stored || 0);
+      const extracted = Number(result?.extracted || 0);
+      const bytesDownloaded = Number(result?.bytesDownloaded || 0);
+
+      // If the worker stored nothing but there were expected PDFs, fall back to the
+      // main-thread fflate + CacheStorageAdapter pipeline for this package.
+      if (stored === 0 && expectedPdfs.length > 0) {
+        logger.warn('PackageDownloader',
+          `Worker stored 0 PDFs for ${absoluteUrl} (${expectedPdfs.length} expected). ` +
+          'Falling back to main-thread pipeline.');
+        console.warn('[PackageDownloader] Worker returned stored=0, retrying with main-thread pipeline:', absoluteUrl);
+
+        return this._downloadExtractStoreMainThread(absoluteUrl, expectedPdfs, {
+          abortSignal,
+          onProgress,
+          batch,
+          pdfMetadataMap
+        });
+      }
+
+      return { stored, extracted, bytesDownloaded };
     }
+
+    // No worker or worker disabled — use main-thread fflate pipeline directly
+    return this._downloadExtractStoreMainThread(absoluteUrl, expectedPdfs, {
+      abortSignal,
+      onProgress,
+      batch,
+      pdfMetadataMap
+    });
+  }
+
+  /**
+   * Main-thread download/extract/store pipeline using fflate + CacheStorageAdapter.
+   * Used directly when the ZIP worker is disabled, and as fallback when the worker
+   * returns stored=0 for a package that had expected PDFs.
+   *
+   * @param {string} absoluteUrl - Fully resolved URL of the ZIP package
+   * @param {string[]} expectedPdfs
+   * @param {Object} options
+   * @param {AbortSignal|null} [options.abortSignal]
+   * @param {Function|null} [options.onProgress]
+   * @param {boolean} [options.batch]
+   * @param {Map<string,object>|null} [options.pdfMetadataMap]
+   * @returns {Promise<{stored: number, extracted: number, bytesDownloaded: number}>}
+   * @private
+   */
+  async _downloadExtractStoreMainThread(absoluteUrl, expectedPdfs = [], options = {}) {
+    const { abortSignal = null, onProgress = null, batch = true, pdfMetadataMap = null } = options;
 
     /** @type {ExtractedPdf[]} */
     let extractedPdfs = [];
@@ -317,10 +388,16 @@ export class PackageDownloader {
     let zipBlob = null;
     let bytesDownloaded = 0;
 
+    // Signal start of download phase to the UI
+    onProgress?.({ phase: 'downloading', completed: 0, total: 0, percentage: 0 });
+
     try {
-      const downloadResult = await this.downloadPackage(packageUrl, abortSignal);
+      const downloadResult = await this.downloadPackage(absoluteUrl, abortSignal);
       zipBlob = downloadResult.blob;
       bytesDownloaded = downloadResult.bytesDownloaded;
+
+      // Signal start of extracting phase
+      onProgress?.({ phase: 'extracting', completed: 0, total: 0, percentage: 0 });
 
       extractedPdfs = await this.extractPdfsFromZip(zipBlob, expectedPdfs);
       const stored = await this.storePdfsInCache(extractedPdfs, {
@@ -347,6 +424,39 @@ export class PackageDownloader {
       extractedPdfs.length = 0;
       zipBlob = null;
     }
+  }
+
+  /**
+   * Resolve an absolute URL from a raw package URL or filename.
+   * Mirrors the logic in downloadPackage() but returns the URL string only.
+   *
+   * @param {string} packageUrl
+   * @returns {string}
+   * @private
+   */
+  _resolveAbsoluteUrl(packageUrl) {
+    let normalizedUrl = packageUrl;
+    if (packageUrl.startsWith('http://') || packageUrl.startsWith('https://')) {
+      try {
+        const url = new URL(packageUrl);
+        normalizedUrl = url.pathname;
+      } catch {
+        const match = packageUrl.match(/https?:\/\/[^/]+(\/.*)/);
+        if (match?.[1]) normalizedUrl = match[1];
+      }
+    }
+
+    const fullUrl = normalizedUrl.startsWith('/')
+      ? normalizedUrl
+      : `${this.basePath}/${normalizedUrl}`;
+
+    if (fullUrl.startsWith('http://') || fullUrl.startsWith('https://')) {
+      return fullUrl;
+    }
+    if (typeof window !== 'undefined' && window.location) {
+      return `${window.location.origin}${fullUrl}`;
+    }
+    return fullUrl;
   }
 
   /**

@@ -34,13 +34,15 @@ export class NetworkValidator extends PdfValidator {
     }
 
     // Only check network if online and checkNetwork option is true
-    const shouldCheckNetwork = options.checkNetwork !== false && navigator.onLine;
+    // Treat navigator.onLine === undefined (non-browser envs) as online
+    const isOnline = typeof navigator === 'undefined' || navigator.onLine !== false;
+    const shouldCheckNetwork = options.checkNetwork !== false && isOnline;
     
     if (!shouldCheckNetwork) {
       return {
         available: false,
         source: 'network',
-        normalizedPath: urlNormalizer.normalizeForCache(pdfPath) || '',
+        normalizedPath: PdfPathManager.normalizeForStorage(pdfPath) || '',
         needsDownload: false,
         error: 'Network check skipped (offline or disabled)'
       };
@@ -61,14 +63,21 @@ export class NetworkValidator extends PdfValidator {
       }
 
       // Build full URL using PdfPathManager
-      const fullUrl = PdfPathManager.createRequestUrl(normalizedPath, window.location.origin);
+      const fullUrl = PdfPathManager.createRequestUrl(normalizedPath);
 
       // Try HEAD request to verify if PDF exists
-      const response = await fetch(fullUrl, {
-        method: 'HEAD',
-        cache: 'no-cache',
-        signal: AbortSignal.timeout(5000) // 5 second timeout
-      });
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 5000);
+      let response;
+      try {
+        response = await fetch(fullUrl, {
+          method: 'HEAD',
+          cache: 'no-cache',
+          signal: controller.signal
+        });
+      } finally {
+        clearTimeout(timeoutId);
+      }
 
       const available = response.ok;
       

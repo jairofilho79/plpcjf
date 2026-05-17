@@ -159,11 +159,12 @@ const initialState = {
   autoDownloading: false, // Auto-downloading new PDFs
   offlineManifest: null, // Offline manifest data
   categorySizes: {}, // Map of category -> total size in bytes
-  downloadPhase: 'idle', // Current download phase: 'idle' | 'downloading' | 'storing' | 'complete'
+  downloadPhase: 'idle', // Current download phase: 'idle' | 'downloading' | 'extracting' | 'storing' | 'complete'
   phaseProgress: 0, // Progress of current phase (0-100)
   currentPackage: 0, // Current package being processed (1-indexed)
   totalPackages: 0, // Total number of packages to download
-  validationUnknownCategories: [] // Categories with indeterminate verification
+  validationUnknownCategories: [], // Categories with indeterminate verification
+  stillMissing: 0 // PDFs still missing after download completed
 };
 
 const offlineState = writable(initialState);

@@ -77,7 +77,7 @@ export class CacheValidator extends PdfValidator {
         source: 'cache',
         normalizedPath: normalizedPath,
         needsDownload: !hasPdf && navigator.onLine,
-        url: PdfPathManager.createRequestUrl(normalizedPath, window.location.origin)
+        url: PdfPathManager.createRequestUrl(normalizedPath)
       };
 
       this._logValidation(pdfPath, result);

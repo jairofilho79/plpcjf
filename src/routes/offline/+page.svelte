@@ -982,6 +982,7 @@
   $: phaseProgress = state.phaseProgress ?? progress;
   $: currentPackage = state.currentPackage || 0;
   $: totalPackages = state.totalPackages || 0;
+  $: stillMissing = state.stillMissing || 0;
   $: hasDownloadStatus = downloading || progress > 0 || completed > 0 || failed > 0 || total > 0;
   $: hasDownloadError = !!state.error || (!downloading && failed > 0);
   $: hasQuotaError = state.errorCode === 'QUOTA_EXCEEDED';
@@ -1841,10 +1842,12 @@
           <div class="progress-info">
             <p class="progress-title">
               {#if downloading}
-                {#if downloadPhase === 'storing'}
-                  Salvando no cache...
+                {#if downloadPhase === 'extracting'}
+                  Extraindo arquivos do pacote...
+                {:else if downloadPhase === 'storing'}
+                  Salvando PDFs no cache...
                 {:else if downloadPhase === 'complete'}
-                  Finalizando download...
+                  Finalizando...
                 {:else}
                   Baixando pacotes...
                 {/if}
@@ -1864,7 +1867,18 @@
             </p>
             {#if totalPackages > 0}
               <p class="progress-note">
-                Pacote {currentPackage} de {totalPackages} | Fase: {downloadPhase} ({Math.round(phaseProgress)}%)
+                Pacote {currentPackage} de {totalPackages}
+                {#if phaseProgress > 0}
+                  &mdash;
+                  {downloadPhase === 'storing' ? 'Salvando' :
+                   downloadPhase === 'extracting' ? 'Extraindo' : 'Baixando'}
+                  {Math.round(phaseProgress)}%
+                {/if}
+              </p>
+            {/if}
+            {#if !downloading && stillMissing > 0}
+              <p class="progress-warning">
+                {stillMissing} PDF{stillMissing !== 1 ? 's' : ''} não foram instalados. Tente baixar novamente.
               </p>
             {/if}
           </div>
@@ -2581,6 +2595,13 @@
     opacity: 0.8;
     margin: 1rem 0 0 0;
     font-style: italic;
+  }
+
+  .progress-warning {
+    font-size: 0.875rem;
+    color: #dc3545;
+    font-weight: 600;
+    margin: 0.5rem 0 0 0;
   }
 
   /* Complete section */

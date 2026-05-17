@@ -124,7 +124,8 @@ describe('LegacyCacheMigrationService', () => {
 
     const result = await svc.migrate();
     expect(result.migrated).toBe(0);
-    expect(result.skipped).toBe(3);
+    // 2 legacy caches × 3 entries each = 6 total skipped
+    expect(result.skipped).toBe(6);
   });
 
   it('can be cancelled between batches', async () => {

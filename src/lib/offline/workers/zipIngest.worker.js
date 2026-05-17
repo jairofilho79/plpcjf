@@ -1,9 +1,15 @@
 import Dexie from 'dexie';
 import { BlobReader, BlobWriter, ZipReader } from '@zip.js/zip.js';
 import { WORKER_COMMANDS, WORKER_EVENTS } from './workerProtocol.js';
+import {
+  normalizeIdbId,
+  normalizeStoragePath,
+  buildExpectedSet,
+  shouldIngestZipEntry
+} from '../utils/offlinePathNormalize.js';
 
 const DB_NAME = 'plpc-offline-db';
-const PROGRESS_EVERY = 5;
+const STORE_PROGRESS_EVERY = 5;
 const YIELD_EVERY = 10;
 
 // Mirror the same versioned schema as dexieDb.js so IDB upgrades are consistent
@@ -26,26 +32,86 @@ const db = new WorkerDexieDb();
 const assetsTable = db.table('assets');
 const abortControllers = new Map();
 
-function normalizePath(path) {
-  if (!path) return '';
-  const value = String(path).replace(/^\/+/, '').trim();
-  if (!value) return '';
-  return `/${value}`;
-}
-
-function shouldIngestEntry(entryName, expectedSet) {
-  const normalized = normalizePath(entryName);
-  if (!normalized || !normalized.toLowerCase().endsWith('.pdf')) return false;
-  if (!expectedSet || expectedSet.size === 0) return true;
-
-  return (
-    expectedSet.has(normalized) ||
-    expectedSet.has(normalized.slice(1))
-  );
-}
-
 async function yieldMicroTask() {
   await new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+/**
+ * Download a ZIP with streaming progress reports.
+ * Emits WORKER_EVENTS.DOWNLOADING messages as bytes arrive.
+ *
+ * @param {string} packageUrl
+ * @param {AbortSignal} signal
+ * @param {string} requestId
+ * @param {number} [contentLengthHint] - Size hint from the manifest (bytes)
+ * @returns {Promise<Blob>}
+ */
+async function fetchZipWithProgress(packageUrl, signal, requestId, contentLengthHint = 0) {
+  const response = await fetch(packageUrl, {
+    signal,
+    cache: 'no-store'
+  });
+
+  if (!response.ok) {
+    throw new Error(`Falha ao baixar pacote: ${response.status} ${response.statusText}`);
+  }
+
+  const contentLength =
+    Number(response.headers.get('Content-Length') || 0) ||
+    contentLengthHint ||
+    0;
+
+  // If the response body is not streamable (some SW responses), fall back to blob()
+  if (!response.body) {
+    const blob = await response.blob();
+    self.postMessage({
+      event: WORKER_EVENTS.DOWNLOADING,
+      requestId,
+      receivedBytes: blob.size,
+      totalBytes: blob.size,
+      percentage: 100
+    });
+    return blob;
+  }
+
+  const reader = response.body.getReader();
+  const chunks = [];
+  let receivedBytes = 0;
+  let lastReportedPct = -1;
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+    receivedBytes += value.byteLength;
+
+    const pct = contentLength > 0
+      ? Math.min(99, Math.floor((receivedBytes / contentLength) * 100))
+      : 0;
+
+    if (pct !== lastReportedPct) {
+      lastReportedPct = pct;
+      self.postMessage({
+        event: WORKER_EVENTS.DOWNLOADING,
+        requestId,
+        receivedBytes,
+        totalBytes: contentLength,
+        percentage: pct
+      });
+    }
+  }
+
+  // Final 100% signal
+  self.postMessage({
+    event: WORKER_EVENTS.DOWNLOADING,
+    requestId,
+    receivedBytes,
+    totalBytes: receivedBytes,
+    percentage: 100
+  });
+
+  // Concatenate chunks into a single Blob
+  return new Blob(chunks, { type: 'application/zip' });
 }
 
 /**
@@ -53,10 +119,11 @@ async function yieldMicroTask() {
  *   requestId: string,
  *   packageUrl: string,
  *   expectedPdfs?: string[],
- *   pdfMetadata?: Record<string, {pdfId?: string, category?: string, manifestRevision?: string}>|null
+ *   pdfMetadata?: Record<string, {pdfId?: string, category?: string, manifestRevision?: string}> | null,
+ *   contentLength?: number
  * }} params
  */
-async function ingestZip({ requestId, packageUrl, expectedPdfs = [], pdfMetadata = null }) {
+async function ingestZip({ requestId, packageUrl, expectedPdfs = [], pdfMetadata = null, contentLength = 0 }) {
   const controller = new AbortController();
   abortControllers.set(requestId, controller);
 
@@ -70,89 +137,125 @@ async function ingestZip({ requestId, packageUrl, expectedPdfs = [], pdfMetadata
       packageUrl
     });
 
-    const response = await fetch(packageUrl, {
-      signal: controller.signal,
-      cache: 'no-store'
-    });
+    // Phase 1: Download with streaming progress
+    zipBlob = await fetchZipWithProgress(packageUrl, controller.signal, requestId, contentLength);
 
-    if (!response.ok) {
-      throw new Error(`Falha ao baixar pacote: ${response.status} ${response.statusText}`);
-    }
+    if (controller.signal.aborted) throw new Error('DOWNLOAD_CANCELLED');
 
-    zipBlob = await response.blob();
+    // Phase 2: Extract — list entries and count candidates
     zipReader = new ZipReader(new BlobReader(zipBlob));
     const entries = await zipReader.getEntries();
-    const expectedSet = new Set(expectedPdfs.map((p) => normalizePath(p)).filter(Boolean));
+
+    // Build the expected set using the shared normalizer so that both
+    // /assets/... and assets/... variants are covered.
+    const expectedSet = buildExpectedSet(expectedPdfs);
 
     let totalCandidates = 0;
     for (const entry of entries) {
-      if (!entry?.directory && shouldIngestEntry(entry.filename, expectedSet)) {
+      if (!entry?.directory && shouldIngestZipEntry(entry.filename, expectedSet)) {
         totalCandidates++;
       }
     }
 
-    let processed = 0;
+    // Emit initial EXTRACTING message so the UI can show the extract phase
+    self.postMessage({
+      event: WORKER_EVENTS.EXTRACTING,
+      requestId,
+      completed: 0,
+      total: totalCandidates,
+      percentage: 0
+    });
+
+    let extractedCount = 0;
     let stored = 0;
     let failed = 0;
 
+    // Phase 3: Store each PDF entry into IndexedDB
     for (const entry of entries) {
-      if (controller.signal.aborted) {
-        throw new Error('DOWNLOAD_CANCELLED');
+      if (controller.signal.aborted) throw new Error('DOWNLOAD_CANCELLED');
+
+      if (entry?.directory || !shouldIngestZipEntry(entry?.filename, expectedSet)) {
+        continue;
       }
 
-      const normalizedPath = normalizePath(entry?.filename || '');
-      if (entry?.directory || !shouldIngestEntry(entry?.filename, expectedSet)) {
+      // Emit EXTRACTING progress as we process each entry
+      extractedCount++;
+      self.postMessage({
+        event: WORKER_EVENTS.EXTRACTING,
+        requestId,
+        completed: extractedCount,
+        total: totalCandidates,
+        percentage: totalCandidates > 0
+          ? Math.floor((extractedCount / totalCandidates) * 100)
+          : 0
+      });
+
+      const idbId = normalizeIdbId(entry.filename);
+      const storagePath = normalizeStoragePath(entry.filename);
+
+      if (!idbId || !storagePath) {
+        failed++;
         continue;
       }
 
       try {
         const blob = await entry.getData(new BlobWriter('application/pdf'));
 
-        // Resolve inventory metadata: try both "/path" and "path" key variants
+        // Resolve inventory metadata using both /assets/... and assets/... variants
         const meta = pdfMetadata
-          ? (pdfMetadata[normalizedPath] || pdfMetadata[normalizedPath.slice(1)] || {})
+          ? (pdfMetadata[idbId] || pdfMetadata[storagePath] || {})
           : {};
 
         await assetsTable.put({
-          id: normalizedPath,
-          path: normalizedPath,
+          id: idbId,
+          path: idbId,
           mimeType: blob.type || 'application/pdf',
           size: Number(blob.size || 0),
           updatedAt: Date.now(),
           blob,
-          // v2 inventory fields
           pdfId: meta.pdfId || undefined,
           category: meta.category || undefined,
           status: 'persisted',
           manifestRevision: meta.manifestRevision || undefined
         });
-        stored++;
 
-        // release blob ref ASAP to reduce peak RAM pressure
+        stored++;
       } catch (entryError) {
         failed++;
         self.postMessage({
           event: WORKER_EVENTS.ENTRY_ERROR,
           requestId,
-          path: normalizedPath,
+          path: idbId,
           error: entryError?.message || 'Erro ao processar entrada ZIP'
         });
-      } finally {
-        processed++;
       }
 
-      if (processed % PROGRESS_EVERY === 0 || processed === totalCandidates) {
+      // Emit STORING progress periodically
+      if (stored % STORE_PROGRESS_EVERY === 0 || stored === totalCandidates) {
+        self.postMessage({
+          event: WORKER_EVENTS.STORING,
+          requestId,
+          completed: stored,
+          total: totalCandidates,
+          percentage: totalCandidates > 0
+            ? Math.floor((stored / totalCandidates) * 100)
+            : 0
+        });
+      }
+
+      // Also emit legacy PROGRESS for backward compat
+      if (stored % STORE_PROGRESS_EVERY === 0 || stored === totalCandidates) {
         self.postMessage({
           event: WORKER_EVENTS.PROGRESS,
           requestId,
-          completed: processed,
+          completed: stored,
           total: totalCandidates,
           stored,
           failed
         });
       }
 
-      if (processed % YIELD_EVERY === 0) {
+      if (extractedCount % YIELD_EVERY === 0) {
         await yieldMicroTask();
       }
     }

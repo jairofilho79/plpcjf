@@ -79,7 +79,7 @@ export class IndexValidator extends PdfValidator {
         source: 'index',
         normalizedPath: normalizedPath,
         needsDownload: !indexResult && navigator.onLine,
-        url: PdfPathManager.createRequestUrl(normalizedPath, window.location.origin)
+        url: PdfPathManager.createRequestUrl(normalizedPath)
       };
 
       this._logValidation(pdfPath, result);
