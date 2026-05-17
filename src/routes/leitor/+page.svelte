@@ -893,6 +893,9 @@
     const touches = e.touches;
     isPinching = true;
     swipePageGestureValid = false;
+    // Se havia page-width agendado (pagesloaded/resize/toolbar), ele não deve
+    // sobrescrever o zoom manual que o usuário está iniciando agora.
+    zoomCtrl.cancelScheduled();
     pinchInitialDistance = getTouchDistance(touches[0], touches[1]);
     pinchInitialScale = (viewer as any).currentScale ?? 1;
     pinchCurrentRatio = 1;
@@ -967,6 +970,9 @@
     }
 
     const finalScale = Math.max(0.25, Math.min(4, pinchInitialScale * pinchCurrentRatio));
+    const targetScrollLeft = Math.max(0, pinchStartContentX * finalScale - pinchStartFocalX);
+    const targetScrollTop = Math.max(0, pinchStartContentY * finalScale - pinchStartFocalY);
+    zoomCtrl.cancelScheduled();
 
     // CRÍTICO: definir userScale ANTES de viewer.currentScale.
     // O evento pagechanging disparado pelo PDF.js durante a mudança de escala consulta
@@ -981,11 +987,12 @@
     }
 
     // Após o PDF.js reposicionar o conteúdo via scrollPageIntoView, corrigir scroll
-    // para preservar o ponto focal entre os dedos.
+    // para preservar o ponto focal entre os dedos. Usar snapshots calculados antes
+    // da limpeza do estado, senão a rAF leria variáveis já zeradas e iria para (0,0).
     requestAnimationFrame(() => {
       if (!containerEl) return;
-      containerEl.scrollLeft = Math.max(0, pinchStartContentX * finalScale - pinchStartFocalX);
-      containerEl.scrollTop  = Math.max(0, pinchStartContentY * finalScale - pinchStartFocalY);
+      containerEl.scrollLeft = targetScrollLeft;
+      containerEl.scrollTop = targetScrollTop;
     });
 
     // Limpar estado do pinch

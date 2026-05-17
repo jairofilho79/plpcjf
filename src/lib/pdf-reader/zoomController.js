@@ -63,6 +63,10 @@ export class ZoomController {
    */
   applyPageWidth({ viewer, containerEl, viewerEl, forceRecalculate = false }) {
     if (!viewer || !containerEl || !viewerEl) return;
+    // Não sobrescrever zoom manual do usuário (pinch, atalhos, + / -).
+    // Timers antigos de page-width podem disparar após um pinch; esse guard evita
+    // que eles recoloquem a escala/scroll no início do documento.
+    if (this.userScale !== null) return;
 
     const currentContainerWidth = containerEl.clientWidth;
 
