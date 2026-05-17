@@ -119,12 +119,12 @@
   }
 
   .carousel-control {
-    height: 48px;
+    height: 36px; /* sobrescrito pelo --tbtn-h da toolbar quando usado nela */
     display: flex;
     align-items: center;
     justify-content: center;
     gap: 0.375rem;
-    padding: 0 12px;
+    padding: 0 10px;
     border-radius: 6px;
     background: var(--btn-background-color);
     border: 1px solid rgba(255, 255, 255, 0.12);
@@ -162,16 +162,11 @@
     white-space: nowrap;
   }
 
-  /* Hide label on mobile, show on tablet+ */
+  /* Ocultar rótulo em smartphone, mostrar em tablet+ */
   @media (max-width: 767px) {
-    .carousel-label {
-      display: none;
-    }
+    .carousel-label { display: none; }
   }
-
   @media (min-width: 768px) {
-    .carousel-label {
-      display: inline;
-    }
+    .carousel-label { display: inline; }
   }
 </style>

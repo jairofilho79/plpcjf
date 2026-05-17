@@ -10,6 +10,38 @@
   import { loadPdfJsComplete, loadPdfJsViewer } from '$lib/utils/pdfjsLoader';
   import { clearPdfFromSwCache } from '$lib/utils/swRegistration';
   import { checkEffectiveConnectivity } from '$lib/utils/pdfValidation';
+  import { getFitMode, setFitMode, getNavigationMode, setNavigationMode } from '$lib/pdf-reader/readerPreferences';
+  import { ZoomController } from '$lib/pdf-reader/zoomController';
+  import { resolvePdfSourceUrl as resolveSource } from '$lib/pdf-reader/pdfSourceResolver';
+  import { ViewerAdapter } from '$lib/pdf-reader/viewerAdapter';
+
+  // ── Performance Debug ────────────────────────────────────────────────────────
+  const _perfEnabled = () =>
+    typeof window !== 'undefined' &&
+    localStorage.getItem('plpcjf_perf_debug') === '1'
+
+  function perfMark(name: string) {
+    if (!_perfEnabled()) return
+    try { performance.mark(name) } catch {}
+  }
+
+  function perfMeasure(name: string, start: string, end: string) {
+    if (!_perfEnabled()) return
+    try { performance.measure(name, start, end) } catch {}
+  }
+
+  function perfReport() {
+    if (!_perfEnabled()) return
+    try {
+      const entries = performance.getEntriesByType('measure')
+        .filter(e => e.name.startsWith('pdf'))
+      const lines = entries.map(e => `  ${e.name}: ${e.duration.toFixed(1)}ms`)
+      console.log('[PLPCJF Perf]\n' + lines.join('\n'))
+      performance.clearMarks()
+      performance.clearMeasures()
+    } catch {}
+  }
+  // ────────────────────────────────────────────────────────────────────────────
 
   // Type for PDF.js getDocument function
   type PDFJSGetDocument = (options: { url: string; withCredentials?: boolean }) => {
@@ -24,12 +56,46 @@
   let eventBus: any;
   let linkService: any;
   let viewer: any;
+  let viewerAdapterInst: ViewerAdapter | null = null;
+  /** @type {'horizontal' | 'vertical'} */
+  let navigationMode: 'horizontal' | 'vertical' = getNavigationMode();
+  // viewerNS guardado para poder recriar o viewer ao trocar de modo
+  let _viewerNS: any = null;
   let cleanup: (() => void) | null = null;
+  const trackedObjectUrls = new Set<string>();
+  const objectUrlManager = {
+    create(blob: Blob): string {
+      const objectUrl = URL.createObjectURL(blob);
+      trackedObjectUrls.add(objectUrl);
+      return objectUrl;
+    },
+    revoke(objectUrl: string) {
+      try {
+        URL.revokeObjectURL(objectUrl);
+      } catch {}
+      trackedObjectUrls.delete(objectUrl);
+    },
+    revokeAll() {
+      for (const objectUrl of trackedObjectUrls) {
+        try {
+          URL.revokeObjectURL(objectUrl);
+        } catch {}
+      }
+      trackedObjectUrls.clear();
+    },
+  };
+  let activePdfObjectUrl: string | null = null;
   let toolbarEl: HTMLDivElement | null = null;
   let toolbarHeight = 60;
   // Estado para controlar visibilidade da barra superior (fullscreen)
   // Sempre começa como true (barra visível) quando a página é carregada
   let isToolbarVisible = true;
+
+  // Toolbar layer system
+  type DeviceType = 'mobile' | 'tablet' | 'desktop';
+  let deviceType: DeviceType = 'desktop';
+  let activeToolbarLayer = 1;
+  let _mqlCleanup: (() => void) | null = null;
 
   $: searchParams = new URLSearchParams($page.url.search);
   $: file = searchParams.get('file') ?? '/pdfs/exemplo.pdf';
@@ -41,22 +107,10 @@
   let totalPages = 0;
   let zoomPercent = 100;
   let lastLoadedFile: string | null = null;
-  // Preferred fit mode: 'page-width' or 'page-fit'
-  // Load from localStorage if available, otherwise default to 'page-fit'
-  let preferredFitMode: 'page-width' | 'page-fit' = (() => {
-    if (typeof window !== 'undefined') {
-      const saved = localStorage.getItem('pdfPreferredFitMode');
-      return (saved === 'page-width' || saved === 'page-fit') ? saved : 'page-fit';
-    }
-    return 'page-fit';
-  })();
-  // Flag to prevent PDF.js from overwriting our manual page-width calculation
-  let isManuallyAdjustingPageWidth = false;
-  let pageWidthAdjustTimeout: ReturnType<typeof setTimeout> | null = null;
-  
-  // Cache the calculated page-width scale to avoid recalculating on every page change
-  let cachedPageWidthScale: number | null = null;
-  let lastContainerWidth: number = 0;
+  // Preferred fit mode: 'page-width' or 'page-fit' — persistido via readerPreferences
+  let preferredFitMode: 'page-width' | 'page-fit' = getFitMode();
+  // Controlador de zoom: encapsula cache de escala e cálculos de page-width
+  const zoomCtrl = new ZoomController();
   
   // PDF validation states
   type PdfUiState =
@@ -90,113 +144,34 @@
   // Apply CSS class to container based on fit mode
   $: containerClass = preferredFitMode === 'page-fit' ? 'page-fit-mode' : 'page-width-mode';
   
-  // Save preferred fit mode to localStorage whenever it changes
+  // Persiste modo de ajuste sempre que mudar
   $: if (typeof window !== 'undefined') {
-    localStorage.setItem('pdfPreferredFitMode', preferredFitMode);
+    setFitMode(preferredFitMode);
   }
 
-  // Function to calculate and apply page-width zoom manually
+  // Delega ao ZoomController para calcular e aplicar page-width zoom
   function applyPageWidthZoom(forceRecalculate = false) {
     if (!viewer || !containerEl || !viewerEl) return;
     if (preferredFitMode !== 'page-width') return;
-    
-    const currentContainerWidth = containerEl.clientWidth;
-    
-    // If we have a cached scale and container width hasn't changed, reuse it
-    if (!forceRecalculate && cachedPageWidthScale !== null && lastContainerWidth === currentContainerWidth) {
-      isManuallyAdjustingPageWidth = true;
-      viewer.currentScale = cachedPageWidthScale;
-      setTimeout(() => {
-        isManuallyAdjustingPageWidth = false;
-      }, 100);
-      return;
-    }
-    
-    // Get the PDF page's natural width
-    const pageView = (viewer as any)._pages?.[(viewer as any).currentPageNumber - 1];
-    if (!pageView) return;
-    
-    // Get the page's NATURAL width at scale 1.0 (not the current scaled width)
-    // pageView.width might be scaled, we need the original viewport
-    const pdfPage = pageView.pdfPage;
-    if (!pdfPage) return;
-    
-    // Get viewport at scale 1.0 to get the natural dimensions
-    const naturalViewport = pdfPage.getViewport({ scale: 1.0 });
-    const naturalWidth = naturalViewport.width;
-    
-    // Calculate available width considering scrollbar
-    // clientWidth gives the visible width (inner width - scrollbar if present)
-    // offsetWidth gives the total width including scrollbar
-    const scrollbarWidth = containerEl.offsetWidth - containerEl.clientWidth;
-    
-    // Use clientWidth which already excludes the scrollbar width
-    let availableWidth = currentContainerWidth;
-    
-    // Check if scrollbars are overlay (mobile/Mac) or take up space (Windows desktop)
-    // On mobile and Mac with overlay scrollbars, offsetWidth === clientWidth even with scroll
-    // Only subtract scrollbar width on desktop where scrollbars take up space
-    const isMobileOrOverlayScrollbar = window.innerWidth <= 768 || scrollbarWidth === 0;
-    
-    if (!isMobileOrOverlayScrollbar && scrollbarWidth === 0) {
-      // Desktop with scrollbar that will appear - subtract typical width
-      availableWidth -= 17;
-    }
-    
-    // Calculate the scale needed to fill the available width exactly
-    // Use naturalWidth (at scale 1.0) not pageView.width which may be scaled
-    let targetScale = availableWidth / naturalWidth;
-    
-    if (targetScale > 0) {
-      // Set flag to prevent PDF.js from overwriting and prevent reapplication loops
-      isManuallyAdjustingPageWidth = true;
-      
-      // Apply the calculated scale directly (not using currentScaleValue)
-      viewer.currentScale = targetScale;
-      
-      // After PDF.js renders, check if the actual size matches and adjust if needed
-      setTimeout(() => {
-        if (!viewerEl || !containerEl || !viewer) {
-          isManuallyAdjustingPageWidth = false;
-          return;
-        }
-        
-        const pageEl = viewerEl.querySelector('.page') as HTMLElement;
-        if (pageEl && preferredFitMode === 'page-width') {
-          const actualRenderedWidth = pageEl.offsetWidth;
-          const desiredWidth = containerEl.clientWidth;
-          
-          // If the rendered width doesn't match, calculate correction factor
-          if (Math.abs(actualRenderedWidth - desiredWidth) > 1) {
-            const correctionFactor = desiredWidth / actualRenderedWidth;
-            const correctedScale = viewer.currentScale * correctionFactor;
-            
-            // Apply corrected scale
-            viewer.currentScale = correctedScale;
-            
-            // Cache the corrected scale for reuse
-            cachedPageWidthScale = correctedScale;
-            lastContainerWidth = currentContainerWidth;
-          } else {
-            // Cache the initial scale if no correction was needed
-            cachedPageWidthScale = viewer.currentScale;
-            lastContainerWidth = currentContainerWidth;
-          }
-        }
-        
-        isManuallyAdjustingPageWidth = false;
-      }, 100);
-    }
+    zoomCtrl.applyPageWidth({ viewer, containerEl, viewerEl, forceRecalculate });
   }
 
   // Gesture state for pinch to zoom
-  const ENABLE_PINCH_FOCAL_FIX = true;
   let pinchInitialDistance = 0;
   let pinchInitialScale = 1;
+  // Ponto focal (centro dos dedos) relativo ao canto superior-esquerdo do container visível
   let pinchStartFocalX = 0;
   let pinchStartFocalY = 0;
+  // Coordenada de conteúdo sob o ponto focal na escala inicial (usada para restaurar scroll)
   let pinchStartContentX = 0;
   let pinchStartContentY = 0;
+  // Ponto focal em coordenadas do viewerEl (para transform-origin)
+  let pinchFocalXInViewer = 0;
+  let pinchFocalYInViewer = 0;
+  // Ratio acumulado pelo touchmove (lido pelo rAF)
+  let pinchCurrentRatio = 1;
+  // Handle do requestAnimationFrame pendente do preview
+  let pinchRafId: number | null = null;
   let isPinching = false;
   
   // Gesture state for single touch navigation
@@ -223,6 +198,14 @@
   let swipePageGestureValid = false;
   let lastSwipePageTurnAt = 0;
 
+  async function resolvePdfSourceUrl(fileUrl: string): Promise<string> {
+    const { url, newObjectUrl } = await resolveSource(fileUrl, {
+      objectUrlManager,
+      activeObjectUrl: activePdfObjectUrl,
+    });
+    if (newObjectUrl) activePdfObjectUrl = newObjectUrl;
+    return url;
+  }
   // Load PDF directly without validation (optimization: skip validation if already validated)
   async function loadDirectly(fileUrl: string) {
     const getDocument = (window as any).__pdfjsGetDocument as PDFJSGetDocument | undefined;
@@ -235,10 +218,20 @@
     
     try {
       // Try to load directly - Service Worker will intercept and serve from cache if available
-      const loadingTask = getDocument({ url: fileUrl, withCredentials: false });
+      perfMark('pdf-source-resolve-start')
+      const sourceUrl = await resolvePdfSourceUrl(fileUrl);
+      perfMark('pdf-source-resolve-end')
+      perfMeasure('pdf-source-resolve', 'pdf-source-resolve-start', 'pdf-source-resolve-end')
+      perfMark('pdf-getdocument-start')
+      const loadingTask = getDocument({ url: sourceUrl, withCredentials: false });
       const pdfDocument = await loadingTask.promise;
+      perfMark('pdf-getdocument-end')
+      perfMeasure('pdf-getdocument', 'pdf-getdocument-start', 'pdf-getdocument-end')
+      perfMark('pdf-setdocument-start')
       linkService.setDocument(pdfDocument);
       viewer.setDocument(pdfDocument);
+      perfMark('pdf-setdocument-end')
+      perfMeasure('pdf-setdocument', 'pdf-setdocument-start', 'pdf-setdocument-end')
       totalPages = pdfDocument.numPages ?? 0;
       currentPage = 1;
       lastLoadedFile = fileUrl;
@@ -521,17 +514,43 @@
     }
   }
 
+  function updateDeviceType() {
+    if (typeof window === 'undefined') return;
+    if (window.matchMedia('(max-width: 767px)').matches) {
+      deviceType = 'mobile';
+    } else if (window.matchMedia('(max-width: 1023px)').matches) {
+      deviceType = 'tablet';
+    } else {
+      deviceType = 'desktop';
+    }
+  }
+
+  function cycleToolbarLayer() {
+    activeToolbarLayer = (activeToolbarLayer % toolbarLayerCount) + 1;
+    requestAnimationFrame(() => {
+      if (toolbarEl && containerEl) {
+        toolbarHeight = toolbarEl.offsetHeight;
+        containerEl.style.top = `${toolbarHeight}px`;
+      }
+    });
+  }
+
   function onKeyDown(e: KeyboardEvent) {
     if (!viewer) return;
     // Basic shortcuts
     if ((e.ctrlKey || e.metaKey) && (e.key === '+' || e.key === '=')) {
       e.preventDefault();
-      viewer.currentScale = viewer.currentScale * 1.1;
+      const newScale = viewer.currentScale * 1.1;
+      viewer.currentScale = newScale;
+      zoomCtrl.setUserScale(newScale);
     } else if ((e.ctrlKey || e.metaKey) && (e.key === '-' )) {
       e.preventDefault();
-      viewer.currentScale = viewer.currentScale / 1.1;
+      const newScale = viewer.currentScale / 1.1;
+      viewer.currentScale = newScale;
+      zoomCtrl.setUserScale(newScale);
     } else if ((e.ctrlKey || e.metaKey) && (e.key === '0')) {
       e.preventDefault();
+      zoomCtrl.clearUserScale();
       viewer.currentScaleValue = 'page-fit';
     } else if (e.key === 'ArrowDown' || e.key === 'PageDown') {
       e.preventDefault();
@@ -556,6 +575,18 @@
     
     // Sempre garantir que a barra esteja visível ao carregar a página
     isToolbarVisible = true;
+
+    // Setup device type detection for toolbar layers
+    updateDeviceType();
+    const mqlMobile = window.matchMedia('(max-width: 767px)');
+    const mqlTablet = window.matchMedia('(max-width: 1023px)');
+    const handleMediaChange = () => { updateDeviceType(); };
+    mqlMobile.addEventListener('change', handleMediaChange);
+    mqlTablet.addEventListener('change', handleMediaChange);
+    _mqlCleanup = () => {
+      mqlMobile.removeEventListener('change', handleMediaChange);
+      mqlTablet.removeEventListener('change', handleMediaChange);
+    };
     
     // Add storage event listener for carousel synchronization between tabs
     let storageHandler: ((e: StorageEvent) => void) | null = null;
@@ -589,6 +620,7 @@
 
     // Carregar PDF.js completo (garantir viewer disponível antes de inicializar)
     // Mostrar feedback visual durante carregamento
+    perfMark('pdfjs-load-start')
     pdfLoading = true;
     
     let core, viewerNS, workerUrl;
@@ -621,6 +653,9 @@
       return;
     }
     
+    perfMark('pdfjs-load-end')
+    perfMeasure('pdfjs-load', 'pdfjs-load-start', 'pdfjs-load-end')
+
     // Register on globals for viewer expectations
     // @ts-ignore
     globalThis.pdfjsLib = core;
@@ -631,32 +666,22 @@
     window.__pdfjsGetDocument = core.getDocument;
     core.GlobalWorkerOptions.workerSrc = workerUrl;
 
-    const { EventBus, PDFLinkService, PDFSinglePageViewer } = viewerNS as any;
+    const { EventBus, PDFLinkService } = viewerNS as any;
+    _viewerNS = viewerNS;
 
     eventBus = new EventBus();
     linkService = new PDFLinkService({ eventBus });
-    viewer = new PDFSinglePageViewer({
-      container: containerEl,
-      viewer: viewerEl,
-      eventBus,
-      linkService,
-      useOnlyCssZoom: true,
-      textLayerMode: 2
-    });
+    viewerAdapterInst = new ViewerAdapter({ container: containerEl!, viewerEl: viewerEl!, eventBus, linkService, mode: navigationMode });
+    viewer = viewerAdapterInst.create(viewerNS);
     linkService.setViewer(viewer);
 
     const resize = () => {
       // apenas notifica o viewer para recalcular o layout/textLayer
       eventBus.dispatch('resize', {});
-      // Adjust zoom after resize if in page-width mode
-      // Force recalculate on resize since container width may have changed
+      // Recalcular zoom após resize se necessário
       if (preferredFitMode === 'page-width') {
-        // Clear cache since window was resized
-        cachedPageWidthScale = null;
-        if (pageWidthAdjustTimeout) clearTimeout(pageWidthAdjustTimeout);
-        pageWidthAdjustTimeout = setTimeout(() => {
-          applyPageWidthZoom(true);
-        }, 150);
+        zoomCtrl.invalidateCache();
+        zoomCtrl.schedulePageWidth({ viewer, containerEl: containerEl!, viewerEl: viewerEl!, forceRecalculate: true, delayMs: 150 });
       }
     };
     window.addEventListener('resize', resize);
@@ -705,50 +730,58 @@
     // Define escala inicial e sincroniza estados
     eventBus.on('pagesinit', () => {
       if (viewer) {
-        if (preferredFitMode === 'page-width') {
-          // For page-width, calculate manually instead of using PDF.js algorithm
-          // Force recalculate on initial load
-          setTimeout(() => {
-            applyPageWidthZoom(true);
-          }, 100);
+        // Modo vertical usa page-width por padrão para melhor leitura contínua
+        const effectiveFitMode = navigationMode === 'vertical' ? 'page-width' : preferredFitMode;
+        if (effectiveFitMode === 'page-width') {
+          if (navigationMode === 'vertical') {
+            // Garantir que a preferência também fique salva como page-width no vertical
+            preferredFitMode = 'page-width';
+            setFitMode('page-width');
+            zoomCtrl.clearUserScale();
+          }
+          setTimeout(() => { applyPageWidthZoom(true); }, 100);
         } else {
-          viewer.currentScaleValue = preferredFitMode;
+          viewer.currentScaleValue = effectiveFitMode;
         }
       }
+      perfMark('pdf-pagesinit')
+      perfMeasure('pdf-total-ttfr', 'pdfjs-load-start', 'pdf-pagesinit')
+      perfReport()
     });
     eventBus.on('scalechanging', (e: any) => {
       const newScale = e?.scale ?? (viewer as any)?.currentScale ?? 1;
       zoomPercent = Math.round(newScale * 100);
       
-      // If we're manually adjusting, skip to avoid loops
-      // Don't reapply automatically - this was causing the zoom to be too large
-      if (isManuallyAdjustingPageWidth) {
+      // Se o ZoomController está no meio de um ajuste, ignorar para evitar loops
+      if (zoomCtrl.isManuallyAdjusting) {
         return;
       }
     });
     eventBus.on('pagesloaded', (e: any) => {
       totalPages = e?.pagesCount ?? totalPages;
       currentPage = (viewer as any)?.currentPageNumber ?? currentPage;
-      // Adjust zoom after pages are loaded if in page-width mode
       if (preferredFitMode === 'page-width') {
-        if (pageWidthAdjustTimeout) clearTimeout(pageWidthAdjustTimeout);
-        pageWidthAdjustTimeout = setTimeout(() => {
-          applyPageWidthZoom();
-        }, 150);
+        zoomCtrl.schedulePageWidth({ viewer, containerEl: containerEl!, viewerEl: viewerEl!, delayMs: 150 });
       }
     });
     eventBus.on('pagechanging', (e: any) => {
       currentPage = e?.pageNumber ?? currentPage;
-      resetFitModeScrollPosition();
-      requestAnimationFrame(() => resetFitModeScrollPosition());
-      // Adjust zoom when page changes if in page-width mode
-      // Don't force recalculate - reuse cached scale
-      if (preferredFitMode === 'page-width') {
-        if (pageWidthAdjustTimeout) clearTimeout(pageWidthAdjustTimeout);
-        pageWidthAdjustTimeout = setTimeout(() => {
-          applyPageWidthZoom(false);
-        }, 50);
+      // Modo vertical: o scroll nativo conduz a troca de página — não resetar
+      if (navigationMode === 'horizontal') {
+        resetFitModeScrollPosition();
+        requestAnimationFrame(() => resetFitModeScrollPosition());
       }
+
+      if (zoomCtrl.userScale !== null) {
+        // Usuário tem zoom manual: preservar escala ao trocar de página
+        const savedScale = zoomCtrl.userScale;
+        setTimeout(() => {
+          if (viewer) viewer.currentScale = savedScale;
+        }, 50);
+      } else if (preferredFitMode === 'page-width') {
+        zoomCtrl.schedulePageWidth({ viewer, containerEl: containerEl!, viewerEl: viewerEl!, forceRecalculate: false, delayMs: 50 });
+      }
+      // page-fit: PDF.js mantém a escala automaticamente
     });
 
     // PDF.js carregado com sucesso, ocultar loading
@@ -777,17 +810,19 @@
         containerEl.removeEventListener('click', handleFirstInteraction, true);
       }
       try { if (toolbarEl) ro.unobserve(toolbarEl); } catch {}
-      // No explicit destroy API; let GC collect. Clear container contents.
-      if (viewerEl) viewerEl.replaceChildren();
+      viewerAdapterInst?.destroy();
     };
   });
 
   onDestroy(() => {
-    if (pageWidthAdjustTimeout) {
-      clearTimeout(pageWidthAdjustTimeout);
-      pageWidthAdjustTimeout = null;
-    }
+    zoomCtrl.cancelScheduled();
     cleanup?.();
+    _mqlCleanup?.();
+    if (activePdfObjectUrl) {
+      objectUrlManager.revoke(activePdfObjectUrl);
+      activePdfObjectUrl = null;
+    }
+    objectUrlManager.revokeAll();
     if (activeForcedObjectUrl) {
       try { URL.revokeObjectURL(activeForcedObjectUrl); } catch {}
       activeForcedObjectUrl = null;
@@ -796,21 +831,21 @@
 
   function zoomIn() {
     if (!viewer) return;
-    viewer.currentScale = viewer.currentScale * 1.1;
+    const newScale = viewer.currentScale * 1.1;
+    viewer.currentScale = newScale;
+    zoomCtrl.setUserScale(newScale);
   }
   function zoomOut() {
     if (!viewer) return;
-    viewer.currentScale = viewer.currentScale / 1.1;
+    const newScale = viewer.currentScale / 1.1;
+    viewer.currentScale = newScale;
+    zoomCtrl.setUserScale(newScale);
   }
   function zoomFit() {
     if (!viewer) return;
-    // Reset to the preferred fit mode
+    zoomCtrl.clearUserScale();
     if (preferredFitMode === 'page-width') {
-      // For page-width, calculate manually instead of using PDF.js algorithm
-      // Reuse cached scale if available
-      setTimeout(() => {
-        applyPageWidthZoom(false);
-      }, 100);
+      setTimeout(() => applyPageWidthZoom(false), 100);
     } else {
       viewer.currentScaleValue = preferredFitMode;
     }
@@ -818,17 +853,12 @@
   
   function toggleFitMode() {
     preferredFitMode = preferredFitMode === 'page-fit' ? 'page-width' : 'page-fit';
+    zoomCtrl.clearUserScale();
     if (viewer) {
       if (preferredFitMode === 'page-width') {
-        // For page-width, calculate manually instead of using PDF.js algorithm
-        // This prevents PDF.js from overwriting our calculation
-        // Force recalculate when switching to page-width mode
-        setTimeout(() => {
-          applyPageWidthZoom(true);
-        }, 100);
+        setTimeout(() => applyPageWidthZoom(true), 100);
       } else {
-        // Clear cache when switching away from page-width
-        cachedPageWidthScale = null;
+        zoomCtrl.invalidateCache();
         viewer.currentScaleValue = preferredFitMode;
       }
     }
@@ -845,8 +875,8 @@
     (viewer as any).currentPageNumber = prev;
   }
   function resetFitModeScrollPosition() {
-    if (!containerEl || preferredFitMode !== 'page-fit') return;
-    // Em page-fit, evita deslocamento residual após swipe/troca de página.
+    // Apenas no modo horizontal e page-fit: evita deslocamento residual após swipe/troca de página.
+    if (!containerEl || navigationMode !== 'horizontal' || preferredFitMode !== 'page-fit') return;
     containerEl.scrollLeft = 0;
     containerEl.scrollTop = 0;
   }
@@ -873,6 +903,8 @@
    */
   function trySwipePageTurn(e: TouchEvent) {
     if (!ENABLE_SWIPE_PAGE_NAV || !viewer) return;
+    // Modo vertical: navegação por scroll, não por swipe horizontal
+    if (navigationMode === 'vertical') return;
     if (e.type === 'touchcancel') return;
     const t = e.changedTouches[0];
     if (!t) return;
@@ -906,35 +938,149 @@
     e.preventDefault();
   }
 
+  // ── Pinch-to-zoom ──────────────────────────────────────────────────────────
+  // A estratégia de preview-then-commit separa o feedback visual (rAF + CSS transform)
+  // do re-render do PDF.js (feito uma única vez no final do gesto), dando ~60fps fluidos.
+
+  /**
+   * Inicia estado do gesto de pinch ao detectar 2 dedos.
+   * Funciona em ambos os modos (horizontal e vertical).
+   */
+  function startPinch(e: TouchEvent) {
+    if (!viewer || !containerEl) return;
+    const touches = e.touches;
+    isPinching = true;
+    swipePageGestureValid = false;
+    // Se havia page-width agendado (pagesloaded/resize/toolbar), ele não deve
+    // sobrescrever o zoom manual que o usuário está iniciando agora.
+    zoomCtrl.cancelScheduled();
+    pinchInitialDistance = getTouchDistance(touches[0], touches[1]);
+    pinchInitialScale = (viewer as any).currentScale ?? 1;
+    pinchCurrentRatio = 1;
+
+    const containerRect = containerEl.getBoundingClientRect();
+    const focalViewportX = (touches[0].clientX + touches[1].clientX) / 2;
+    const focalViewportY = (touches[0].clientY + touches[1].clientY) / 2;
+
+    // Posição do focal relativa à área visível do container
+    pinchStartFocalX = focalViewportX - containerRect.left;
+    pinchStartFocalY = focalViewportY - containerRect.top;
+
+    // Coordenada de conteúdo sob o focal (para calcular scroll ao commitar)
+    pinchStartContentX = (containerEl.scrollLeft + pinchStartFocalX) / Math.max(pinchInitialScale, 0.0001);
+    pinchStartContentY = (containerEl.scrollTop + pinchStartFocalY) / Math.max(pinchInitialScale, 0.0001);
+
+    // Ponto focal em coordenadas do viewerEl (para transform-origin do CSS preview)
+    pinchFocalXInViewer = containerEl.scrollLeft + pinchStartFocalX;
+    pinchFocalYInViewer = containerEl.scrollTop + pinchStartFocalY;
+
+    e.preventDefault();
+  }
+
+  /**
+   * Acumula o novo ratio a cada touchmove e agenda 1 frame rAF para o preview.
+   * Nunca chama viewer.currentScale durante o movimento.
+   */
+  function movePinch(e: TouchEvent) {
+    if (!isPinching || !viewerEl || !containerEl) return;
+    const currentDistance = getTouchDistance(e.touches[0], e.touches[1]);
+    if (currentDistance && pinchInitialDistance) {
+      pinchCurrentRatio = currentDistance / pinchInitialDistance;
+    }
+    // Agendar preview apenas se não há rAF pendente
+    if (!pinchRafId) {
+      pinchRafId = requestAnimationFrame(applyPinchPreview);
+    }
+    e.preventDefault();
+  }
+
+  /**
+   * Aplica CSS transform no viewerEl como preview visual barato (~60fps, sem re-render do PDF.js).
+   * Chamado via rAF para garantir no máximo 1 update por frame.
+   */
+  function applyPinchPreview() {
+    pinchRafId = null;
+    if (!viewerEl || !isPinching) return;
+    const clampedScale = Math.max(0.25, Math.min(4, pinchInitialScale * pinchCurrentRatio));
+    const ratio = clampedScale / pinchInitialScale;
+    viewerEl.style.transformOrigin = `${pinchFocalXInViewer}px ${pinchFocalYInViewer}px`;
+    viewerEl.style.transform = `scale(${ratio})`;
+  }
+
+  /**
+   * Remove o preview CSS e faz um único commit da escala final no PDF.js.
+   * Chamado quando os dedos são levantados (touches.length < 2).
+   */
+  function commitPinch() {
+    if (!isPinching) return;
+    isPinching = false;
+
+    // Cancelar rAF pendente
+    if (pinchRafId !== null) {
+      cancelAnimationFrame(pinchRafId);
+      pinchRafId = null;
+    }
+
+    // Remover preview CSS antes do commit
+    if (viewerEl) {
+      viewerEl.style.transform = '';
+      viewerEl.style.transformOrigin = '';
+    }
+
+    const finalScale = Math.max(0.25, Math.min(4, pinchInitialScale * pinchCurrentRatio));
+    const targetScrollLeft = Math.max(0, pinchStartContentX * finalScale - pinchStartFocalX);
+    const targetScrollTop = Math.max(0, pinchStartContentY * finalScale - pinchStartFocalY);
+    zoomCtrl.cancelScheduled();
+
+    // CRÍTICO: definir userScale ANTES de viewer.currentScale.
+    // O evento pagechanging disparado pelo PDF.js durante a mudança de escala consulta
+    // zoomCtrl.userScale para decidir se chama schedulePageWidth. Se userScale for null
+    // nesse momento, schedulePageWidth agenda applyPageWidth(~50ms depois), que reseta
+    // a escala para page-width e provoca o scroll voltando para (0,0).
+    zoomCtrl.setUserScale(finalScale);
+
+    // Único commit no PDF.js — aqui ocorre o re-render
+    if (viewer) {
+      viewer.currentScale = finalScale;
+    }
+
+    // Após o PDF.js reposicionar o conteúdo via scrollPageIntoView, corrigir scroll
+    // para preservar o ponto focal entre os dedos. Usar snapshots calculados antes
+    // da limpeza do estado, senão a rAF leria variáveis já zeradas e iria para (0,0).
+    requestAnimationFrame(() => {
+      if (!containerEl) return;
+      containerEl.scrollLeft = targetScrollLeft;
+      containerEl.scrollTop = targetScrollTop;
+    });
+
+    // Limpar estado do pinch
+    pinchInitialDistance = 0;
+    pinchInitialScale = 1;
+    pinchCurrentRatio = 1;
+    pinchStartFocalX = 0;
+    pinchStartFocalY = 0;
+    pinchStartContentX = 0;
+    pinchStartContentY = 0;
+    pinchFocalXInViewer = 0;
+    pinchFocalYInViewer = 0;
+  }
+  // ──────────────────────────────────────────────────────────────────────────
+
   // Handle touch start for gestures
   function onTouchStart(e: TouchEvent) {
     if (!viewer || !containerEl) return;
-    
-    const touches = e.touches;
-    
-    // PRIORIDADE 1: Pinch to zoom (2 dedos) - processar primeiro
-    if (touches.length === 2) {
-      isPinching = true;
-      swipePageGestureValid = false;
-      pinchInitialDistance = getTouchDistance(touches[0], touches[1]);
-      pinchInitialScale = viewer.currentScale;
-      if (ENABLE_PINCH_FOCAL_FIX) {
-        const containerRect = containerEl.getBoundingClientRect();
-        pinchStartFocalX =
-          (touches[0].clientX + touches[1].clientX) / 2 - containerRect.left;
-        pinchStartFocalY =
-          (touches[0].clientY + touches[1].clientY) / 2 - containerRect.top;
 
-        // Mapear o ponto focal para coordenadas de conteúdo na escala inicial.
-        pinchStartContentX =
-          (containerEl.scrollLeft + pinchStartFocalX) / Math.max(pinchInitialScale, 0.0001);
-        pinchStartContentY =
-          (containerEl.scrollTop + pinchStartFocalY) / Math.max(pinchInitialScale, 0.0001);
-      }
-      e.preventDefault();
-      return; // Não processar GestureButton quando em pinch
+    // PINCH (2 dedos) — funciona em ambos os modos
+    if (e.touches.length === 2) {
+      startPinch(e);
+      return;
     }
-    
+
+    // Modo vertical: gestos de 1 dedo são nativos — scroll/pan do browser
+    if (navigationMode === 'vertical') return;
+
+    const touches = e.touches;
+
     // Um dedo: candidato a swipe em todo o canvas (sobreposto a zonas ou PDF)
     if (touches.length === 1 && ENABLE_SWIPE_PAGE_NAV) {
       swipePageGestureValid = true;
@@ -948,14 +1094,14 @@
       const containerRect = containerEl.getBoundingClientRect();
       const relativeX = touches[0].clientX - containerRect.left;
       const quarterWidth = containerRect.width / 4;
-      
+
       const isInLeftZone = relativeX < quarterWidth;
       const isInRightZone = relativeX > containerRect.width - quarterWidth;
-      
+
       if (!isInLeftZone && !isInRightZone) {
         return;
       }
-      
+
       touchStartX = touches[0].clientX;
       touchStartY = touches[0].clientY;
       touchStartTime = Date.now();
@@ -966,35 +1112,18 @@
   // Handle touch move for gestures
   function onTouchMove(e: TouchEvent) {
     if (!viewer || !containerEl) return;
-    
-    const touches = e.touches;
-    
-    // Pinch to zoom: 2 touches
-    if (touches.length === 2 && isPinching) {
-      const currentDistance = getTouchDistance(touches[0], touches[1]);
-      if (!currentDistance || !pinchInitialDistance) {
-        e.preventDefault();
-        return;
-      }
-      const scaleRatio = currentDistance / pinchInitialDistance;
-      const newScale = pinchInitialScale * scaleRatio;
-      
-      // Clamp scale to reasonable bounds (0.25x to 4x)
-      const clampedScale = Math.max(0.25, Math.min(4, newScale));
-      viewer.currentScale = clampedScale;
 
-      if (ENABLE_PINCH_FOCAL_FIX) {
-        // Reaplica o ponto de conteúdo inicial sob o centro dos dedos.
-        const targetScrollLeft = pinchStartContentX * clampedScale - pinchStartFocalX;
-        const targetScrollTop = pinchStartContentY * clampedScale - pinchStartFocalY;
-        containerEl.scrollLeft = Math.max(0, targetScrollLeft);
-        containerEl.scrollTop = Math.max(0, targetScrollTop);
-      }
-      
-      e.preventDefault();
+    // PINCH (2 dedos) — funciona em ambos os modos
+    if (e.touches.length === 2 && isPinching) {
+      movePinch(e);
       return;
     }
-    
+
+    // Modo vertical: gestos de 1 dedo são nativos — scroll/pan do browser
+    if (navigationMode === 'vertical') return;
+
+    const touches = e.touches;
+
     // Single touch: check if it moved significantly
     if (touches.length === 1 && !isPinching) {
       // Impede pan nativo da viewport durante swipe horizontal entre páginas.
@@ -1013,7 +1142,7 @@
 
       const dx = Math.abs(touches[0].clientX - touchStartX);
       const dy = Math.abs(touches[0].clientY - touchStartY);
-      
+
       if (dx > TOUCH_MOVE_THRESHOLD || dy > TOUCH_MOVE_THRESHOLD) {
         hasMoved = true;
       }
@@ -1023,26 +1152,22 @@
   // Handle touch end for gestures
   function onTouchEnd(e: TouchEvent) {
     if (!viewer || !containerEl) return;
-    
-    const touches = e.touches;
-    
-    // End pinch gesture
-    if (isPinching && touches.length < 2) {
-      isPinching = false;
-      pinchInitialDistance = 0;
-      pinchInitialScale = 1;
-      pinchStartFocalX = 0;
-      pinchStartFocalY = 0;
-      pinchStartContentX = 0;
-      pinchStartContentY = 0;
+
+    // PINCH terminou (dedos levantados abaixo de 2)
+    if (isPinching && e.touches.length < 2) {
+      commitPinch();
       swipePageGestureValid = false;
-      e.preventDefault();
       touchStartX = 0;
       touchStartY = 0;
       touchStartTime = 0;
       hasMoved = false;
       return;
     }
+
+    // Modo vertical: gestos de 1 dedo são nativos
+    if (navigationMode === 'vertical') return;
+
+    const touches = e.touches;
 
     if (e.type === 'touchcancel') {
       swipePageGestureValid = false;
@@ -1056,7 +1181,7 @@
     }
 
     swipePageGestureValid = false;
-    
+
     // Navegação por toque simples é processada pelos GestureButtons
     touchStartX = 0;
     touchStartY = 0;
@@ -1132,19 +1257,14 @@
       eventBus.dispatch('resize', {});
     }
     
-    // Recalcular zoom baseado no modo atual após um delay para garantir que o DOM tenha atualizado
+    // Recalcular zoom após o DOM atualizar
     if (viewer) {
-      // Limpar cache de zoom para forçar recálculo
-      cachedPageWidthScale = null;
-      
+      zoomCtrl.invalidateCache();
       setTimeout(() => {
         if (!viewer) return;
-        
         if (preferredFitMode === 'page-width') {
-          // Para page-width, calcular manualmente
           applyPageWidthZoom(true);
         } else {
-          // Para page-fit, deixar o PDF.js recalcular automaticamente
           viewer.currentScaleValue = 'page-fit';
         }
       }, 150);
@@ -1153,37 +1273,95 @@
   
   // Função para mostrar a barra (desativar fullscreen)
   function showToolbar() {
-    // Garantir que a barra seja mostrada
     isToolbarVisible = true;
     if (containerEl) {
       toolbarHeight = toolbarEl ? toolbarEl.offsetHeight : 60;
       containerEl.style.top = `${toolbarHeight}px`;
     }
-
-    // Disparar evento resize para notificar o PDF.js sobre a mudança de tamanho
     if (eventBus) {
       eventBus.dispatch('resize', {});
     }
-    
-    // Recalcular zoom baseado no modo atual após um delay para garantir que o DOM tenha atualizado
     if (viewer) {
-      // Limpar cache de zoom para forçar recálculo
-      cachedPageWidthScale = null;
-      
+      zoomCtrl.invalidateCache();
       setTimeout(() => {
         if (!viewer) return;
-        
         if (preferredFitMode === 'page-width') {
-          // Para page-width, calcular manualmente
           applyPageWidthZoom(true);
         } else {
-          // Para page-fit, deixar o PDF.js recalcular automaticamente
           viewer.currentScaleValue = 'page-fit';
         }
       }, 150);
     }
   }
   
+  /**
+   * Alterna entre modo de navegação horizontal (página única) e vertical (scroll contínuo).
+   * Preserva o documento, página atual e escala ao trocar de modo.
+   */
+  async function toggleNavigationMode() {
+    if (!viewerAdapterInst || !_viewerNS || !eventBus) return;
+
+    const newMode = navigationMode === 'horizontal' ? 'vertical' : 'horizontal';
+    navigationMode = newMode;
+    setNavigationMode(newMode);
+    zoomCtrl.invalidateCache();
+    zoomCtrl.clearUserScale();
+
+    // Modo vertical sempre começa com page-width para leitura contínua
+    if (newMode === 'vertical') {
+      preferredFitMode = 'page-width';
+      setFitMode('page-width');
+    }
+
+    const savedPdfDoc = viewer?.pdfDocument ?? null;
+    const savedPage = (viewer as any)?.currentPageNumber ?? 1;
+
+    // Criar novo viewer com o modo escolhido
+    viewer = viewerAdapterInst.switchMode(newMode, _viewerNS);
+    linkService.setViewer(viewer);
+
+    if (!savedPdfDoc) return;
+
+    // Recarregar documento e restaurar posição
+    linkService.setDocument(savedPdfDoc);
+    viewer.setDocument(savedPdfDoc);
+
+    const restoreOnInit = () => {
+      // Aplicar page-width sempre ao entrar no vertical; no horizontal respeitar preferência
+      if (preferredFitMode === 'page-width') {
+        zoomCtrl.schedulePageWidth({ viewer, containerEl: containerEl!, viewerEl: viewerEl!, forceRecalculate: true, delayMs: 80 });
+      } else {
+        viewer.currentScaleValue = preferredFitMode;
+      }
+      if (savedPage > 1) {
+        viewer.currentPageNumber = savedPage;
+      }
+    };
+
+    // Aguardar primeiro render
+    const onPagesinit = () => {
+      eventBus.off('pagesinit', onPagesinit);
+      restoreOnInit();
+    };
+    eventBus.on('pagesinit', onPagesinit);
+  }
+
+  // ─── Toolbar layer system ─────────────────────────────────────────────────────
+  $: toolbarLayerCount = deviceType === 'mobile' ? 3 : 1;
+  $: if (activeToolbarLayer > toolbarLayerCount) activeToolbarLayer = 1;
+
+  // Visibility per control based on active layer
+  $: showCarousel = deviceType !== 'mobile' || activeToolbarLayer === 1;
+  $: showPagePrev = deviceType !== 'mobile' || activeToolbarLayer === 2;
+  $: showPageNext = deviceType !== 'mobile' || activeToolbarLayer === 2;
+  $: showPageIndicator = deviceType !== 'mobile' || activeToolbarLayer === 1 || activeToolbarLayer === 2;
+  $: showNavMode = deviceType !== 'mobile' || activeToolbarLayer === 2;
+  $: showZoomMinus = deviceType !== 'mobile' || activeToolbarLayer === 3;
+  $: showZoomFit = deviceType !== 'mobile' || activeToolbarLayer === 1 || activeToolbarLayer === 3;
+  $: showZoomPlus = deviceType !== 'mobile' || activeToolbarLayer === 3;
+  $: showLayerToggle = deviceType === 'mobile';
+  // ──────────────────────────────────────────────────────────────────────────────
+
   // Reativo: atualizar altura do container quando a visibilidade da barra mudar
   $: if (containerEl) {
     if (isToolbarVisible) {
@@ -1205,11 +1383,13 @@
 </svelte:head>
 
 <style>
-  /* Ensure body and html don't have margins/padding that could create gaps */
-  :global(body), :global(html) {
+  /* Travar scroll de html/body no leitor para evitar scroll residual no iOS */
+  :global(html), :global(body) {
     margin: 0;
     padding: 0;
     overflow-x: hidden;
+    height: 100%;
+    overscroll-behavior: none;
   }
 
   .container {
@@ -1226,6 +1406,10 @@
     max-width: 100vw;
     z-index: 1; /* ensure it overlays page background */
     touch-action: pan-x pan-y; /* Allow scrolling but prevent default pinch */
+    /* Impede que o scroll do PDF se propague para a página — crítico no iOS */
+    overscroll-behavior: contain;
+    /* Scroll suave e inercia no iOS/Safari */
+    -webkit-overflow-scrolling: touch;
   }
 
   /* Viewer base width equals viewport; zooms can overflow horizontally for scroll */
@@ -1253,296 +1437,292 @@
   .container.page-width-mode :global(.pdfViewer .page) {
     margin: 0 !important;
   }
-  /* Removed unused nested selector to satisfy build warnings */
+
+  /* ── Modo vertical (scroll contínuo) ──────────────────────────────────── */
+  /* Em modo vertical, as páginas ficam empilhadas verticalmente com gap */
+  .container.vertical-nav :global(.pdfViewer) {
+    display: flex;
+    flex-direction: column;
+    /*
+     * flex-start em vez de center: quando a página é mais larga que o container
+     * (após zoom), ela começa no bordo esquerdo e o overflow vai para a direita,
+     * tornando-o acessível via scrollLeft. O margin: 0 auto nas páginas cuida
+     * da centralização quando elas cabem no container.
+     */
+    align-items: flex-start;
+    min-width: 100%;
+    padding-bottom: 24px !important;
+  }
+  .container.vertical-nav :global(.pdfViewer .page) {
+    margin: 0 auto 8px !important; /* centraliza quando cabe; auto=0 quando overflow */
+  }
+  /* ───────────────────────────────────────────────────────────────────────── */
+  /* ─── Toolbar layout ─────────────────────────────────────────────────────── */
   .toolbar {
+    --tbtn-h: 36px;
+    --tbtn-px: 10px;
+    --tbtn-r: 6px;
+    --tbtn-gap: 6px;
     position: fixed;
     top: 0;
     left: 0;
     right: 0;
-    height: 56px;
-    display: grid;
-    grid-template-columns: 1fr max-content max-content repeat(4, max-content);
-    grid-template-rows: repeat(3, 1fr);
-    column-gap: 8px;
-    padding: 0 calc(12px + env(safe-area-inset-right)) 0 calc(12px + env(safe-area-inset-left));
+    display: flex;
+    align-items: center;
+    gap: var(--tbtn-gap);
+    /* Safe area: recuo para notch/câmera (iOS/Android) */
+    padding: env(safe-area-inset-top, 0px) calc(8px + env(safe-area-inset-right, 0px)) 6px calc(8px + env(safe-area-inset-left, 0px));
     background: var(--background-color);
     color: var(--text-light);
     border-bottom: 4px solid var(--gold-color);
     z-index: 1000;
-    align-items: center;
     box-sizing: border-box;
     width: 100%;
     max-width: 100vw;
     overflow: hidden;
     transition: transform 0.3s ease, opacity 0.3s ease;
   }
-  
+
   .toolbar.hidden {
     transform: translateY(-100%);
     opacity: 0;
     pointer-events: none;
   }
-  .btn {
-    padding: 10px 12px;
-    border-radius: 6px;
-    background: var(--btn-background-color);
-    border: 1px solid rgba(255,255,255,0.12);
-    color: var(--text-light);
-    cursor: pointer;
+
+  /* Área esquerda: marca + título */
+  .toolbar-left {
     display: flex;
     align-items: center;
-    justify-content: center;
-    user-select: none;
-    -webkit-user-select: none;
-    -moz-user-select: none;
-    -ms-user-select: none;
-  }
-  .btn:hover { filter: brightness(1.05); }
-  .btn .icon {
-    width: 20px;
-    height: 20px;
-    stroke: currentColor;
-  }
-  .title-wrap { display: flex; flex-direction: column; justify-content: center; min-width: 0; grid-column: 1; grid-row: 2 / 4; }
-  
-  /* Carousel navigator positioning */
-  :global(.toolbar > :global(.carousel-navigator)) {
-    grid-column: 2;
-    grid-row: 1 / 4;
-    align-self: center;
-  }
-  .title-main {
-    font-weight: 600;
-    line-height: 1;
-    white-space: nowrap;
-    text-overflow: ellipsis;
+    gap: 4px;
+    min-width: 0;
+    flex: 0 1 auto;
     overflow: hidden;
   }
-  .title-sub {
-    font-size: 12px;
-    opacity: .8;
-    white-space: nowrap;
-    text-overflow: ellipsis;
-    overflow: hidden;
+
+  /* Área de controles à direita */
+  .toolbar-controls {
+    display: flex;
+    align-items: center;
+    gap: var(--tbtn-gap);
+    flex: 1 0 auto;
+    justify-content: flex-end;
+    min-width: 0;
   }
-  .indicator { opacity: .9; }
+
+  /* Marca PLPCG */
   .brand {
-    grid-column: 1;
-    grid-row: 1;
     white-space: nowrap;
     font-weight: 700;
-    font-family: "EB Garamond", Garamond, Georgia, serif; /* similar ao header */
-    font-size: 1.5rem; /* ~text-3xl no contexto da barra */
+    font-family: "EB Garamond", Garamond, Georgia, serif;
+    font-size: 1.25rem;
     line-height: 1;
     color: var(--placeholder-color);
-    letter-spacing: .03em; /* tracking-wide */
-    text-shadow: 2px 2px 4px rgba(0,0,0,0.5), 0 0 8px rgba(0,0,0,0.3); /* Sombra mais pronunciada para destacar */
+    letter-spacing: .03em;
+    text-shadow: 2px 2px 4px rgba(0,0,0,0.5), 0 0 8px rgba(0,0,0,0.3);
     cursor: pointer;
     user-select: none;
     -webkit-user-select: none;
     position: relative;
-    padding: 10px;
+    padding: 6px 8px;
     display: inline-flex;
     align-items: center;
     justify-content: center;
+    flex-shrink: 0;
   }
-  
-  /* Feixe de luz - sempre ativo */
+
   .brand .light-beam {
     position: absolute;
     bottom: -2px;
     left: 50%;
     transform: translateX(-50%);
-    height: 4px;
-    width: calc(100% - 2rem);
-    background: linear-gradient(to right, 
-      transparent 0%, 
+    height: 3px;
+    width: calc(100% - 1rem);
+    background: linear-gradient(to right,
+      transparent 0%,
       rgba(255, 240, 160, 0.95) 15%,
       rgba(255, 230, 120, 1) 30%,
-      rgba(255, 220, 100, 1) 50%, 
+      rgba(255, 220, 100, 1) 50%,
       rgba(255, 230, 120, 1) 70%,
       rgba(255, 240, 160, 0.95) 85%,
       transparent 100%);
-    box-shadow: 
-      0 0 12px rgba(255, 220, 100, 1),
-      0 0 24px rgba(255, 220, 100, 0.8),
-      0 0 36px rgba(255, 220, 100, 0.6),
-      0 0 48px rgba(255, 220, 100, 0.4),
-      0 2px 8px rgba(255, 220, 100, 0.7);
+    box-shadow:
+      0 0 8px rgba(255, 220, 100, 1),
+      0 0 16px rgba(255, 220, 100, 0.8),
+      0 0 24px rgba(255, 220, 100, 0.6),
+      0 2px 6px rgba(255, 220, 100, 0.7);
     border-radius: 50%;
     opacity: 1;
     z-index: 1;
   }
 
-  .indicator { display: flex; align-items: center; gap: 4px; min-width: 56px; justify-content: center; }
+  /* Título */
+  .title-wrap {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    min-width: 0;
+    overflow: hidden;
+  }
+  .title-main {
+    font-weight: 600;
+    font-size: 0.875rem;
+    line-height: 1.1;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    overflow: hidden;
+  }
+  .title-sub {
+    font-size: 0.75rem;
+    opacity: .8;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    overflow: hidden;
+  }
+
+  /* Botões padronizados */
+  .btn {
+    height: var(--tbtn-h);
+    min-width: var(--tbtn-h);
+    padding: 0 var(--tbtn-px);
+    border-radius: var(--tbtn-r);
+    background: var(--btn-background-color);
+    border: 1px solid rgba(255,255,255,0.12);
+    color: var(--text-light);
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    user-select: none;
+    -webkit-user-select: none;
+    box-sizing: border-box;
+    flex-shrink: 0;
+  }
+  .btn:hover { filter: brightness(1.05); }
+  .btn .icon {
+    width: 18px;
+    height: 18px;
+    stroke: currentColor;
+    flex-shrink: 0;
+  }
+
+  /* Indicador de página */
+  .indicator {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    font-size: 0.875rem;
+    opacity: .9;
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
   .indicator .current { font-variant-numeric: tabular-nums; }
   .indicator .total { opacity: .9; }
 
-  /* Grid placements for controls spanning all rows */
-  /* Hide prev/next buttons on mobile */
-  .page-nav-prev { 
-    grid-column: 3; 
-    grid-row: 1 / 4; 
-    align-self: center;
-    display: none; /* Hidden on mobile by default */
+  /* Wrappers GestureButton nas setas de página (.ctrl) */
+  .ctrl :global(.gesture-button-wrapper) {
+    height: var(--tbtn-h);
+    min-width: var(--tbtn-h);
+    padding: 0 var(--tbtn-px);
+    border-radius: var(--tbtn-r);
+    background: var(--btn-background-color);
+    border: 1px solid rgba(255,255,255,0.12);
+    color: var(--text-light);
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    box-sizing: border-box;
+    flex-shrink: 0;
   }
-  .indicator { 
-    grid-column: 3; 
-    grid-row: 1 / 4; 
-    align-self: center; 
+  .ctrl :global(.gesture-button-wrapper):hover { filter: brightness(1.05); }
+  .ctrl .icon {
+    width: 18px;
+    height: 18px;
+    stroke: currentColor;
+    flex-shrink: 0;
   }
-  .page-nav-next { 
-    grid-column: 3; 
-    grid-row: 1 / 4; 
-    align-self: center;
-    display: none; /* Hidden on mobile by default */
+
+  /* zoom-fit: GestureButton preenche toda a área clicável do .btn */
+  .btn.zoom-fit {
+    padding: 0;
+    cursor: pointer;
+    position: relative;
   }
-  .btn.zoom-minus { grid-column: 4; grid-row: 1 / 4; align-self: center; }
-  .btn.zoom-fit { grid-column: 5; grid-row: 1 / 4; align-self: center; position: relative; }
-  
+  .btn.zoom-fit :global(.gesture-button-wrapper) {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+    min-width: var(--tbtn-h);
+    padding: 0 var(--tbtn-px);
+    position: relative;
+    box-sizing: border-box;
+  }
+
+  /* nav-mode-toggle active */
+  .btn.nav-mode-toggle.active { color: #4fc3f7; }
+
+  /* Botão de camada (layer toggle) */
+  .btn.layer-toggle {
+    font-weight: 700;
+    font-size: 0.875rem;
+    min-width: var(--tbtn-h);
+  }
+
+  /* Indicadores de modo no zoom-fit */
   .zoom-fit-indicator {
     position: absolute;
     pointer-events: none;
     transition: all 0.3s ease;
   }
-  
   .zoom-fit-indicator.bar {
     background: white;
     border-radius: 1px;
   }
-  
-  /* Page-fit: horizontal bars (top and bottom) */
   .btn.zoom-fit.page-fit .zoom-fit-indicator.page-fit.top,
-  .btn.zoom-fit.page-fit .zoom-fit-indicator.page-fit.bottom {
-    opacity: 1;
-  }
-  
+  .btn.zoom-fit.page-fit .zoom-fit-indicator.page-fit.bottom { opacity: 1; }
   .btn.zoom-fit.page-fit .zoom-fit-indicator.page-fit.top {
-    top: 8px;
-    left: 50%;
-    transform: translateX(-50%);
-    width: 20px;
-    height: 2px;
+    top: 6px; left: 50%; transform: translateX(-50%); width: 16px; height: 2px;
   }
-  
   .btn.zoom-fit.page-fit .zoom-fit-indicator.page-fit.bottom {
-    bottom: 8px;
-    left: 50%;
-    transform: translateX(-50%);
-    width: 20px;
-    height: 2px;
+    bottom: 6px; left: 50%; transform: translateX(-50%); width: 16px; height: 2px;
   }
-  
-  /* Page-width: vertical bars (left and right) */
   .btn.zoom-fit.page-width .zoom-fit-indicator.page-width.left,
-  .btn.zoom-fit.page-width .zoom-fit-indicator.page-width.right {
-    opacity: 1;
-  }
-  
+  .btn.zoom-fit.page-width .zoom-fit-indicator.page-width.right { opacity: 1; }
   .btn.zoom-fit.page-width .zoom-fit-indicator.page-width.left {
-    left: 8px;
-    top: 50%;
-    transform: translateY(-50%);
-    width: 2px;
-    height: 20px;
+    left: 6px; top: 50%; transform: translateY(-50%); width: 2px; height: 16px;
   }
-  
   .btn.zoom-fit.page-width .zoom-fit-indicator.page-width.right {
-    right: 8px;
-    top: 50%;
-    transform: translateY(-50%);
-    width: 2px;
-    height: 20px;
+    right: 6px; top: 50%; transform: translateY(-50%); width: 2px; height: 16px;
   }
-  
-  /* Hide bars when not in corresponding mode */
   .btn.zoom-fit.page-fit .zoom-fit-indicator.page-width.left,
-  .btn.zoom-fit.page-fit .zoom-fit-indicator.page-width.right {
-    opacity: 0;
-    width: 0;
-    height: 0;
-  }
-  
+  .btn.zoom-fit.page-fit .zoom-fit-indicator.page-width.right { opacity: 0; width: 0; height: 0; }
   .btn.zoom-fit.page-width .zoom-fit-indicator.page-fit.top,
-  .btn.zoom-fit.page-width .zoom-fit-indicator.page-fit.bottom {
-    opacity: 0;
-    width: 0;
-    height: 0;
-  }
-  .btn.zoom-plus { grid-column: 6; grid-row: 1 / 4; align-self: center; }
+  .btn.zoom-fit.page-width .zoom-fit-indicator.page-fit.bottom { opacity: 0; width: 0; height: 0; }
 
-  /* Wide screens: let content breathe */
+  /* Compatibilidade do CarouselNavigator com a toolbar */
+  :global(.toolbar-controls .carousel-control) {
+    height: var(--tbtn-h, 36px);
+    padding: 0 var(--tbtn-px, 10px);
+    border-radius: var(--tbtn-r, 6px);
+    box-sizing: border-box;
+  }
+  :global(.toolbar-controls .carousel-navigator .gesture-button-wrapper) {
+    display: inline-flex !important;
+    align-items: center;
+    flex-shrink: 0;
+  }
+
+  /* Desktop: botões ligeiramente maiores */
   @media (min-width: 1024px) {
-    .brand { font-size: 1.75rem; }
-    .btn { padding: 12px 14px; }
+    .toolbar { --tbtn-h: 40px; --tbtn-px: 12px; }
+    .brand { font-size: 1.5rem; padding: 8px 10px; }
     .title-main { font-size: 1rem; }
   }
 
-  /* Mobile screens: limit PLPCG button to half toolbar height */
+  /* Mobile: ocultar subtítulo para economizar espaço */
   @media (max-width: 767px) {
-    .brand {
-      max-height: 24px; /* Ajustado para 24px considerando os paddings */
-      align-self: start; /* Alinhar ao topo da célula do grid */
-      margin-bottom: 12px;
-      padding: 4px; /* Padding ajustado sem espaço para seta */
-      font-size: 1.25rem; /* Reduzir ligeiramente o tamanho da fonte */
-    }
-    
-    .brand .light-beam {
-      height: 3px;
-      width: calc(100% - 1rem);
-      box-shadow: 
-        0 0 8px rgba(255, 220, 100, 1),
-        0 0 16px rgba(255, 220, 100, 0.8),
-        0 0 24px rgba(255, 220, 100, 0.6),
-        0 2px 6px rgba(255, 220, 100, 0.7);
-    }
-  }
-
-  /* Tablet+ layout: brand in its own column, title/subtitle to the right */
-  @media (min-width: 768px) {
-    .toolbar {
-      grid-template-columns: auto 1fr max-content repeat(6, max-content);
-    }
-    .brand { grid-column: 1; grid-row: auto; align-self: center; }
-    .title-wrap { grid-column: 2; grid-row: auto; }
-    /* Carousel navigator in column 3 - after title-wrap */
-    :global(.toolbar > :global(.carousel-navigator)) {
-      grid-column: 3;
-      grid-row: auto;
-    }
-    /* Show prev/next buttons on tablet+ */
-    .page-nav-prev { 
-      grid-column: 4;
-      grid-row: auto;
-      display: flex; /* Show on tablet+ */
-    }
-    .indicator { 
-      grid-column: 5;
-      grid-row: auto;
-    }
-    .page-nav-next { 
-      grid-column: 6;
-      grid-row: auto;
-      display: flex; /* Show on tablet+ */
-    }
-    .btn.zoom-minus { 
-      grid-column: 7;
-      grid-row: auto;
-    }
-    .btn.zoom-fit { 
-      grid-column: 8;
-      grid-row: auto;
-    }
-    .btn.zoom-plus { 
-      grid-column: 9;
-      grid-row: auto;
-    }
-  }
-
-  /* Compact screens: stack title under PLPC, stack indicator, hide +/- */
-  @media (max-width: 600px) {
-    .btn.zoom-minus, .btn.zoom-plus { display: none; }
+    .title-sub { display: none; }
   }
   
   .pdf-loading-overlay {
@@ -1715,104 +1895,150 @@
 </style>
 
 <div class="toolbar" bind:this={toolbarEl} class:hidden={!isToolbarVisible}>
-  <GestureButton
-    on:click={goToHome}
-    on:longpress={goToHomeNewHistory}
-    longPressDuration={500}
-    hapticFeedback={true}
-    preventDefault={true}
-    preventClickOnLongPress={true}
-  >
-    <div class="brand">PLPCG<div class="light-beam"></div></div>
-  </GestureButton>
 
-  <div class="title-wrap">
-    {#if titulo}
-      <div class="title-main" title={titulo}>{titulo}</div>
-    {/if}
-    {#if subtitulo}
-      <div class="title-sub" title={subtitulo}>{subtitulo}</div>
-    {/if}
-  </div>
-
-  <CarouselNavigator
-    currentFile={file}
-    carousel={$carousel}
-    on:navigate={(e) => navigateToPdf(e.detail.louvor)}
-  />
-
-  <div class="page-nav-prev">
+  <!-- Área esquerda: marca + título (sempre visíveis) -->
+  <div class="toolbar-left">
     <GestureButton
-      on:click={prevPage}
-      on:longpress={goToFirstPage}
+      on:click={goToHome}
+      on:longpress={goToHomeNewHistory}
       longPressDuration={500}
       hapticFeedback={true}
       preventDefault={true}
+      preventClickOnLongPress={true}
     >
-      <button class="btn prev" aria-label="Página anterior">
+      <div class="brand">PLPCG<div class="light-beam"></div></div>
+    </GestureButton>
+
+    <div class="title-wrap">
+      {#if titulo}
+        <div class="title-main" title={titulo}>{titulo}</div>
+      {/if}
+      {#if subtitulo}
+        <div class="title-sub" title={subtitulo}>{subtitulo}</div>
+      {/if}
+    </div>
+  </div>
+
+  <!-- Área de controles: conteúdo varia por camada ativa -->
+  <div class="toolbar-controls">
+
+    {#if showCarousel}
+      <CarouselNavigator
+        currentFile={file}
+        carousel={$carousel}
+        on:navigate={(e) => navigateToPdf(e.detail.louvor)}
+      />
+    {/if}
+
+    {#if showPagePrev}
+      <div class="ctrl page-nav-prev">
+        <GestureButton
+          on:click={prevPage}
+          on:longpress={goToFirstPage}
+          longPressDuration={500}
+          hapticFeedback={true}
+          preventDefault={true}
+          ariaLabel="Página anterior (long press: primeira página)"
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="icon">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M10.5 19.5 3 12m0 0 7.5-7.5M3 12h18" />
+          </svg>
+        </GestureButton>
+      </div>
+    {/if}
+
+    {#if showPageIndicator}
+      <div class="indicator" aria-label="Página atual e total">
+        <span class="current">{currentPage}</span>
+        <span class="total">/ {totalPages}</span>
+      </div>
+    {/if}
+
+    {#if showPageNext}
+      <div class="ctrl page-nav-next">
+        <GestureButton
+          on:click={nextPage}
+          on:longpress={goToLastPage}
+          longPressDuration={500}
+          hapticFeedback={true}
+          preventDefault={true}
+          ariaLabel="Próxima página (long press: última página)"
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="icon">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M13.5 4.5 21 12m0 0-7.5 7.5M21 12H3" />
+          </svg>
+        </GestureButton>
+      </div>
+    {/if}
+
+    {#if showZoomMinus}
+      <button class="btn zoom-minus" on:click={zoomOut} aria-label="Diminuir zoom">
         <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="icon">
-          <path stroke-linecap="round" stroke-linejoin="round" d="M10.5 19.5 3 12m0 0 7.5-7.5M3 12h18" />
+          <path stroke-linecap="round" stroke-linejoin="round" d="M5 12h14" />
         </svg>
       </button>
-    </GestureButton>
-  </div>
-  <div class="indicator" aria-label="Página atual e total">
-    <span class="current">{currentPage}</span>
-    <span class="total">/ {totalPages}</span>
-  </div>
-  <div class="page-nav-next">
-    <GestureButton
-      on:click={nextPage}
-      on:longpress={goToLastPage}
-      longPressDuration={500}
-      hapticFeedback={true}
-      preventDefault={true}
-    >
-      <button class="btn next" aria-label="Próxima página">
+    {/if}
+
+    {#if showZoomFit}
+      <!-- zoom-fit: GestureButton age como o elemento interativo (sem button aninhado) -->
+      <div class="btn zoom-fit" class:page-fit={preferredFitMode === 'page-fit'} class:page-width={preferredFitMode === 'page-width'}>
+        <GestureButton
+          on:click={zoomFit}
+          on:longpress={toggleFitMode}
+          longPressDuration={500}
+          hapticFeedback={true}
+          preventDefault={true}
+          ariaLabel="Ajustar zoom (long press: alternar page-fit/page-width)"
+        >
+          {zoomPercent}%
+          <div class="zoom-fit-indicator bar page-fit top"></div>
+          <div class="zoom-fit-indicator bar page-fit bottom"></div>
+          <div class="zoom-fit-indicator bar page-width left"></div>
+          <div class="zoom-fit-indicator bar page-width right"></div>
+        </GestureButton>
+      </div>
+    {/if}
+
+    {#if showZoomPlus}
+      <button class="btn zoom-plus" on:click={zoomIn} aria-label="Aumentar zoom">
         <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="icon">
-          <path stroke-linecap="round" stroke-linejoin="round" d="M13.5 4.5 21 12m0 0-7.5 7.5M21 12H3" />
+          <path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
         </svg>
       </button>
-    </GestureButton>
+    {/if}
+
+    {#if showNavMode}
+      <button
+        class="btn nav-mode-toggle"
+        class:active={navigationMode === 'vertical'}
+        on:click={toggleNavigationMode}
+        aria-label={navigationMode === 'vertical' ? 'Mudar para modo horizontal (página única)' : 'Mudar para modo vertical (scroll contínuo)'}
+        title={navigationMode === 'vertical' ? 'Modo vertical ativo — clique para horizontal' : 'Modo horizontal ativo — clique para scroll contínuo'}
+      >
+        {#if navigationMode === 'vertical'}
+          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="icon">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M3 5h18M3 9h18M3 13h18M3 17h18" />
+          </svg>
+        {:else}
+          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="icon">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M9 4.5v15m6-15v15M3 9h18M3 15h18" />
+          </svg>
+        {/if}
+      </button>
+    {/if}
+
+    {#if showLayerToggle}
+      <button
+        class="btn layer-toggle"
+        on:click={cycleToolbarLayer}
+        aria-label="Camada {activeToolbarLayer} de {toolbarLayerCount} — clique para alternar controles"
+        title="Camada {activeToolbarLayer} de {toolbarLayerCount}"
+      >
+        {activeToolbarLayer}
+      </button>
+    {/if}
+
   </div>
-
-  <button class="btn zoom-minus" on:click={zoomOut} aria-label="Diminuir zoom">
-    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="icon">
-      <path stroke-linecap="round" stroke-linejoin="round" d="M5 12h14" />
-    </svg>
-  </button>
-
-  <GestureButton
-    on:click={zoomFit}
-    on:longpress={toggleFitMode}
-    longPressDuration={500}
-    hapticFeedback={true}
-    preventDefault={true}
-  >
-    <button 
-      class="btn zoom-fit" 
-      class:page-fit={preferredFitMode === 'page-fit'}
-      class:page-width={preferredFitMode === 'page-width'}
-      aria-label="Ajustar zoom"
-    >
-      {zoomPercent}%
-      <!-- Visual indicators for fit mode -->
-      <div class="zoom-fit-indicator bar page-fit top"></div>
-      <div class="zoom-fit-indicator bar page-fit bottom"></div>
-      <div class="zoom-fit-indicator bar page-width left"></div>
-      <div class="zoom-fit-indicator bar page-width right"></div>
-    </button>
-  </GestureButton>
-
-  <button class="btn zoom-plus" on:click={zoomIn} aria-label="Aumentar zoom">
-    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="icon">
-      <path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
-    </svg>
-  </button>
-
-  <!-- Abra com /leitor?file=/pdfs/exemplo.pdf&titulo=Exemplo&subtitulo=Sub -->
-  <!-- Atalhos: Ctrl/Cmd +/−/0, PgUp/PgDn/↑/↓ -->
-  
 </div>
 
 <!-- FAB para desativar fullscreen -->
@@ -1855,7 +2081,7 @@
   </div>
 {/if}
 
-<div id="viewerContainer" bind:this={containerEl} class="container {containerClass}" class:hidden={pdfLoading || pdfError}>
+<div id="viewerContainer" bind:this={containerEl} class="container {containerClass}" class:vertical-nav={navigationMode === 'vertical'} class:hidden={pdfLoading || pdfError}>
   <!-- Elemento focável invisível para ativar sistema de eventos de teclado no iOS -->
   <textarea
     bind:this={keyboardFocusEl}
@@ -1870,43 +2096,46 @@
     spellcheck="false"
   ></textarea>
   
-  <!-- Zona de navegação esquerda -->
-  <div class="navigation-zone left">
-    <GestureButton
-      on:click={prevPage}
-      on:longpress={goToFirstPage}
-      longPressDuration={500}
-      hapticFeedback={true}
-      preventDefault={false}
-    >
-      <div class="touch-zone left"></div>
-    </GestureButton>
-  </div>
+  <!-- Zonas de navegação: apenas no modo horizontal -->
+  {#if navigationMode === 'horizontal'}
+    <!-- Zona de navegação esquerda -->
+    <div class="navigation-zone left">
+      <GestureButton
+        on:click={prevPage}
+        on:longpress={goToFirstPage}
+        longPressDuration={500}
+        hapticFeedback={true}
+        preventDefault={false}
+      >
+        <div class="touch-zone left"></div>
+      </GestureButton>
+    </div>
 
-  <!-- Zona de navegação central -->
-  <div class="navigation-zone center">
-    <GestureButton
-      on:longpress={toggleToolbar}
-      longPressDuration={500}
-      hapticFeedback={true}
-      preventDefault={false}
-    >
-      <div class="touch-zone center"></div>
-    </GestureButton>
-  </div>
+    <!-- Zona de navegação direita -->
+    <div class="navigation-zone right">
+      <GestureButton
+        on:click={nextPage}
+        on:longpress={goToLastPage}
+        longPressDuration={500}
+        hapticFeedback={true}
+        preventDefault={false}
+      >
+        <div class="touch-zone right"></div>
+      </GestureButton>
+    </div>
 
-  <!-- Zona de navegação direita -->
-  <div class="navigation-zone right">
-    <GestureButton
-      on:click={nextPage}
-      on:longpress={goToLastPage}
-      longPressDuration={500}
-      hapticFeedback={true}
-      preventDefault={false}
-    >
-      <div class="touch-zone right"></div>
-    </GestureButton>
-  </div>
+    <!-- Zona central: long press ativa/desativa toolbar -->
+    <div class="navigation-zone center">
+      <GestureButton
+        on:longpress={toggleToolbar}
+        longPressDuration={500}
+        hapticFeedback={true}
+        preventDefault={false}
+      >
+        <div class="touch-zone center"></div>
+      </GestureButton>
+    </div>
+  {/if}
 
   <div bind:this={viewerEl} class="viewer pdfViewer"></div>
   <!-- pdfjs-dist css hooks on .pdfViewer and .viewer -->
