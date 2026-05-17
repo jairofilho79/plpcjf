@@ -1,12 +1,13 @@
 <script>
   import { tick } from 'svelte';
-  import { X, Trash2, GripVertical, Share2, Save, Check } from 'lucide-svelte';
+  import { X, Trash2, GripVertical, Share2, Save, Check, ExternalLink, ChevronDown, ChevronUp } from 'lucide-svelte';
   import { goto } from '$app/navigation';
   import { carousel } from '$lib/stores/carousel';
   import { pdfViewer } from '$lib/stores/pdfViewer';
   import { savedPlaylists } from '$lib/stores/savedPlaylists';
   import { getPdfRelPath } from '$lib/utils/pathUtils';
   import GestureButton from '$lib/components/GestureButton.svelte';
+  import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
   import { 
     fetchPdfAsBlob, 
     sharePdf, 
@@ -18,24 +19,31 @@
   import { navigateLouvorToLeitor } from '$lib/utils/navigateLouvorToLeitor';
   
   /**
-     * @type {number | null}
-     */
+   * @type {number | null}
+   */
   let draggedIndex = null;
+  /** @type {string | null} */
   let checkingPdfId = null;
+  /** @type {string | null} */
   let pdfError = null;
+  /** @type {string | null} */
   let processingPdfId = null;
   /**
-     * @type {number | null}
-     */
+   * @type {number | null}
+   */
   let dragOverIndex = null;
   let hasDragged = false;
   let dragStartX = 0;
   let dragStartY = 0;
+
+  let showClearDialog = false;
+  let isExpanded = false;
+  let isOpeningTabs = false;
   
   /**
-     * @param {DragEvent & { currentTarget: EventTarget & HTMLDivElement; }} event
-     * @param {number | null} index
-     */
+   * @param {DragEvent & { currentTarget: EventTarget & HTMLDivElement; }} event
+   * @param {number | null} index
+   */
   function handleDragStart(event, index) {
     draggedIndex = index;
     hasDragged = false;
@@ -49,11 +57,10 @@
   }
   
   /**
-     * @param {DragEvent & { currentTarget: EventTarget & HTMLDivElement; }} event
-     */
+   * @param {DragEvent & { currentTarget: EventTarget & HTMLDivElement; }} event
+   */
   function handleDragEnd(event) {
     event.currentTarget.style.opacity = '1';
-    // Aguarda um tick para garantir que o drop seja processado antes do clique
     setTimeout(() => {
       draggedIndex = null;
       dragOverIndex = null;
@@ -62,9 +69,9 @@
   }
   
   /**
-     * @param {DragEvent & { currentTarget: EventTarget & HTMLDivElement; }} event
-     * @param {number} index
-     */
+   * @param {DragEvent & { currentTarget: EventTarget & HTMLDivElement; }} event
+   * @param {number} index
+   */
   function handleDragOver(event, index) {
     event.preventDefault();
     // @ts-ignore
@@ -75,10 +82,9 @@
   }
   
   /**
-     * @param {DragEvent & { currentTarget: EventTarget & HTMLDivElement; }} event
-     */
+   * @param {DragEvent & { currentTarget: EventTarget & HTMLDivElement; }} event
+   */
   function handleDragLeave(event) {
-    // Só limpa se não estiver sobre outro item
     // @ts-ignore
     if (!event.currentTarget.contains(event.relatedTarget)) {
       dragOverIndex = null;
@@ -86,9 +92,9 @@
   }
   
   /**
-     * @param {DragEvent & { currentTarget: EventTarget & HTMLDivElement; }} event
-     * @param {number} dropIndex
-     */
+   * @param {DragEvent & { currentTarget: EventTarget & HTMLDivElement; }} event
+   * @param {number} dropIndex
+   */
   function handleDrop(event, dropIndex) {
     event.preventDefault();
     event.stopPropagation();
@@ -104,7 +110,6 @@
   
   // @ts-ignore
   function handleDrag(event) {
-    // Verifica se houve movimento significativo (mais de 5 pixels)
     const deltaX = Math.abs(event.clientX - dragStartX);
     const deltaY = Math.abs(event.clientY - dragStartY);
     if (deltaX > 5 || deltaY > 5) {
@@ -113,8 +118,8 @@
   }
   
   /**
-     * @param {{ nome: any; categoria: any; classificacao: any; pdf: string | undefined; }} louvor
-     */
+   * @param {{ pdfId: string; nome: any; categoria: any; classificacao: any; pdf: string | undefined; }} louvor
+   */
   async function openPdfFromChip(louvor) {
     const pdfPath = getPdfRelPath(louvor);
     const mode = $pdfViewer;
@@ -143,7 +148,6 @@
       return;
     }
     if (mode === 'share') {
-      // Definir estado de loading antes de começar
       processingPdfId = louvor.pdfId;
       try {
         const blob = await fetchPdfAsBlob(pdfPath);
@@ -152,13 +156,11 @@
         // @ts-ignore
         window.open(pdfPath, '_blank');
       } finally {
-        // Limpar estado de loading
         processingPdfId = null;
       }
       return;
     }
     if (mode === 'save') {
-      // Definir estado de loading antes de começar
       processingPdfId = louvor.pdfId;
       try {
         const blob = await fetchPdfAsBlob(pdfPath);
@@ -171,13 +173,11 @@
         a.download = louvor.pdf;
         a.click();
       } finally {
-        // Limpar estado de loading
         processingPdfId = null;
       }
       return;
     }
     
-    // default: mesma aba
     // @ts-ignore
     window.location.href = pdfPath;
   }
@@ -207,76 +207,75 @@
     return null;
   }
 
-  // Track saved playlist state - apenas o hash da playlist salva
-  let savedPdfIds = null;
-  let savedPlaylistName = null;
-  let showCopiedMessage = false;
-  let isSaving = false; // Flag para prevenir múltiplos salvamentos simultâneos
+  // --- Saved state detection (reactive against both $carousel and $savedPlaylists) ---
 
-  // Generate hash of current playlist for comparison
-  function getCurrentPlaylistHash() {
-    const pdfIds = $carousel
-      .map(l => l.pdfId)
-      .filter(id => id != null && id !== '')
-      .join(',');
-    return pdfIds;
+  let showCopiedMessage = false;
+  let isSaving = false;
+
+  $: currentPdfIds = $carousel
+    .map(/** @type {{ pdfId: any; }} */ l => l.pdfId)
+    .filter(/** @type {any} */ id => id != null && id !== '');
+
+  $: currentHash = currentPdfIds.join(',');
+
+  // Reacts to changes in $carousel (via currentHash) AND $savedPlaylists store
+  $: savedPlaylistMatch = currentHash !== ''
+    ? ($savedPlaylists.find(/** @type {{ pdfIds: string[]; }} */ p => p.pdfIds.join(',') === currentHash) || null)
+    : null;
+
+  $: isPlaylistSaved = savedPlaylistMatch !== null;
+  $: canSave = $carousel.length > 0 && !isPlaylistSaved && !isSaving;
+  $: canShare = $carousel.length > 0;
+
+  // --- Playlist name truncation ---
+
+  /**
+   * @param {string | null | undefined} name
+   */
+  function truncateDesktop(name) {
+    if (!name) return '';
+    if (name.length > 25) return name.slice(0, 22) + '...';
+    return name;
   }
 
-  // Check if current playlist matches saved version
-  $: currentHash = getCurrentPlaylistHash();
-  $: isPlaylistSaved = savedPdfIds !== null && savedPdfIds === currentHash && currentHash !== '';
-  $: canSave = $carousel.length > 0 && !isPlaylistSaved && !isSaving;
-  $: canShare = $carousel.length > 0; // Botão de compartilhar sempre habilitado se houver itens
+  /**
+   * @param {string | null | undefined} name
+   */
+  function truncateMobile(name) {
+    if (!name) return '';
+    if (name.length > 10) return name.slice(0, 7) + '...';
+    return name;
+  }
 
-  // Limpar estado salvo quando o carousel muda (hash muda)
-  $: {
-    currentHash; // Reage a mudanças no carousel
-    
-    // Se o hash mudou e temos um estado salvo, limpar (playlist foi modificada)
-    if (savedPdfIds !== null && savedPdfIds !== currentHash) {
-      savedPdfIds = null;
-      savedPlaylistName = null;
-    }
-    
-    // Se o carousel está vazio, limpar estado
-    if ($carousel.length === 0) {
-      savedPdfIds = null;
-      savedPlaylistName = null;
-    }
+  // --- Save ---
+
+  function generateDefaultPlaylistName() {
+    const now = new Date();
+    const day = String(now.getDate()).padStart(2, '0');
+    const month = String(now.getMonth() + 1).padStart(2, '0');
+    const year = now.getFullYear();
+    const hours = String(now.getHours()).padStart(2, '0');
+    const minutes = String(now.getMinutes()).padStart(2, '0');
+    const seconds = String(now.getSeconds()).padStart(2, '0');
+    return `lista ${day}/${month}/${year} ${hours}:${minutes}:${seconds}`;
   }
 
   function handleSave() {
-    // Prevenir múltiplos salvamentos simultâneos
     if (isSaving || !$carousel.length || isPlaylistSaved) return;
-    
-    // Marcar como salvando para desabilitar o botão imediatamente
     isSaving = true;
     
-    // Filter out invalid IDs
     const pdfIds = $carousel
-      .map(l => l.pdfId)
-      .filter(id => id != null && id !== '');
+      .map(/** @type {{ pdfId: any; }} */ l => l.pdfId)
+      .filter(/** @type {any} */ id => id != null && id !== '');
     
     if (pdfIds.length === 0) {
       isSaving = false;
       return;
     }
     
-    const hash = pdfIds.join(',');
-    
-    // Sempre criar nova playlist (não verificar se já existe)
     const playlistId = savedPlaylists.savePlaylist(pdfIds);
-    const newPlaylist = savedPlaylists.getPlaylist(playlistId);
-    
-    // Atualizar estado imediatamente após salvar (síncrono)
-    savedPdfIds = hash;
-    savedPlaylistName = newPlaylist ? newPlaylist.nome : null;
-    
-    // Navegar para a página de listas com editId para colocar a playlist em modo de edição
     goto(`/listas?editId=${playlistId}`);
     
-    // Reset flag de forma assíncrona para não bloquear a UI
-    // A reatividade do Svelte vai atualizar isPlaylistSaved automaticamente
     setTimeout(() => {
       isSaving = false;
     }, 0);
@@ -286,31 +285,19 @@
     handleSave();
   }
 
-  /**
-   * Generate default playlist name: "lista dd/mm/yyyy HH:mm:ss"
-   */
-  function generateDefaultPlaylistName() {
-    const now = new Date();
-    const day = String(now.getDate()).padStart(2, '0');
-    const month = String(now.getMonth() + 1).padStart(2, '0');
-    const year = now.getFullYear();
-    const hours = String(now.getHours()).padStart(2, '0');
-    const minutes = String(now.getMinutes()).padStart(2, '0');
-    const seconds = String(now.getSeconds()).padStart(2, '0');
-    
-    return `lista ${day}/${month}/${year} ${hours}:${minutes}:${seconds}`;
-  }
+  // --- Share ---
 
   async function handleShare() {
     if (!$carousel.length) return;
     
-    const pdfIds = $carousel.map(l => l.pdfId);
-    // Use saved playlist name if available, otherwise generate default name
-    const playlistName = savedPlaylistName || generateDefaultPlaylistName();
+    const pdfIds = $carousel.map(/** @type {{ pdfId: any; }} */ l => l.pdfId);
+    const playlistName = savedPlaylistMatch?.nome || generateDefaultPlaylistName();
     const shareUrl = generatePlaylistShareUrl(pdfIds, playlistName);
     
     try {
+      // @ts-ignore – sharePlaylistLink can return { copied: boolean } despite void typing
       const result = await sharePlaylistLink(shareUrl, playlistName);
+      // @ts-ignore
       if (result && result.copied) {
         showCopiedMessage = true;
         setTimeout(() => {
@@ -321,11 +308,87 @@
       console.error('Erro ao compartilhar playlist:', error);
     }
   }
+
+  // --- Clear (with confirmation dialog) ---
+
+  function handleClearRequest() {
+    showClearDialog = true;
+  }
+
+  function handleClearConfirm() {
+    showClearDialog = false;
+    carousel.clearCarousel();
+  }
+
+  function handleClearCancel() {
+    showClearDialog = false;
+  }
+
+  // --- Open all in tabs ---
+
+  function handleOpenInTabs() {
+    if (!$carousel.length || isOpeningTabs) return;
+
+    const mode = $pdfViewer;
+    // share/save don't map to "open in tab" — fall back to leitor
+    const effectiveMode = (mode === 'share' || mode === 'save') ? 'leitor' : mode;
+
+    isOpeningTabs = true;
+
+    for (const louvor of $carousel) {
+      const pdfPath = getPdfRelPath(louvor);
+      if (!pdfPath) continue;
+
+      if (effectiveMode === 'leitor') {
+        const fileParam = encodeURIComponent(`/${pdfPath}`);
+        const tituloParam = encodeURIComponent(louvor.nome || '');
+        const subtituloText = `${louvor.categoria || ''} | ${louvor.classificacao || ''}`.trim();
+        const subtituloParam = encodeURIComponent(subtituloText);
+        window.open(
+          `/leitor?file=${fileParam}&titulo=${tituloParam}&subtitulo=${subtituloParam}`,
+          '_blank',
+          'noopener'
+        );
+      } else if (effectiveMode === 'newtab') {
+        window.open(
+          new URL(`/${pdfPath}`, window.location.origin).href,
+          '_blank',
+          'noopener'
+        );
+      } else if (effectiveMode === 'online') {
+        window.open(buildOnlineReaderUrl(pdfPath), '_blank', 'noopener');
+      }
+    }
+
+    setTimeout(() => { isOpeningTabs = false; }, 500);
+  }
+
+  // --- Expand / collapse ---
+
+  function handleExpandToggle() {
+    isExpanded = !isExpanded;
+    // Cancel any active drag when toggling layout
+    draggedIndex = null;
+    dragOverIndex = null;
+    hasDragged = false;
+  }
 </script>
 
 {#if $carousel.length > 0}
   <div class="w-full max-w-4xl mx-auto p-4 bg-card-color rounded-lg border-2 relative carousel-container">
-    <span class="container-tag">Playlist</span>
+
+    <!-- Left label group: "Playlist" + saved name box -->
+    <div class="left-tags-group">
+      <span class="container-tag">Playlist</span>
+      {#if savedPlaylistMatch}
+        <span class="container-tag playlist-name-tag" title={savedPlaylistMatch.nome}>
+          <span class="name-desktop">{truncateDesktop(savedPlaylistMatch.nome)}</span>
+          <span class="name-mobile">{truncateMobile(savedPlaylistMatch.nome)}</span>
+        </span>
+      {/if}
+    </div>
+
+    <!-- Action buttons group -->
     <div class="action-buttons-group">
       <button
         on:click={handleShare}
@@ -336,6 +399,7 @@
         <Share2 class="w-3 h-3" />
         <span>Compartilhar</span>
       </button>
+
       <GestureButton
         on:click={handleSaveClick}
         visualFeedback={true}
@@ -347,7 +411,7 @@
           class="action-button-tag light-button"
           class:saved={isPlaylistSaved}
           class:disabled={!canSave}
-          title={isPlaylistSaved ? 'Playlist salva (toque para salvar novamente)' : isSaving ? 'Salvando...' : 'Toque para salvar'}
+          title={isPlaylistSaved ? 'Playlist já salva' : isSaving ? 'Salvando...' : 'Toque para salvar'}
         >
           {#if isPlaylistSaved}
             <Check class="w-3 h-3" />
@@ -361,15 +425,41 @@
           {/if}
         </div>
       </GestureButton>
+
       <button
-        on:click={() => carousel.clearCarousel()}
-        class="action-button-tag clear-button-tag"
+        on:click={handleOpenInTabs}
+        class="action-button-tag light-button"
+        title="Abrir todos em novas abas"
+        disabled={isOpeningTabs}
+      >
+        <ExternalLink class="w-3 h-3" />
+        <span>Em Abas</span>
+      </button>
+
+      <button
+        on:click={handleExpandToggle}
+        class="action-button-tag light-button"
+        title={isExpanded ? 'Encolher lista' : 'Expandir lista'}
+      >
+        {#if isExpanded}
+          <ChevronUp class="w-3 h-3" />
+          <span>Encolher</span>
+        {:else}
+          <ChevronDown class="w-3 h-3" />
+          <span>Expandir</span>
+        {/if}
+      </button>
+
+      <button
+        on:click={handleClearRequest}
+        class="action-button-tag clear-button-tag clear-button-spacer"
         title="Limpar todos"
       >
         <Trash2 class="w-3 h-3" />
         <span>Limpar</span>
       </button>
     </div>
+
     {#if showCopiedMessage}
       <div class="copied-message">Link copiado!</div>
     {/if}
@@ -379,7 +469,8 @@
         {pdfError}
       </div>
     {/if}
-    <div class="flex gap-2 overflow-x-auto carousel-chips-list">
+
+    <div class="carousel-chips-list" class:expanded={isExpanded}>
       {#each $carousel as louvor, index}
         {@const categoryIcon = getCategoryIcon(louvor.categoria)}
         <div
@@ -433,6 +524,16 @@
         </div>
       {/each}
     </div>
+
+    <ConfirmDialog
+      show={showClearDialog}
+      title="Limpar Playlist"
+      message="Tem certeza que deseja remover todos os louvores da playlist?"
+      confirmLabel="Limpar"
+      cancelLabel="Cancelar"
+      onConfirm={handleClearConfirm}
+      onCancel={handleClearCancel}
+    />
   </div>
 {/if}
 
@@ -441,11 +542,20 @@
     position: relative;
     border-color: var(--gold-color);
   }
-  
-  .container-tag {
+
+  /* ---- Left label group ---- */
+
+  .left-tags-group {
     position: absolute;
     top: -0.875rem;
     left: 0.75rem;
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+    z-index: 10;
+  }
+  
+  .container-tag {
     background-color: var(--card-color);
     color: var(--text-dark);
     font-size: 0.75rem;
@@ -453,9 +563,35 @@
     padding: 0.25rem 0.5rem;
     border-radius: 0.25rem;
     border: 2px solid var(--gold-color);
-    z-index: 10;
     line-height: 1;
+    white-space: nowrap;
   }
+
+  .playlist-name-tag {
+    color: var(--gold-color);
+    max-width: 200px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .name-desktop {
+    display: inline;
+  }
+
+  .name-mobile {
+    display: none;
+  }
+
+  @media (max-width: 640px) {
+    .name-desktop {
+      display: none;
+    }
+    .name-mobile {
+      display: inline;
+    }
+  }
+
+  /* ---- Action buttons group ---- */
   
   .action-buttons-group {
     position: absolute;
@@ -481,6 +617,11 @@
     line-height: 1;
   }
 
+  /* Extra left margin to make accidental clicks harder */
+  .clear-button-spacer {
+    margin-left: 0.75rem;
+  }
+
   .light-button {
     background-color: var(--card-color);
     color: var(--text-dark);
@@ -490,10 +631,8 @@
   .light-button.disabled {
     opacity: 0.6;
     cursor: not-allowed;
-    /* Não usar pointer-events: none para evitar bloquear outros elementos */
   }
 
-  /* Só aplicar hover em dispositivos com mouse */
   @media (hover: hover) and (pointer: fine) {
     .light-button:hover:not(:disabled) {
       background-color: var(--placeholder-color);
@@ -505,7 +644,6 @@
     }
   }
 
-  /* Para dispositivos touch, usar :active em vez de :hover */
   @media (hover: none) and (pointer: coarse) {
     .light-button:active:not(:disabled) {
       background-color: var(--placeholder-color);
@@ -518,17 +656,16 @@
   }
 
   .light-button.saved {
-    background-color: var(--card-color) !important; /* Manter fundo branco sempre */
+    background-color: var(--card-color) !important;
     border-color: var(--gold-color);
     color: var(--gold-color);
   }
   
-  /* Manter fundo branco mesmo quando desabilitado - garantir especificidade */
   .light-button.saved:disabled,
   .light-button.saved.disabled,
   .action-button-tag.light-button.saved {
     background-color: var(--card-color) !important;
-    opacity: 0.8; /* Opacidade reduzida mas não totalmente opaco */
+    opacity: 0.8;
   }
 
   .clear-button-tag {
@@ -541,6 +678,28 @@
     opacity: 0.9;
     transform: translateY(-1px);
   }
+
+  /* ---- Responsive: smaller gap + icon-only on very small screens ---- */
+
+  @media (max-width: 640px) {
+    .action-buttons-group {
+      gap: 0.25rem;
+    }
+    .action-button-tag {
+      padding: 0.2rem 0.375rem;
+    }
+    .clear-button-spacer {
+      margin-left: 0.375rem;
+    }
+  }
+
+  @media (max-width: 480px) {
+    .action-button-tag span {
+      display: none;
+    }
+  }
+
+  /* ---- Copied message ---- */
 
   .copied-message {
     position: absolute;
@@ -562,13 +721,41 @@
     10%, 90% { opacity: 1; transform: translateY(0); }
   }
   
+  /* ---- Chips list (horizontal default, vertical when expanded) ---- */
+
   .carousel-chips-list {
+    display: flex;
+    gap: 0.5rem;
     overflow-x: auto;
     overflow-y: hidden;
     padding: 5px 0;
+    flex-wrap: nowrap;
     scrollbar-width: thin;
     scrollbar-color: var(--gold-color) transparent;
   }
+
+  .carousel-chips-list.expanded {
+    flex-direction: column;
+    overflow-x: hidden;
+    overflow-y: auto;
+    flex-wrap: nowrap;
+    max-height: 70vh;
+  }
+  
+  .carousel-chips-list::-webkit-scrollbar {
+    height: 6px;
+  }
+  
+  .carousel-chips-list::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  
+  .carousel-chips-list::-webkit-scrollbar-thumb {
+    background: var(--gold-color);
+    border-radius: 3px;
+  }
+
+  /* ---- Chip base ---- */
   
   .carousel-chip {
     display: flex;
@@ -602,6 +789,23 @@
     box-shadow: 0 0 0 2px var(--gold-light);
     transform: scale(1.05);
   }
+
+  /* ---- Expanded mode: chips grow 25% and fill full width ---- */
+
+  .carousel-chips-list.expanded .carousel-chip {
+    min-width: unset;
+    max-width: 100%;
+    padding: 0.625rem 0.9375rem;
+  }
+
+  /* Vertical drag-over indicator */
+  .carousel-chips-list.expanded .carousel-chip.drag-over {
+    transform: translateY(-2px);
+    border-top-color: var(--gold-light);
+    box-shadow: 0 -2px 0 var(--gold-light), 0 0 0 2px var(--gold-light);
+  }
+
+  /* ---- Drag handle ---- */
   
   .drag-handle {
     display: flex;
@@ -623,11 +827,14 @@
     opacity: 1;
   }
   
+  /* ---- Chip content ---- */
+
   .chip-content {
     display: flex;
     flex-direction: column;
     min-width: 0;
     gap: 0.125rem;
+    flex: 1;
   }
   
   .chip-title {
@@ -639,6 +846,11 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  .carousel-chips-list.expanded .chip-title {
+    font-size: 1.09375rem;
+    white-space: normal;
   }
   
   .chip-subtitles {
@@ -663,6 +875,10 @@
     line-height: 1.2;
     white-space: nowrap;
   }
+
+  .carousel-chips-list.expanded .chip-classification {
+    font-size: 0.875rem;
+  }
   
   .chip-category {
     display: flex;
@@ -674,6 +890,10 @@
     line-height: 1.2;
     white-space: nowrap;
   }
+
+  .carousel-chips-list.expanded .chip-category {
+    font-size: 0.875rem;
+  }
   
   .category-icon {
     width: 0.75rem;
@@ -681,7 +901,14 @@
     color: var(--text-light);
     flex-shrink: 0;
   }
+
+  .carousel-chips-list.expanded .category-icon {
+    width: 0.9375rem;
+    height: 0.9375rem;
+  }
   
+  /* ---- Remove button ---- */
+
   .chip-remove-button {
     background-color: var(--card-color);
     color: var(--text-dark);
@@ -702,31 +929,8 @@
     background-color: var(--gold-light);
     transform: scale(1.1);
   }
-  
-  .carousel-chips-list::-webkit-scrollbar {
-    height: 6px;
-  }
-  
-  .carousel-chips-list::-webkit-scrollbar-track {
-    background: transparent;
-  }
-  
-  .carousel-chips-list::-webkit-scrollbar-thumb {
-    background: var(--gold-color);
-    border-radius: 3px;
-  }
-  
-  .pdf-error-banner {
-    grid-column: 1 / -1;
-    padding: 0.5rem;
-    margin-bottom: 0.5rem;
-    background-color: rgba(220, 38, 38, 0.1);
-    border: 1px solid rgba(220, 38, 38, 0.3);
-    border-radius: 0.25rem;
-    color: var(--text-light);
-    font-size: 0.875rem;
-    text-align: center;
-  }
+
+  /* ---- Loading states ---- */
   
   .carousel-chip.checking,
   .carousel-chip.processing {
@@ -743,5 +947,18 @@
     font-weight: 400;
     color: var(--gold-color);
   }
-</style>
 
+  /* ---- PDF error ---- */
+
+  .pdf-error-banner {
+    grid-column: 1 / -1;
+    padding: 0.5rem;
+    margin-bottom: 0.5rem;
+    background-color: rgba(220, 38, 38, 0.1);
+    border: 1px solid rgba(220, 38, 38, 0.3);
+    border-radius: 0.25rem;
+    color: var(--text-light);
+    font-size: 0.875rem;
+    text-align: center;
+  }
+</style>
