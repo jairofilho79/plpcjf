@@ -330,7 +330,7 @@ export class CacheStorageAdapter extends CacheRepository {
 
     const response = this._toResponse(pdfData);
     const idbEnabled = getConfig('OFFLINE_IDB_ENABLED') === true;
-    const idbWriteOnly = getConfig('OFFLINE_IDB_WRITE_ONLY') === true;
+    const idbWriteOnly = idbEnabled && getConfig('OFFLINE_IDB_WRITE_ONLY') === true;
     
     // Create request URL using PdfPathManager (preserves encoding)
     const requestUrl = PdfPathManager.createRequestUrl(pdfPath, window.location.origin);
@@ -360,6 +360,12 @@ export class CacheStorageAdapter extends CacheRepository {
           manifestRevision
         });
       } catch (idbError) {
+        if (idbWriteOnly) {
+          if (isQuotaExceededError(idbError) || idbError?.errorCode === 'QUOTA_EXCEEDED') {
+            throw createQuotaExceededError({ causeMessage: idbError?.message });
+          }
+          throw idbError;
+        }
         logger.warn('CacheStorageAdapter', `Failed writing PDF to IndexedDB: ${normalizedPath}`, idbError);
       }
     }

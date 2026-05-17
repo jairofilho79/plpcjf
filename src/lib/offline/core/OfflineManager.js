@@ -668,6 +668,7 @@ class OfflineManager {
     setConfig('OFFLINE_IDB_ENABLED', true);
     setConfig('OFFLINE_WORKER_ZIP_STREAMING_ENABLED', true);
     setConfig('OFFLINE_MIGRATION_AUTO_ENABLED', true);
+    setConfig('OFFLINE_IDB_WRITE_ONLY', true);
     // Keep fallback for safe progressive rollout.
     setConfig('OFFLINE_READTHROUGH_CACHE_FALLBACK_ENABLED', true);
   }

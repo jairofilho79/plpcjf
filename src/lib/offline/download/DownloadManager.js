@@ -32,6 +32,7 @@ import {
   requestPersistentStorage
 } from '../core/OfflineStorageErrors.js';
 import { getConfig } from '../core/OfflineConfig.js';
+import { computePackageProgressPercentage } from './DownloadProgressMath.js';
 
 const logger = createLogger('DownloadManager');
 
@@ -453,6 +454,7 @@ export class DownloadManager {
     const batchStartedAt = Date.now();
     let completed = 0;
     let failed = 0;
+    let lastReportedPercentage = 0;
 
     // Build packagesInfo array to track each package's information
     const packagesInfo = [];
@@ -507,12 +509,6 @@ export class DownloadManager {
         });
 
         try {
-          // Calculate cumulative bytes across all packages for weighted progress
-          const totalBytes = packagesInfo.reduce((sum, pkg) => sum + (pkg.part?.size || 0), 0);
-          const bytesBeforeThisPackage = packagesInfo
-            .slice(0, packageIndex)
-            .reduce((sum, pkg) => sum + (pkg.part?.size || 0), 0);
-
           // Strict per-package flow:
           // download -> extract -> store -> release memory before next package.
           const result = await packageDownloader.downloadExtractStorePackage(
@@ -528,32 +524,19 @@ export class DownloadManager {
 
                 // Map download phase to UI phase names
                 const downloadPhase =
-                  phase === 'extracting' ? 'downloading' :
+                  phase === 'extracting' ? 'extracting' :
                   phase === 'storing'   ? 'storing' :
                   phase === 'complete'  ? 'storing' :
                   'downloading';
 
-                // Byte-weighted global percentage during download/extract phases
-                let globalPercentage;
-                if (phase === 'downloading' || phase === 'extracting') {
-                  const partSize = part.size || 0;
-                  const bytesThisPackage = partSize > 0
-                    ? Math.floor(partSize * ((progressData.percentage || 0) / 100))
-                    : 0;
-                  const globalBytes = bytesBeforeThisPackage + bytesThisPackage;
-                  globalPercentage = totalBytes > 0
-                    ? Math.min(49, Math.floor((globalBytes / totalBytes) * 50))  // First 50% = download
-                    : 0;
-                } else {
-                  // Storing phase: use PDF count for the second half (50–99%)
-                  const pdfsInPreviousPackages = packagesInfo
-                    .slice(0, packageIndex)
-                    .reduce((sum, pkg) => sum + (pkg.completedPdfs || 0), 0);
-                  const globalCompleted = pdfsInPreviousPackages + (progressData.completed || 0);
-                  globalPercentage = totalPdfs > 0
-                    ? Math.min(99, 50 + Math.floor((globalCompleted / totalPdfs) * 49))
-                    : 50;
-                }
+                const globalPercentage = computePackageProgressPercentage({
+                  packagesInfo,
+                  packageIndex,
+                  phase,
+                  phasePercentage: progressData.percentage || 0,
+                  lastPercentage: lastReportedPercentage
+                });
+                lastReportedPercentage = globalPercentage;
 
                 const pdfsInPreviousPackages = packagesInfo
                   .slice(0, packageIndex)
@@ -568,7 +551,7 @@ export class DownloadManager {
                     percentage: globalPercentage,
                     failed,
                     downloadPhase,
-                    phaseProgress: progressData.percentage || 0,
+                    phaseProgress: globalPercentage,
                     currentPackage: packageIndex + 1,
                     totalPackages
                   });
@@ -610,9 +593,14 @@ export class DownloadManager {
             .slice(0, packageIndex)
             .reduce((sum, pkg) => sum + (pkg.completedPdfs || 0), 0);
           const finalGlobalCompleted = pdfsInPreviousPackages + stored;
-          const finalGlobalPercentage = totalPdfs > 0
-            ? Math.min(99, Math.floor((finalGlobalCompleted / totalPdfs) * 100))
-            : 0;
+          const finalGlobalPercentage = computePackageProgressPercentage({
+            packagesInfo,
+            packageIndex,
+            phase: 'complete',
+            phasePercentage: 100,
+            lastPercentage: lastReportedPercentage
+          });
+          lastReportedPercentage = finalGlobalPercentage;
 
           if (onProgress) {
             onProgress({
@@ -621,7 +609,7 @@ export class DownloadManager {
               percentage: finalGlobalPercentage,
               failed: failed,
               downloadPhase: 'storing', // After package completes, we're in storing phase
-              phaseProgress: 100, // Package is complete
+              phaseProgress: finalGlobalPercentage,
               currentPackage: packageIndex + 1,
               totalPackages: totalPackages
             });
