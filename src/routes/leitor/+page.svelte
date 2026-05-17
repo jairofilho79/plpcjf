@@ -9,7 +9,6 @@
   import { getPdfRelPath } from '$lib/utils/pathUtils';
   import { loadPdfJsComplete, loadPdfJsViewer } from '$lib/utils/pdfjsLoader';
   import { clearPdfFromSwCache } from '$lib/utils/swRegistration';
-  import { createObjectUrlManager } from '$lib/offline/ui/objectUrlLifecycle';
   import { checkEffectiveConnectivity } from '$lib/utils/pdfValidation';
   import { getFitMode, setFitMode, getNavigationMode, setNavigationMode } from '$lib/pdf-reader/readerPreferences';
   import { ZoomController } from '$lib/pdf-reader/zoomController';
@@ -63,7 +62,28 @@
   // viewerNS guardado para poder recriar o viewer ao trocar de modo
   let _viewerNS: any = null;
   let cleanup: (() => void) | null = null;
-  const objectUrlManager = createObjectUrlManager();
+  const trackedObjectUrls = new Set<string>();
+  const objectUrlManager = {
+    create(blob: Blob): string {
+      const objectUrl = URL.createObjectURL(blob);
+      trackedObjectUrls.add(objectUrl);
+      return objectUrl;
+    },
+    revoke(objectUrl: string) {
+      try {
+        URL.revokeObjectURL(objectUrl);
+      } catch {}
+      trackedObjectUrls.delete(objectUrl);
+    },
+    revokeAll() {
+      for (const objectUrl of trackedObjectUrls) {
+        try {
+          URL.revokeObjectURL(objectUrl);
+        } catch {}
+      }
+      trackedObjectUrls.clear();
+    },
+  };
   let activePdfObjectUrl: string | null = null;
   let toolbarEl: HTMLDivElement | null = null;
   let toolbarHeight = 60;
@@ -186,7 +206,6 @@
     if (newObjectUrl) activePdfObjectUrl = newObjectUrl;
     return url;
   }
-
   // Load PDF directly without validation (optimization: skip validation if already validated)
   async function loadDirectly(fileUrl: string) {
     const getDocument = (window as any).__pdfjsGetDocument as PDFJSGetDocument | undefined;
@@ -317,8 +336,7 @@
       }
       
       // PDF is available, load using ORIGINAL URL (not normalized) to preserve exact path from pdfId
-      const sourceUrl = await resolvePdfSourceUrl(originalFullUrl);
-      const loadingTask = getDocument({ url: sourceUrl, withCredentials: false });
+      const loadingTask = getDocument({ url: originalFullUrl, withCredentials: false });
       const pdfDocument = await loadingTask.promise;
       linkService.setDocument(pdfDocument);
       viewer.setDocument(pdfDocument);

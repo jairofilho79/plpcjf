@@ -239,11 +239,9 @@
           </div>
         </div>
       </div>
-      {#if !isOfflineActive}
-        <div class="offline-indicator-wrapper">
-          <OfflineIndicator />
-        </div>
-      {/if}
+      <div class="offline-indicator-wrapper">
+        <OfflineIndicator />
+      </div>
     </div>
   </div>
 {/if}

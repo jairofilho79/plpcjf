@@ -6,42 +6,12 @@ import { ZipFile } from 'yazl';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const projectRoot = path.resolve(__dirname, '..');
-
-/** Limite por parte (soma dos tamanhos dos PDFs no disco; PDFs já comprimidos ⇒ ZIP ≈ essa soma + overhead). */
-const DEFAULT_MAX_PART_BYTES = 28 * 1024 * 1024;
-
-const MAX_PART_BYTES = (() => {
-  const raw = process.env.OFFLINE_PACKAGE_MAX_BYTES;
-  if (!raw) return DEFAULT_MAX_PART_BYTES;
-  const n = Number(raw);
-  if (!Number.isFinite(n) || n <= 0) {
-    console.warn(`OFFLINE_PACKAGE_MAX_BYTES inválido: ${raw}, usando padrão ${DEFAULT_MAX_PART_BYTES}`);
-    return DEFAULT_MAX_PART_BYTES;
-  }
-  return Math.floor(n);
-})();
+const manifestPath = path.join(projectRoot, 'static', 'louvores-manifest.json');
 
 const GROUPS = [
-  {
-    id: 'partitura',
-    keyword: 'partitura',
-    manifestCategory: 'Partitura',
-    zipBase: 'Partitura'
-  },
-  {
-    id: 'cifra',
-    keyword: 'cifra',
-    manifestCategory: 'Cifra',
-    zipBase: 'Cifra'
-  },
-  {
-    id: 'gestos',
-    keyword: 'gestos em gravura',
-    manifestCategory: 'Gestos em Gravura',
-    zipBase: 'Gestos-em-Gravura',
-    /** Uma única parte mantém o nome histórico sem sufixo numérico. */
-    singlePartFilename: 'Gestos-em-Gravura.zip'
-  }
+  { id: 'partitura', keyword: 'partitura', filename: 'Partitura.zip' },
+  { id: 'cifra', keyword: 'cifra', filename: 'Cifra.zip' },
+  { id: 'gestos', keyword: 'gestos em gravura', filename: 'Gestos-em-Gravura.zip' }
 ];
 
 function normalizeBase64Url(base64) {
@@ -87,39 +57,7 @@ function ensurePosixPath(filePath) {
   return filePath.split(path.sep).join(path.posix.sep);
 }
 
-async function resolveLouvoresManifestPath() {
-  if (process.env.LOUVORES_MANIFEST) {
-    const p = path.isAbsolute(process.env.LOUVORES_MANIFEST)
-      ? process.env.LOUVORES_MANIFEST
-      : path.resolve(projectRoot, process.env.LOUVORES_MANIFEST);
-    try {
-      await fs.access(p);
-      return p;
-    } catch {
-      console.warn(`LOUVORES_MANIFEST não encontrado: ${p}`);
-    }
-  }
-
-  const candidates = [
-    path.join(projectRoot, 'static', 'louvores-manifest.json'),
-    path.join(projectRoot, 'louvores-manifest.json')
-  ];
-
-  for (const candidate of candidates) {
-    try {
-      await fs.access(candidate);
-      return candidate;
-    } catch {
-      // continue
-    }
-  }
-
-  throw new Error(
-    'louvores-manifest.json não encontrado. Coloque em static/ ou na raiz, ou defina LOUVORES_MANIFEST.'
-  );
-}
-
-async function readManifest(manifestPath) {
+async function readManifest() {
   const raw = await fs.readFile(manifestPath, 'utf8');
 
   try {
@@ -152,16 +90,11 @@ function categorizeLouvores(louvores) {
       continue;
     }
 
-    if (!louvor.pdfId) {
-      continue;
-    }
-
     for (const group of lowerKeywordGroups) {
       if (category.includes(group.keyword)) {
         group.entries.set(pdfPath, {
           louvor,
-          pdfPath,
-          pdfId: louvor.pdfId
+          pdfPath
         });
       }
     }
@@ -204,16 +137,11 @@ async function resolveAssetsDir() {
   );
 }
 
-/**
- * @param {Map<string, { louvor: object, pdfPath: string, pdfId: string }>} entriesMap
- * @param {string} assetsDir
- * @returns {Promise<Array<{ pdfPath: string, absolutePath: string, pdfId: string, size: number }>>}
- */
 async function validateAndCollectFiles(entriesMap, assetsDir) {
   const files = [];
   const normalizedAssetsDir = path.resolve(assetsDir);
 
-  for (const [pdfPath, { louvor, pdfId }] of entriesMap.entries()) {
+  for (const [pdfPath, { louvor }] of entriesMap.entries()) {
     const relativeToAssets = resolveRelativeToAssets(pdfPath);
     if (!relativeToAssets) {
       console.warn(`Caminho inválido: ${pdfPath}`);
@@ -234,68 +162,24 @@ async function validateAndCollectFiles(entriesMap, assetsDir) {
         console.warn(`Caminho não é arquivo: ${pdfPath}`);
         continue;
       }
-      files.push({
-        pdfPath,
-        absolutePath: resolvedAbsolute,
-        pdfId,
-        size: stat.size
-      });
     } catch {
       console.warn(`Arquivo não encontrado para '${louvor.nome || pdfPath}': ${pdfPath}`);
       continue;
     }
+
+    files.push({
+      pdfPath,
+      absolutePath: resolvedAbsolute
+    });
   }
 
   return files;
 }
 
-/**
- * Agrupa arquivos em lotes cuja soma de tamanhos ≤ maxBytes (ordem decrescente para reduzir “sobras”).
- * @param {Array<{ size: number, pdfPath: string }>} files
- */
-function chunkFilesByMaxBytes(files, maxBytes) {
-  const sorted = [...files].sort((a, b) => b.size - a.size);
-  /** @type {typeof files[]} */
-  const chunks = [];
-  /** @type {typeof files} */
-  let current = [];
-  let currentSum = 0;
-
-  for (const f of sorted) {
-    if (f.size > maxBytes) {
-      console.warn(
-        `AVISO: ${f.pdfPath} (${(f.size / 1024 / 1024).toFixed(2)} MiB) excede OFFLINE_PACKAGE_MAX_BYTES (${(maxBytes / 1024 / 1024).toFixed(2)} MiB) — será um pacote só com esse arquivo.`
-      );
-    }
-
-    if (current.length > 0 && currentSum + f.size > maxBytes) {
-      chunks.push(current);
-      current = [];
-      currentSum = 0;
-    }
-
-    current.push(f);
-    currentSum += f.size;
-  }
-
-  if (current.length) {
-    chunks.push(current);
-  }
-
-  return chunks;
-}
-
-function partFilename(group, partIndex1, totalParts) {
-  if (totalParts === 1 && group.singlePartFilename) {
-    return group.singlePartFilename;
-  }
-  return `${group.zipBase}-${partIndex1}.zip`;
-}
-
 async function buildZip(outputPath, files) {
   if (files.length === 0) {
     console.warn(`Nenhum arquivo para ${path.basename(outputPath)} – zip não será criado.`);
-    return 0;
+    return false;
   }
 
   const zip = new ZipFile();
@@ -317,83 +201,39 @@ async function buildZip(outputPath, files) {
 
   zip.end();
   await piping;
-  const st = await fs.stat(outputPath);
-  return st.size;
+  return true;
 }
 
 async function main() {
   console.log('Gerando pacotes offline...');
-  console.log(
-    `Tamanho-alvo por parte: até ${(MAX_PART_BYTES / 1024 / 1024).toFixed(2)} MiB (soma dos PDFs). Ajuste com OFFLINE_PACKAGE_MAX_BYTES.`
-  );
-
-  const manifestPath = await resolveLouvoresManifestPath();
-  console.log(`Manifest de louvores: ${manifestPath}`);
 
   const assetsDir = await resolveAssetsDir();
-  console.log(`Diretório de assets: ${assetsDir}`);
+  console.log(`Usando diretório de assets: ${assetsDir}`);
 
   const packagesDir = path.join(path.dirname(assetsDir), 'packages');
   await fs.mkdir(packagesDir, { recursive: true });
 
-  const louvores = await readManifest(manifestPath);
+  const louvores = await readManifest();
   const grouped = categorizeLouvores(louvores);
-
-  /** @type {Record<string, { parts: object[], totalSize: number, totalParts: number }>} */
-  const packages = {};
+  const summary = [];
 
   for (const group of grouped) {
     const files = await validateAndCollectFiles(group.entries, assetsDir);
-    const chunks = chunkFilesByMaxBytes(files, MAX_PART_BYTES);
-    const manifestCategory = group.manifestCategory;
-    const parts = [];
-    let categoryBytes = 0;
-
-    for (let i = 0; i < chunks.length; i++) {
-      const batch = chunks[i];
-      const filename = partFilename(group, i + 1, chunks.length);
-      const outputPath = path.join(packagesDir, filename);
-      const zipSizeOnDisk = await buildZip(outputPath, batch);
-      if (zipSizeOnDisk === 0) {
-        continue;
-      }
-      categoryBytes += zipSizeOnDisk;
-
-      parts.push({
-        filename,
-        size: zipSizeOnDisk,
-        url: `/packages/${filename}`,
-        pdfs: batch.map((f) => f.pdfId)
-      });
-
-      console.log(
-        `  ${manifestCategory} parte ${i + 1}/${chunks.length}: ${filename} — ${batch.length} PDFs, zip ${(zipSizeOnDisk / 1024 / 1024).toFixed(2)} MiB`
-      );
-    }
-
-    packages[manifestCategory] = {
-      parts,
-      totalSize: categoryBytes,
-      totalParts: parts.length
-    };
+    const outputPath = path.join(packagesDir, group.filename);
+    const created = await buildZip(outputPath, files);
+    summary.push({
+      grupo: group.filename,
+      arquivos: files.length,
+      destino: outputPath,
+      criado: created
+    });
   }
 
-  const offlineManifest = {
-    version: '1.0.0',
-    timestamp: new Date().toISOString(),
-    packages
-  };
-
-  const json = JSON.stringify(offlineManifest, null, 2);
-  const staticOut = path.join(projectRoot, 'static', 'offline-manifest.json');
-  const rootOut = path.join(projectRoot, 'offline-manifest.json');
-
-  await fs.mkdir(path.dirname(staticOut), { recursive: true });
-  await fs.writeFile(staticOut, json, 'utf8');
-  await fs.writeFile(rootOut, json, 'utf8');
-
-  console.log(`offline-manifest.json escrito em:\n  ${staticOut}\n  ${rootOut}`);
-  console.log('Pacotes em:', packagesDir);
+  console.log('Resumo:');
+  for (const item of summary) {
+    const status = item.criado ? 'criado' : 'não criado';
+    console.log(`- ${item.grupo}: ${item.arquivos} arquivos -> ${item.destino} (${status})`);
+  }
   console.log('Concluído.');
 }
 
@@ -401,3 +241,5 @@ main().catch((error) => {
   console.error('Erro ao gerar pacotes offline:', error);
   process.exitCode = 1;
 });
+
+
