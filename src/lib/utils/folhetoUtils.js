@@ -28,12 +28,12 @@ export function generateFolhetoHtml(louvores) {
     .map((l, i) => {
       const num = l.numero != null ? String(l.numero) : 'N/A';
       let nome = (l.nome || 'Sem título').toUpperCase();
-      if (nome.length > 30) {
-        nome = nome.slice(0, 27) + '...';
+      if (nome.length > 50) {
+        nome = nome.slice(0, 47) + '...';
       }
       const bgColor = i % 2 === 0 ? '#FFF8E1' : '#FFFFFF';
       return `<tr style="background:${bgColor};">
-        <td style="padding:14px 24px;text-align:center;width:100px;font-weight:600;color:#6A2F2F;font-size:18px;">${num}</td>
+        <td style="padding:14px 24px;text-align:center;width:100px;font-weight:600;color:#4B2D2B;font-size:18px;">${num}</td>
         <td style="padding:14px 24px;text-align:left;color:#2c3e50;font-size:16px;letter-spacing:0.5px;">${nome}</td>
       </tr>`;
     })
@@ -50,7 +50,7 @@ export function generateFolhetoHtml(louvores) {
     box-shadow:0 8px 32px rgba(0,0,0,0.15);
   ">
     <div style="
-      background:linear-gradient(135deg,#6A2F2F 0%,#4B2D2B 100%);
+      background:#4B2D2B;
       padding:20px 28px;
       display:flex;
       justify-content:space-between;
@@ -65,7 +65,7 @@ export function generateFolhetoHtml(louvores) {
       margin-top:0;
     ">
       <thead>
-        <tr style="background:#6A2F2F;">
+        <tr style="background:#4B2D2B;">
           <th style="
             padding:14px 24px;
             text-align:center;
@@ -92,7 +92,7 @@ export function generateFolhetoHtml(louvores) {
       </tbody>
     </table>
     <div style="
-      background:#6A2F2F;
+      background:#4B2D2B;
       height:6px;
     "></div>
   </div>`;
@@ -138,10 +138,8 @@ export async function generateFolhetoImage(htmlString) {
  * @returns {Promise<void>}
  */
 export async function shareFolheto(imageBlob, shareUrl, playlistName) {
-  const filename = `folheto-${playlistName.replace(/[^a-z0-9]/gi, '_')}.png`;
-
   try {
-    const file = new File([imageBlob], filename, { type: 'image/png' });
+    const file = new File([imageBlob], `folheto-${playlistName.replace(/[^a-z0-9]/gi, '_')}.png`, { type: 'image/png' });
     if (navigator.canShare && navigator.canShare({ files: [file] }) && navigator.share) {
       await navigator.share({ files: [file], title: 'Folheto de Louvores' });
       return;
@@ -151,11 +149,5 @@ export async function shareFolheto(imageBlob, shareUrl, playlistName) {
   }
 
   const url = URL.createObjectURL(imageBlob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  window.open(url, '_blank');
 }
