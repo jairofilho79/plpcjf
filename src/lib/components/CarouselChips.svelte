@@ -1,6 +1,6 @@
 <script>
   import { tick } from 'svelte';
-  import { X, Trash2, GripVertical, Share2, Save, Check, ExternalLink, ChevronDown, ChevronUp } from 'lucide-svelte';
+  import { X, Trash2, GripVertical, Share2, Save, Check, ExternalLink, ChevronDown, ChevronUp, FileText } from 'lucide-svelte';
   import { goto } from '$app/navigation';
   import { carousel } from '$lib/stores/carousel';
   import { pdfViewer } from '$lib/stores/pdfViewer';
@@ -16,6 +16,7 @@
     openPdfNewTabOfflineFirst 
   } from '$lib/utils/pdfUtils';
   import { sharePlaylistLink, generatePlaylistShareUrl } from '$lib/utils/playlistUtils';
+  import { generateFolhetoHtml, generateFolhetoImage, shareFolheto } from '$lib/utils/folhetoUtils';
   import { navigateLouvorToLeitor } from '$lib/utils/navigateLouvorToLeitor';
   
   /**
@@ -39,6 +40,7 @@
   let showClearDialog = false;
   let isExpanded = false;
   let isOpeningTabs = false;
+  let isGeneratingFolheto = false;
   
   /**
    * @param {DragEvent & { currentTarget: EventTarget & HTMLDivElement; }} event
@@ -372,6 +374,25 @@
     dragOverIndex = null;
     hasDragged = false;
   }
+
+  async function handleFolheto() {
+    if (!$carousel.length || isGeneratingFolheto) return;
+    isGeneratingFolheto = true;
+
+    try {
+      const louvores = $carousel.map(l => ({ nome: l.nome, numero: l.numero }));
+      const playlistName = savedPlaylistMatch?.nome || generateDefaultPlaylistName();
+      const html = generateFolhetoHtml(louvores);
+      const imageBlob = await generateFolhetoImage(html);
+      const pdfIds = $carousel.map(l => l.pdfId);
+      const shareUrl = generatePlaylistShareUrl(pdfIds, playlistName);
+      await shareFolheto(imageBlob, shareUrl, playlistName);
+    } catch (error) {
+      console.error('Erro ao gerar folheto:', error);
+    } finally {
+      isGeneratingFolheto = false;
+    }
+  }
 </script>
 
 {#if $carousel.length > 0}
@@ -434,6 +455,16 @@
       >
         <ExternalLink class="w-3 h-3" />
         <span>Em Abas</span>
+      </button>
+
+      <button
+        on:click={handleFolheto}
+        class="action-button-tag light-button"
+        title="Gerar folheto"
+        disabled={!canShare || isGeneratingFolheto}
+      >
+        <FileText class="w-3 h-3" />
+        <span>Folheto</span>
       </button>
 
       <button
