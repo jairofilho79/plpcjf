@@ -27,8 +27,11 @@ export function generateFolhetoHtml(louvores) {
   const linhas = louvores
     .map(l => {
       const num = l.numero != null ? String(l.numero) : 'N/A';
-      const nome = (l.nome || 'Sem título').toUpperCase();
-      return `<tr><td class="num">${num}</td><td class="nome">${nome}</td></tr>`;
+      let nome = (l.nome || 'Sem título').toUpperCase();
+      if (nome.length > 30) {
+        nome = nome.slice(0, 27) + '...';
+      }
+      return `<tr><td style="padding:8px 28px;">${num}</td><td style="padding:8px 28px;">${nome}</td></tr>`;
     })
     .join('');
 
@@ -38,7 +41,7 @@ export function generateFolhetoHtml(louvores) {
     padding:0;
     font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;
     background:#fff;
-    width:800px;
+    width:620px;
     box-sizing:border-box;
   ">
     <div style="
@@ -101,7 +104,9 @@ export async function generateFolhetoImage(htmlString) {
 
   try {
     const html2canvas = (await import('html2canvas')).default;
-    const canvas = await html2canvas(container.firstElementChild, {
+    const target = /** @type {HTMLElement} */ (container.firstElementChild);
+    if (!target) throw new Error('Elemento do folheto não renderizado');
+    const canvas = await html2canvas(target, {
       scale: 2,
       useCORS: true,
       backgroundColor: '#ffffff'
@@ -129,11 +134,11 @@ export async function shareFolheto(imageBlob, shareUrl, playlistName) {
   try {
     const file = new File([imageBlob], filename, { type: 'image/png' });
     if (navigator.canShare && navigator.canShare({ files: [file] }) && navigator.share) {
-      await navigator.share({ files: [file], title: 'Folheto de Louvores', url: shareUrl });
+      await navigator.share({ files: [file], title: 'Folheto de Louvores' });
       return;
     }
   } catch (e) {
-    if (e.name === 'AbortError') return;
+    if (/** @type {{ name?: string }} */ (e).name === 'AbortError') return;
   }
 
   const url = URL.createObjectURL(imageBlob);
