@@ -95,6 +95,26 @@ export function generateFolhetoHtml(louvores) {
       background:#4B2D2B;
       height:6px;
     "></div>
+    <div style="
+      background:#3D2622;
+      padding:16px 28px;
+      text-align:center;
+      border-top:2px solid #D4AF37;
+    ">
+      <div style="
+        font-size:12px;
+        color:#D4AF37;
+        text-transform:uppercase;
+        letter-spacing:2px;
+        margin-bottom:6px;
+        font-weight:600;
+      ">Feito com <3</div>
+      <div style="
+        font-size:11px;
+        color:#A89080;
+        letter-spacing:1px;
+      ">Bom culto! A Paz do Senhor Jesus Cristo</div>
+    </div>
   </div>`;
 }
 
