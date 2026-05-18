@@ -25,67 +25,76 @@ export function generateFolhetoHtml(louvores) {
   const data = `${diaSemana} ${dia}/${mes}/${ano}`;
 
   const linhas = louvores
-    .map(l => {
+    .map((l, i) => {
       const num = l.numero != null ? String(l.numero) : 'N/A';
       let nome = (l.nome || 'Sem título').toUpperCase();
       if (nome.length > 30) {
         nome = nome.slice(0, 27) + '...';
       }
-      return `<tr><td style="padding:8px 28px;">${num}</td><td style="padding:8px 28px;">${nome}</td></tr>`;
+      const bgColor = i % 2 === 0 ? '#FFF8E1' : '#FFFFFF';
+      return `<tr style="background:${bgColor};">
+        <td style="padding:14px 24px;text-align:center;width:100px;font-weight:600;color:#6A2F2F;font-size:18px;">${num}</td>
+        <td style="padding:14px 24px;text-align:left;color:#2c3e50;font-size:16px;letter-spacing:0.5px;">${nome}</td>
+      </tr>`;
     })
     .join('');
 
   return `<div style="
     display:inline-block;
-    border:5px solid #000;
+    border:4px solid #D4AF37;
     padding:0;
-    font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;
-    background:#fff;
+    font-family:'Georgia','Times New Roman',serif;
+    background:#FFF8E1;
     width:620px;
     box-sizing:border-box;
+    box-shadow:0 8px 32px rgba(0,0,0,0.15);
   ">
     <div style="
+      background:linear-gradient(135deg,#6A2F2F 0%,#4B2D2B 100%);
+      padding:20px 28px;
       display:flex;
       justify-content:space-between;
       align-items:center;
-      padding:18px 28px 10px 28px;
-      font-size:16px;
-      font-weight:700;
-      color:#000;
-      text-transform:uppercase;
     ">
-      <span>LOUVORES</span>
-      <span>${data}</span>
+      <span style="font-size:22px;font-weight:700;color:#D4AF37;text-transform:uppercase;letter-spacing:2px;font-family:'Georgia',serif;">Louvores</span>
+      <span style="font-size:14px;font-weight:500;color:#F0E68C;text-transform:uppercase;letter-spacing:1px;">${data}</span>
     </div>
     <table style="
       width:100%;
       border-collapse:collapse;
-      color:#000;
-      font-size:15px;
-      text-transform:uppercase;
+      margin-top:0;
     ">
       <thead>
-        <tr style="background:#6b7280;">
+        <tr style="background:#6A2F2F;">
           <th style="
-            padding:10px 28px;
+            padding:14px 24px;
+            text-align:center;
+            font-weight:700;
+            color:#D4AF37;
+            font-size:14px;
+            text-transform:uppercase;
+            letter-spacing:1.5px;
+            width:100px;
+          ">Número</th>
+          <th style="
+            padding:14px 24px;
             text-align:left;
             font-weight:700;
-            border-bottom:2px solid #000;
-            width:120px;
-          ">NÚMERO</th>
-          <th style="
-            padding:10px 28px;
-            text-align:left;
-            font-weight:700;
-            border-bottom:2px solid #000;
-          ">NOME DO HINO</th>
+            color:#D4AF37;
+            font-size:14px;
+            text-transform:uppercase;
+            letter-spacing:1.5px;
+          ">Nome do Hino</th>
         </tr>
       </thead>
       <tbody>
         ${linhas}
       </tbody>
     </table>
-    <div style="height:28px;"></div>
+    <div style="
+      background:#6A2F2F;
+      height:6px;
+    "></div>
   </div>`;
 }
 
