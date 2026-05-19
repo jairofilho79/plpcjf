@@ -33,8 +33,8 @@ export function generateFolhetoHtml(louvores) {
       }
       const bgColor = i % 2 === 0 ? '#FFF8E1' : '#FFFFFF';
       return `<tr style="background:${bgColor};">
-        <td style="padding:14px 24px;text-align:center;width:100px;font-weight:600;color:#4B2D2B;font-size:18px;">${num}</td>
-        <td style="padding:14px 24px;text-align:left;color:#2c3e50;font-size:16px;letter-spacing:0.5px;">${nome}</td>
+        <td style="padding:14px 24px;text-align:center;width:100px;font-weight:600;color:#4B2D2B;font-size:18px;vertical-align:middle;">${num}</td>
+        <td style="padding:14px 24px;text-align:left;color:#2c3e50;font-size:16px;letter-spacing:0.5px;vertical-align:middle;">${nome}</td>
       </tr>`;
     })
     .join('');
