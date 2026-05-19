@@ -32,9 +32,9 @@ export function generateFolhetoHtml(louvores) {
         nome = nome.slice(0, 47) + '...';
       }
       const bgColor = i % 2 === 0 ? '#FFF8E1' : '#FFFFFF';
-      return `<div style="display:flex;align-items:center;background:${bgColor};min-height:46px;">
-        <div style="width:148px;flex-shrink:0;padding:0 24px;text-align:center;font-weight:600;color:#4B2D2B;font-size:18px;box-sizing:border-box;">${num}</div>
-        <div style="flex:1;padding:0 24px;color:#2c3e50;font-size:16px;letter-spacing:0.5px;">${nome}</div>
+      return `<div style="display:flex;background:${bgColor};">
+        <div style="width:148px;flex-shrink:0;padding:14px 24px 22px;text-align:center;font-weight:600;color:#4B2D2B;font-size:18px;box-sizing:border-box;">${num}</div>
+        <div style="flex:1;padding:14px 24px 22px;color:#2c3e50;font-size:16px;letter-spacing:0.5px;">${nome}</div>
       </div>`;
     })
     .join('');
