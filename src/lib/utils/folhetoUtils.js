@@ -56,7 +56,8 @@ export function generateFolhetoHtml(louvores) {
       justify-content:space-between;
       align-items:center;
     ">
-      <span style="font-size:14px;font-weight:500;color:#F0E68C;text-transform:uppercase;letter-spacing:1px;">${data}</span>
+      <span style="font-size:16px;font-weight:700;color:#D4AF37;text-transform:uppercase;letter-spacing:2px;font-family:'Georgia',serif;">Louvores</span>
+      <span style="font-size:16px;font-weight:500;color:#F0E68C;text-transform:uppercase;letter-spacing:1px;">${data}</span>
     </div>
     <table style="
       width:100%;
@@ -93,7 +94,15 @@ export function generateFolhetoHtml(louvores) {
     <div style="
       background:#4B2D2B;
       height:6px;
+      padding:0 28px;
+      box-sizing:border-box;
     "></div>
+    <div style="
+      background:#3D2622;
+      padding:16px 28px;
+      text-align:center;
+      border-top:2px solid #D4AF37;
+    ">
       <div style="
         font-size:12px;
         color:#D4AF37;
