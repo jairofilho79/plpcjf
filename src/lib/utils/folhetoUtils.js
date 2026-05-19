@@ -33,8 +33,8 @@ export function generateFolhetoHtml(louvores) {
       }
       const bgColor = i % 2 === 0 ? '#FFF8E1' : '#FFFFFF';
       return `<tr style="background:${bgColor};">
-        <td style="padding:14px 24px;text-align:center;width:100px;font-weight:600;color:#4B2D2B;font-size:18px;">${num}</td>
-        <td style="padding:14px 24px;text-align:left;color:#2c3e50;font-size:16px;letter-spacing:0.5px;">${nome}</td>
+        <td style="padding:14px 24px;text-align:center;width:100px;font-weight:600;color:#4B2D2B;font-size:18px;vertical-align:middle;">${num}</td>
+        <td style="padding:14px 24px;text-align:left;color:#2c3e50;font-size:16px;letter-spacing:0.5px;vertical-align:middle;">${nome}</td>
       </tr>`;
     })
     .join('');
@@ -56,8 +56,8 @@ export function generateFolhetoHtml(louvores) {
       justify-content:space-between;
       align-items:center;
     ">
-      <span style="font-size:22px;font-weight:700;color:#D4AF37;text-transform:uppercase;letter-spacing:2px;font-family:'Georgia',serif;">Louvores</span>
-      <span style="font-size:14px;font-weight:500;color:#F0E68C;text-transform:uppercase;letter-spacing:1px;">${data}</span>
+      <span style="font-size:16px;font-weight:700;color:#F0E68C;text-transform:uppercase;letter-spacing:2px;font-family:'Georgia',serif;">Louvores</span>
+      <span style="font-size:16px;font-weight:500;color:#F0E68C;text-transform:uppercase;letter-spacing:1px;">${data}</span>
     </div>
     <table style="
       width:100%;
@@ -94,7 +94,28 @@ export function generateFolhetoHtml(louvores) {
     <div style="
       background:#4B2D2B;
       height:6px;
+      padding:0 28px;
+      box-sizing:border-box;
     "></div>
+    <div style="
+      background:#3D2622;
+      padding:16px 28px;
+      text-align:center;
+    ">
+      <div style="
+        font-size:12px;
+        color:#D4AF37;
+        text-transform:uppercase;
+        letter-spacing:2px;
+        margin-bottom:6px;
+        font-weight:600;
+      ">A Paz do Senhor Jesus Cristo</div>
+      <div style="
+        font-size:11px;
+        color:#A89080;
+        letter-spacing:1px;
+      ">Bom culto!</div>
+    </div>
   </div>`;
 }
 
