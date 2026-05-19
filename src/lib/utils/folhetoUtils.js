@@ -32,10 +32,10 @@ export function generateFolhetoHtml(louvores) {
         nome = nome.slice(0, 47) + '...';
       }
       const bgColor = i % 2 === 0 ? '#FFF8E1' : '#FFFFFF';
-      return `<tr style="background:${bgColor};">
-        <td style="padding:0;width:100px;font-weight:600;color:#4B2D2B;font-size:18px;"><div style="display:flex;align-items:center;justify-content:center;min-height:46px;padding:0 24px;line-height:1;">${num}</div></td>
-        <td style="padding:0;color:#2c3e50;font-size:16px;letter-spacing:0.5px;"><div style="display:flex;align-items:center;min-height:46px;padding:0 24px;line-height:1;">${nome}</div></td>
-      </tr>`;
+      return `<div style="display:flex;align-items:center;background:${bgColor};min-height:46px;">
+        <div style="width:148px;flex-shrink:0;padding:0 24px;text-align:center;font-weight:600;color:#4B2D2B;font-size:18px;box-sizing:border-box;">${num}</div>
+        <div style="flex:1;padding:0 24px;color:#2c3e50;font-size:16px;letter-spacing:0.5px;">${nome}</div>
+      </div>`;
     })
     .join('');
 
@@ -59,38 +59,11 @@ export function generateFolhetoHtml(louvores) {
       <span style="font-size:16px;font-weight:700;color:#F0E68C;text-transform:uppercase;letter-spacing:2px;font-family:'Georgia',serif;">Louvores</span>
       <span style="font-size:16px;font-weight:500;color:#F0E68C;text-transform:uppercase;letter-spacing:1px;">${data}</span>
     </div>
-    <table style="
-      width:100%;
-      border-collapse:collapse;
-      margin-top:0;
-    ">
-      <thead>
-        <tr style="background:#4B2D2B;">
-          <th style="
-            padding:14px 24px;
-            text-align:center;
-            font-weight:700;
-            color:#D4AF37;
-            font-size:14px;
-            text-transform:uppercase;
-            letter-spacing:1.5px;
-            width:100px;
-          ">Número</th>
-          <th style="
-            padding:14px 24px;
-            text-align:left;
-            font-weight:700;
-            color:#D4AF37;
-            font-size:14px;
-            text-transform:uppercase;
-            letter-spacing:1.5px;
-          ">Nome do Hino</th>
-        </tr>
-      </thead>
-      <tbody>
-        ${linhas}
-      </tbody>
-    </table>
+    <div style="display:flex;align-items:center;background:#4B2D2B;">
+      <div style="width:148px;flex-shrink:0;padding:14px 24px;text-align:center;font-weight:700;color:#D4AF37;font-size:14px;text-transform:uppercase;letter-spacing:1.5px;box-sizing:border-box;">Número</div>
+      <div style="flex:1;padding:14px 24px;font-weight:700;color:#D4AF37;font-size:14px;text-transform:uppercase;letter-spacing:1.5px;">Nome do Hino</div>
+    </div>
+    ${linhas}
     <div style="
       background:#4B2D2B;
       height:6px;
