@@ -73,10 +73,10 @@
   let requiredPackagesInfo = null;
   
   let isLoadingStats = false;
-  /** @type {boolean} Stats só sob pedido — não carregar ao abrir a página */
-  let statsRequested = false;
+  /** @type {boolean} Painel de stats visível (capa com cache; cálculo só ao atualizar) */
+  let statsRequested = true;
   /** true = a mostrar cache com capa; false = já atualizado nesta sessão */
-  let statsStale = false;
+  let statsStale = true;
   let isValidating = false; // Controla validação de erros (background)
   let needsSync = false;
   let isSyncing = false;
@@ -320,6 +320,7 @@
   // Bootstrap leve: localStorage + listeners. Nada de Cache Storage / stats / migration no open.
   onMount(() => {
     offlineAvailable = checkOfflineAvailable();
+    openCachedStats(); // capa imediata com cache; sem cálculo pesado
 
     if (typeof window !== 'undefined' && window.location.hostname === 'localhost') {
       performanceMetrics.enabled = true;
@@ -1396,94 +1397,80 @@
         <div class="action-buttons"></div>
       </div>
       {:else}
-      <!-- Stats: cache imediato + capa para atualizar -->
-      {#if statsRequested}
-        <div class="availability-summary" class:has-stale-overlay={statsStale}>
-          <div class="summary-header">
-            <TrendingUp class="w-5 h-5 summary-icon" />
-            <h3 class="summary-title">Disponibilidade Geral</h3>
-            {#if !statsStale}
-              <button
-                class="refresh-stats-btn"
-                on:click={() => loadCategoryStats(true)}
-                disabled={isLoadingStats}
-                title="Atualizar estatísticas"
-              >
-                <RefreshCw class="w-4 h-4 {isLoadingStats ? 'spinning' : ''}" />
-              </button>
-            {/if}
-            {#if performanceMetrics.enabled && performanceMetrics.lastMetrics}
-              <button
-                class="metrics-btn"
-                on:click={() => {
-                  const metrics = getCacheMetrics();
-                  console.table(metrics);
-                  alert(`Cache Hit Rate: ${(metrics.cacheHitRate * 100).toFixed(1)}%\nAvg Calculation: ${metrics.avgCalculationTime}ms\nAvg Load: ${metrics.avgLoadTime}ms\nCache Size: ${(metrics.cacheSize / 1024).toFixed(2)} KB\nCategories Cached: ${metrics.categoriesCached}`);
-                }}
-                title="Mostrar métricas de performance (desenvolvimento)"
-              >
-                <TrendingUp class="w-4 h-4" />
-              </button>
-            {/if}
-          </div>
-          <div class="summary-stats">
-            <div class="stat-item">
-              <span class="stat-value">{totalStats.available}</span>
-              <span class="stat-label">Disponíveis</span>
-            </div>
-            <div class="stat-item">
-              <span class="stat-value">{totalStats.missing}</span>
-              <span class="stat-label">Faltantes</span>
-            </div>
-            <div class="stat-item">
-              <span class="stat-value">{totalStats.total}</span>
-              <span class="stat-label">Total</span>
-            </div>
-            <div class="stat-item highlight">
-              <span class="stat-value">{overallPercentage}%</span>
-              <span class="stat-label">Completo</span>
-            </div>
-          </div>
-          <div class="summary-progress-bar">
-            <div 
-              class="summary-progress-fill" 
-              style="width: {overallPercentage}%"
-            ></div>
-          </div>
-
-          {#if statsStale}
-            <div class="stats-stale-overlay">
-              <p class="stats-stale-hint">Dados em cache — podem estar desatualizados</p>
-              <button
-                class="btn btn-primary stats-refresh-cta"
-                type="button"
-                on:click={() => loadCategoryStats(true)}
-                disabled={isLoadingStats}
-              >
-                {#if isLoadingStats}
-                  <RefreshCw class="w-5 h-5 spinning" />
-                  <span>A atualizar…</span>
-                {:else}
-                  <RefreshCw class="w-5 h-5" />
-                  <span>Clique aqui para atualizar</span>
-                {/if}
-              </button>
-            </div>
+      <!-- Stats: capa com cache ao abrir; cálculo só ao clicar atualizar -->
+      <div class="availability-summary" class:has-stale-overlay={statsStale}>
+        <div class="summary-header">
+          <TrendingUp class="w-5 h-5 summary-icon" />
+          <h3 class="summary-title">Disponibilidade Geral</h3>
+          {#if !statsStale}
+            <button
+              class="refresh-stats-btn"
+              on:click={() => loadCategoryStats(true)}
+              disabled={isLoadingStats}
+              title="Atualizar estatísticas"
+            >
+              <RefreshCw class="w-4 h-4 {isLoadingStats ? 'spinning' : ''}" />
+            </button>
+          {/if}
+          {#if performanceMetrics.enabled && performanceMetrics.lastMetrics}
+            <button
+              class="metrics-btn"
+              on:click={() => {
+                const metrics = getCacheMetrics();
+                console.table(metrics);
+                alert(`Cache Hit Rate: ${(metrics.cacheHitRate * 100).toFixed(1)}%\nAvg Calculation: ${metrics.avgCalculationTime}ms\nAvg Load: ${metrics.avgLoadTime}ms\nCache Size: ${(metrics.cacheSize / 1024).toFixed(2)} KB\nCategories Cached: ${metrics.categoriesCached}`);
+              }}
+              title="Mostrar métricas de performance (desenvolvimento)"
+            >
+              <TrendingUp class="w-4 h-4" />
+            </button>
           {/if}
         </div>
-      {:else}
-        <div class="stats-on-demand">
-          <button
-            class="btn btn-secondary"
-            type="button"
-            on:click={openCachedStats}
-            title="Ver estatísticas guardadas em cache"
-          >
-            <TrendingUp class="w-5 h-5" />
-            <span>Ver estatísticas</span>
-          </button>
+        <div class="summary-stats">
+          <div class="stat-item">
+            <span class="stat-value">{totalStats.available}</span>
+            <span class="stat-label">Disponíveis</span>
+          </div>
+          <div class="stat-item">
+            <span class="stat-value">{totalStats.missing}</span>
+            <span class="stat-label">Faltantes</span>
+          </div>
+          <div class="stat-item">
+            <span class="stat-value">{totalStats.total}</span>
+            <span class="stat-label">Total</span>
+          </div>
+          <div class="stat-item highlight">
+            <span class="stat-value">{overallPercentage}%</span>
+            <span class="stat-label">Completo</span>
+          </div>
         </div>
-      {/if}
+        <div class="summary-progress-bar">
+          <div 
+            class="summary-progress-fill" 
+            style="width: {overallPercentage}%"
+          ></div>
+        </div>
+
+        {#if statsStale}
+          <div class="stats-stale-overlay">
+            <p class="stats-stale-hint">Dados em cache — podem estar desatualizados</p>
+            <button
+              class="btn btn-primary stats-refresh-cta"
+              type="button"
+              on:click={() => loadCategoryStats(true)}
+              disabled={isLoadingStats}
+            >
+              {#if isLoadingStats}
+                <RefreshCw class="w-5 h-5 spinning" />
+                <span>A atualizar…</span>
+              {:else}
+                <RefreshCw class="w-5 h-5" />
+                <span>Clique aqui para atualizar</span>
+              {/if}
+            </button>
+          </div>
+        {/if}
+      </div>
 
       <!-- Info about category persistence and cache limitation -->
       <div class="info-box">
@@ -1985,12 +1972,6 @@
   }
   
   /* Availability summary styles */
-  .stats-on-demand {
-    display: flex;
-    justify-content: center;
-    margin-bottom: 1.5rem;
-  }
-
   .availability-summary {
     position: relative;
     background-color: var(--background-color);
@@ -2361,13 +2342,13 @@
   }
 
   .btn-secondary {
-    background-color: transparent;
+    background-color: #fff;
     color: var(--text-dark);
     border-color: var(--gold-color);
   }
 
   .btn-secondary:hover:not(:disabled) {
-    background-color: rgba(212, 175, 55, 0.15);
+    background-color: #f5f5f5;
   }
 
   .bundle-file-input {
