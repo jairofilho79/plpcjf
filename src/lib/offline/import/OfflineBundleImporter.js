@@ -4,7 +4,7 @@
  * with staging + atomic commit (rollback on failure).
  */
 
-import { Unzip, UnzipInflate, unzip } from 'fflate';
+import { unzip } from 'fflate';
 import { browser } from '$app/environment';
 import { getConfig } from '../core/OfflineConfig.js';
 import { createLogger } from '../utils/OfflineLogger.js';
@@ -18,27 +18,12 @@ import {
   listCategoriesFromOfflineManifest,
   initialImportConcurrency
 } from './bundleValidation.js';
+import { iterateZipEntriesCd } from './zipCdReader.js';
 
 const logger = createLogger('OfflineBundleImporter');
 
 const OFFLINE_MANIFEST_NAME = 'offline-manifest.json';
 const LOUVORES_MANIFEST_NAME = 'louvores-manifest.json';
-
-/**
- * @param {Uint8Array[]} chunks
- * @returns {Uint8Array}
- */
-function concatUint8(chunks) {
-  let len = 0;
-  for (const c of chunks) len += c.length;
-  const out = new Uint8Array(len);
-  let offset = 0;
-  for (const c of chunks) {
-    out.set(c, offset);
-    offset += c.length;
-  }
-  return out;
-}
 
 /**
  * @param {Uint8Array} buffer
@@ -75,109 +60,6 @@ function mergeSignals(signals) {
     s.addEventListener('abort', () => ctrl.abort(), { once: true });
   }
   return ctrl.signal;
-}
-
-/**
- * Stream zip entries with light backpressure (max 2 buffered).
- * @param {Blob} blob
- * @param {AbortSignal} [signal]
- * @returns {AsyncGenerator<{ name: string, data: Uint8Array }>}
- */
-async function* iterateZipEntries(blob, signal) {
-  /** @type {{ name: string, data: Uint8Array }[]} */
-  const queue = [];
-  let readDone = false;
-  /** @type {Error | null} */
-  let readError = null;
-  /** @type {(() => void) | null} */
-  let wake = null;
-
-  const notify = () => {
-    if (wake) {
-      const w = wake;
-      wake = null;
-      w();
-    }
-  };
-
-  const wait = () =>
-    new Promise((resolve) => {
-      wake = resolve;
-    });
-
-  const uz = new Unzip((err) => {
-    if (err) {
-      readError = err instanceof Error ? err : new Error(String(err));
-      notify();
-    }
-  });
-  uz.register(UnzipInflate);
-  uz.onfile = (file) => {
-    /** @type {Uint8Array[]} */
-    const chunks = [];
-    file.ondata = (err, dat, final) => {
-      if (err) {
-        readError = err instanceof Error ? err : new Error(String(err));
-        notify();
-        return;
-      }
-      if (dat) chunks.push(dat);
-      if (final) {
-        queue.push({ name: file.name, data: concatUint8(chunks) });
-        notify();
-      }
-    };
-    file.start();
-  };
-
-  const reader = blob.stream().getReader();
-  const pump = (async () => {
-    try {
-      while (true) {
-        if (signal?.aborted) {
-          throw new DOMException('Import cancelled', 'AbortError');
-        }
-        while (queue.length >= 2) {
-          await wait();
-          if (signal?.aborted) {
-            throw new DOMException('Import cancelled', 'AbortError');
-          }
-        }
-        const { done, value } = await reader.read();
-        if (done) {
-          uz.push(new Uint8Array(0), true);
-          break;
-        }
-        uz.push(value, false);
-      }
-    } catch (e) {
-      readError = e instanceof Error ? e : new Error(String(e));
-    } finally {
-      readDone = true;
-      try {
-        reader.releaseLock();
-      } catch {
-        // ignore
-      }
-      notify();
-    }
-  })();
-
-  try {
-    while (!readDone || queue.length > 0) {
-      if (readError) throw readError;
-      if (queue.length > 0) {
-        const entry = queue.shift();
-        notify();
-        if (entry) yield entry;
-      } else {
-        await wait();
-      }
-    }
-    if (readError) throw readError;
-  } finally {
-    await pump;
-  }
 }
 
 /**
@@ -261,7 +143,7 @@ export class OfflineBundleImporter {
       try {
         await caches.delete(stagingName);
       } catch (e) {
-        logger.warn('OfflineBundleImporter', 'Failed to delete staging cache', e);
+        logger.warn('Failed to delete staging cache', e);
       }
     };
 
@@ -271,7 +153,8 @@ export class OfflineBundleImporter {
      */
     const processPart = async (partName, data) => {
       throwIfAborted();
-      logger.info('OfflineBundleImporter', `Processing part: ${partName}`);
+      console.info(`[OfflineBundleImporter] Processing part: ${partName} (${data.byteLength} bytes)`);
+      logger.info(`Processing part: ${partName}`);
       const stagingAdapter = new CacheStorageAdapter(stagingName);
       stagingAdapter.startBatchMode();
 
@@ -300,9 +183,13 @@ export class OfflineBundleImporter {
 
     try {
       await discardStaging();
+      console.info(
+        `[OfflineBundleImporter] Reading zip-mãe via central directory (${file.size} bytes)`
+      );
       onProgress({ phase: 'scan', completed: 0, total: 1, percentage: 0, detail: 'A ler pacote…' });
 
-      for await (const entry of iterateZipEntries(file, signal)) {
+      // ponytail: CD + slice — streaming Unzip breaks on yazl data-descriptors + nested zips
+      for await (const entry of iterateZipEntriesCd(file, signal)) {
         throwIfAborted();
         if (isUnsafeZipPath(entry.name)) {
           throw new Error(`Entrada ZIP insegura: ${entry.name}`);
@@ -317,12 +204,23 @@ export class OfflineBundleImporter {
           if (requiredParts.size === 0) {
             throw new Error('offline-manifest.json não lista nenhuma part ZIP');
           }
+          console.info(
+            `[OfflineBundleImporter] offline-manifest OK (${requiredParts.size} lotes)`
+          );
+          onProgress({
+            phase: 'scan',
+            completed: 0,
+            total: requiredParts.size,
+            percentage: 1,
+            detail: 'Manifesto lido'
+          });
           continue;
         }
 
         if (base === LOUVORES_MANIFEST_NAME) {
           louvoresRawText = new TextDecoder().decode(entry.data);
           louvoresManifest = JSON.parse(louvoresRawText);
+          console.info('[OfflineBundleImporter] louvores-manifest OK');
           continue;
         }
 
@@ -335,13 +233,21 @@ export class OfflineBundleImporter {
         }
 
         if (!requiredParts.has(base)) {
-          logger.info('OfflineBundleImporter', `Ignoring extra part: ${base}`);
+          logger.info(`Ignoring extra part: ${base}`);
           continue;
         }
         if (seenParts.has(base)) {
           throw new Error(`Part duplicada no zip-mãe: ${base}`);
         }
         seenParts.add(base);
+
+        onProgress({
+          phase: 'part',
+          completed: completedParts,
+          total: requiredParts.size,
+          percentage: Math.floor((completedParts / Math.max(requiredParts.size, 1)) * 90),
+          detail: `A extrair ${base}…`
+        });
 
         try {
           await processPart(base, entry.data);
@@ -399,10 +305,7 @@ export class OfflineBundleImporter {
         detail: 'Concluído'
       });
 
-      logger.info(
-        'OfflineBundleImporter',
-        `Import OK: ${pdfsStored} PDFs, ${categories.length} categories`
-      );
+      logger.info(`Import OK: ${pdfsStored} PDFs, ${categories.length} categories`);
 
       return { success: true, pdfsStored, categories };
     } catch (e) {
@@ -417,7 +320,8 @@ export class OfflineBundleImporter {
           error: 'Importação cancelada'
         };
       }
-      logger.error('OfflineBundleImporter', 'Import failed; staging discarded', e);
+      console.error('[OfflineBundleImporter] Import failed; staging discarded', e);
+      logger.error('Import failed; staging discarded', e instanceof Error ? e : new Error(String(e)));
       return {
         success: false,
         pdfsStored: 0,
@@ -460,7 +364,7 @@ export class OfflineBundleImporter {
     try {
       localStorage.setItem(offlineKey, JSON.stringify(offlineManifest));
     } catch (e) {
-      logger.warn('OfflineBundleImporter', 'Could not cache offline-manifest in localStorage', e);
+      logger.warn('Could not cache offline-manifest in localStorage', e);
     }
 
     try {
@@ -486,7 +390,7 @@ export class OfflineBundleImporter {
         })
       );
     } catch (e) {
-      logger.warn('OfflineBundleImporter', 'Could not put manifests in app cache', e);
+      logger.warn('Could not put manifests in app cache', e);
     }
 
     const { hydrateLouvoresFromManifestData } = await import('$lib/stores/louvores.js');

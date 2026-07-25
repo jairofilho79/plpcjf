@@ -149,7 +149,7 @@ export function debug(module, message, data = null, metrics = null) {
  */
 export function createLogger(moduleName) {
   return {
-    error: (message, error) => error(moduleName, message, error),
+    error: (message, err) => error(moduleName, message, err),
     warn: (message, data) => warn(moduleName, message, data),
     info: (message, data) => info(moduleName, message, data),
     debug: (message, data, metrics) => debug(moduleName, message, data, metrics)
