@@ -17,3 +17,6 @@ dist/
 
 /assets/
 /packages/
+.plpc-offline-bundle*/
+.offline-bundle-*/
+plpc-offline-bundle.zip

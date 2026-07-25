@@ -13,7 +13,9 @@
     "check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
     "deploy": "npm run build && wrangler pages deploy .svelte-kit/cloudflare",
     "generate-icons": "node scripts/generate-icons.mjs",
-    "generate-offline-packages": "node scripts/generate-offline-packages.mjs"
+    "generate-offline-packages": "node scripts/generate-offline-packages.mjs",
+    "build-offline-bundle": "node scripts/build-offline-bundle.mjs",
+    "test:offline-bundle": "node --test src/lib/offline/import/bundleValidation.test.js src/lib/offline/import/OfflineBundleImporter.rollback.test.js"
   },
   "dependencies": {
     "@sveltejs/adapter-cloudflare": "^4.3.1",

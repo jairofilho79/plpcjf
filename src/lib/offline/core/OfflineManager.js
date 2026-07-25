@@ -18,6 +18,7 @@ import { browser } from '$app/environment';
 import { louvores } from '$lib/stores/louvores.js';
 import { get } from 'svelte/store';
 import { cacheAppPages } from '../utils/AppPagesCache.js';
+import offlineBundleImporter from '../import/OfflineBundleImporter.js';
 
 const logger = createLogger('OfflineManager');
 
@@ -253,8 +254,45 @@ class OfflineManager {
    * @returns {Promise<void>}
    */
   async cancelDownload() {
-    logger.info('OfflineManager', 'Cancelling download');
+    logger.info('OfflineManager', 'Cancelling download/import');
+    offlineBundleImporter.cancel();
     await downloadManager.cancel();
+  }
+
+  /**
+   * Import offline zip-mãe (manifests + parts) without network.
+   * @param {File|Blob} file
+   * @param {object} [options]
+   * @param {Function} [options.onProgress]
+   * @param {AbortSignal} [options.signal]
+   * @returns {Promise<{ success: boolean, pdfsStored: number, categories: string[], cancelled?: boolean, error?: string }>}
+   */
+  async importOfflineBundle(file, options = {}) {
+    await this.ensureInitialized();
+    logger.info('OfflineManager', 'Starting offline bundle import');
+
+    cacheAppPages().catch((error) => {
+      logger.warn('OfflineManager', 'cacheAppPages during import (non-blocking)', error);
+    });
+
+    const result = await offlineBundleImporter.importFromFile(file, options);
+
+    if (result.success) {
+      try {
+        offlineEvents.emit(EVENTS.CACHE_UPDATED, { type: 'bundle-import', pdfsStored: result.pdfsStored });
+      } catch {
+        // ignore
+      }
+    }
+
+    return result;
+  }
+
+  /**
+   * @returns {boolean}
+   */
+  isImportingBundle() {
+    return offlineBundleImporter.isImporting();
   }
 
   /**

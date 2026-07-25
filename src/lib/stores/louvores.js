@@ -91,6 +91,31 @@ export function prepareLouvoresManifestPayload(raw) {
 }
 
 /**
+ * Hydrate louvores store from a local zip-mãe (offline-first import).
+ * @param {unknown} raw
+ * @param {string} [rawText] - original JSON text for checksum
+ * @returns {Promise<any[]>}
+ */
+export async function hydrateLouvoresFromManifestData(raw, rawText = '') {
+  const prepared = prepareLouvoresManifestPayload(raw) || (Array.isArray(raw) ? raw : []);
+  const enriched = applyLouvoresManifest(prepared);
+  louvoresLoaded.set(true);
+  try {
+    const hex =
+      rawText && typeof rawText === 'string'
+        ? await sha256HexUtf8(rawText)
+        : await sha256HexUtf8(JSON.stringify(raw));
+    writeManifestBodySha256(hex);
+    writeChecksumLastOkAt(Date.now());
+    resetManifestSyncPenalty();
+  } catch (e) {
+    console.warn('[Louvores] checksum after local hydrate failed', e);
+  }
+  await afterManifestLoaded(enriched);
+  return enriched;
+}
+
+/**
  * @param {RequestInit} [init]
  * @returns {Promise<{ kind: 'ok'; data: unknown[]; rawSha256: string } | { kind: 'http'; status: number } | { kind: 'transport' } | { kind: 'parse' } | { kind: 'shape' }>}
  */
