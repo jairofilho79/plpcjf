@@ -138,7 +138,11 @@ export class OfflineBundleImporter {
     // ponytail: degrau 0 serial; concurrency>1 reserved for future pool (heuristic already computed)
     void concurrency;
 
-    const emitProgress = (phase, detail, { currentPart = null, partInFlight = false } = {}) => {
+    const emitProgress = (
+      phase,
+      detail,
+      { currentPart = null, partInFlight = false, commitCounts = null, commitFraction = 0 } = {}
+    ) => {
       const totalParts = requiredParts?.size || 0;
       const checklist = buildImportChecklist({
         offlineManifest,
@@ -146,7 +150,8 @@ export class OfflineBundleImporter {
         louvoresManifestDone,
         seenParts,
         currentPart,
-        phase
+        phase,
+        commitCounts
       });
       const percentage = importChecklistPercentage({
         offlineManifestDone,
@@ -154,7 +159,8 @@ export class OfflineBundleImporter {
         completedParts,
         totalParts,
         phase,
-        partInFlight
+        partInFlight,
+        commitFraction
       });
       onProgress({
         phase,
@@ -316,9 +322,28 @@ export class OfflineBundleImporter {
       }
 
       console.info(`${LOG} ▶ Confirmar no cache…`);
-      emitProgress('commit', 'A confirmar no cache…');
+      emitProgress('commit', 'A confirmar no cache…', {
+        commitCounts: { ok: 0, fail: 0, total: 0 },
+        commitFraction: 0
+      });
 
-      await this._commitStaging(stagingName, mainName);
+      const commitResult = await this._commitStaging(stagingName, mainName, {
+        signal,
+        onProgress: ({ ok, fail, total }) => {
+          const fraction = total > 0 ? (ok + fail) / total : 0;
+          if ((ok + fail) === 1 || (ok + fail) % 25 === 0 || ok + fail >= total) {
+            console.info(`${LOG}   cache ${ok} ok / ${fail} falha / ${total}`);
+          }
+          emitProgress('commit', 'A confirmar no cache…', {
+            commitCounts: { ok, fail, total },
+            commitFraction: fraction
+          });
+        }
+      });
+      console.info(
+        `${LOG} ✓ Confirmar no cache — ${commitResult.ok} ok / ${commitResult.fail} falha / ${commitResult.total}`
+      );
+
       await this._applyManifests(offlineManifest, louvoresManifest, louvoresRawText, appCacheName);
 
       const categories = listCategoriesFromOfflineManifest(offlineManifest);
@@ -361,19 +386,48 @@ export class OfflineBundleImporter {
   /**
    * @param {string} stagingName
    * @param {string} mainName
+   * @param {object} [options]
+   * @param {AbortSignal} [options.signal]
+   * @param {(p: { ok: number, fail: number, total: number }) => void} [options.onProgress]
+   * @returns {Promise<{ ok: number, fail: number, total: number }>}
    * @private
    */
-  async _commitStaging(stagingName, mainName) {
+  async _commitStaging(stagingName, mainName, options = {}) {
     const staging = await caches.open(stagingName);
     const main = await caches.open(mainName);
     const keys = await staging.keys();
-    for (const request of keys) {
-      const response = await staging.match(request);
-      if (response) {
-        await main.put(request, response);
+    const total = keys.length;
+    let ok = 0;
+    let fail = 0;
+    const onProgress = options.onProgress || (() => {});
+    // ponytail: report every 25 puts so UI breathes without 4k store updates
+    const tick = () => {
+      if (ok + fail === total || ok + fail === 1 || (ok + fail) % 25 === 0) {
+        onProgress({ ok, fail, total });
       }
+    };
+    onProgress({ ok: 0, fail: 0, total });
+
+    for (const request of keys) {
+      if (options.signal?.aborted) {
+        throw new DOMException('Import cancelled', 'AbortError');
+      }
+      try {
+        const response = await staging.match(request);
+        if (!response) {
+          fail += 1;
+        } else {
+          await main.put(request, response.clone());
+          ok += 1;
+        }
+      } catch {
+        fail += 1;
+      }
+      tick();
     }
     await caches.delete(stagingName);
+    onProgress({ ok, fail, total });
+    return { ok, fail, total };
   }
 
   /**

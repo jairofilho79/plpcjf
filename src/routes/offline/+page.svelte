@@ -41,7 +41,7 @@
   let importJustFinished = false;
   /** @type {HTMLInputElement | null} */
   let bundleFileInput = null;
-  /** @type {Array<{ id: string, label: string, status: 'pending' | 'active' | 'done' }>} */
+  /** @type {Array<{ id: string, label: string, status: 'pending' | 'active' | 'done', counts?: { ok: number, fail: number, total: number } }>} */
   let importChecklist = [];
 
   const IMPORT_STATUS_LABEL = {
@@ -1397,9 +1397,20 @@
             {#each importChecklist as item (item.id)}
               <li class="import-checklist-item" data-status={item.status}>
                 <span class="import-checklist-label">{item.label}</span>
-                <span class="import-status-tag" data-status={item.status}
-                  >{IMPORT_STATUS_LABEL[item.status]}</span
-                >
+                <span class="import-checklist-meta">
+                  {#if item.counts}
+                    <span class="import-counts" aria-label="válidos, inválidos, total">
+                      <span class="import-count-ok">{item.counts.ok}</span>
+                      <span class="import-count-sep">;</span>
+                      <span class="import-count-fail">{item.counts.fail}</span>
+                      <span class="import-count-sep">,</span>
+                      <span class="import-count-total">{item.counts.total}</span>
+                    </span>
+                  {/if}
+                  <span class="import-status-tag" data-status={item.status}
+                    >{IMPORT_STATUS_LABEL[item.status]}</span
+                  >
+                </span>
               </li>
             {/each}
           </ul>
@@ -2297,6 +2308,39 @@
     font-size: 0.875rem;
     color: var(--text-light);
     min-width: 0;
+  }
+
+  .import-checklist-meta {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    flex-shrink: 0;
+  }
+
+  .import-counts {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    font-size: 0.8125rem;
+    font-weight: 600;
+    display: inline-flex;
+    align-items: baseline;
+    gap: 0.15rem;
+  }
+
+  .import-count-ok {
+    color: #4ade80;
+  }
+
+  .import-count-fail {
+    color: #f87171;
+  }
+
+  .import-count-total {
+    color: #f5f5f5;
+  }
+
+  .import-count-sep {
+    color: rgba(245, 245, 245, 0.45);
+    font-weight: 400;
   }
 
   .import-status-tag {

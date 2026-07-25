@@ -27,7 +27,8 @@ export function zipEntryBasename(entryName) {
 
 /**
  * @typedef {'pending' | 'active' | 'done'} ImportChecklistStatus
- * @typedef {{ id: string, label: string, status: ImportChecklistStatus }} ImportChecklistItem
+ * @typedef {{ ok: number, fail: number, total: number }} ImportCommitCounts
+ * @typedef {{ id: string, label: string, status: ImportChecklistStatus, counts?: ImportCommitCounts }} ImportChecklistItem
  */
 
 /**
@@ -39,6 +40,7 @@ export function zipEntryBasename(entryName) {
  * @param {Set<string>} opts.seenParts
  * @param {string | null} [opts.currentPart]
  * @param {string} opts.phase
+ * @param {ImportCommitCounts | null} [opts.commitCounts]
  * @returns {ImportChecklistItem[]}
  */
 export function buildImportChecklist({
@@ -47,7 +49,8 @@ export function buildImportChecklist({
   louvoresManifestDone,
   seenParts,
   currentPart = null,
-  phase
+  phase,
+  commitCounts = null
 }) {
   /** @type {ImportChecklistItem[]} */
   const items = [
@@ -100,7 +103,10 @@ export function buildImportChecklist({
   let commitStatus = 'pending';
   if (phase === 'commit') commitStatus = 'active';
   if (phase === 'done') commitStatus = 'done';
-  items.push({ id: 'commit', label: 'Confirmar no cache', status: commitStatus });
+  /** @type {ImportChecklistItem} */
+  const commitItem = { id: 'commit', label: 'Confirmar no cache', status: commitStatus };
+  if (commitCounts) commitItem.counts = commitCounts;
+  items.push(commitItem);
 
   return items;
 }
@@ -114,6 +120,7 @@ export function buildImportChecklist({
  * @param {number} opts.totalParts
  * @param {string} opts.phase
  * @param {boolean} [opts.partInFlight]
+ * @param {number} [opts.commitFraction] 0..1 during commit
  * @returns {number}
  */
 export function importChecklistPercentage({
@@ -122,7 +129,8 @@ export function importChecklistPercentage({
   completedParts,
   totalParts,
   phase,
-  partInFlight = false
+  partInFlight = false,
+  commitFraction = 0
 }) {
   const total = 2 + Math.max(totalParts, 0) + 1;
   if (total <= 0) return 0;
@@ -131,7 +139,7 @@ export function importChecklistPercentage({
     (louvoresManifestDone ? 1 : 0) +
     completedParts;
   if (partInFlight) done += 0.4;
-  if (phase === 'commit') done += 0.5;
+  if (phase === 'commit') done += Math.min(1, Math.max(0, commitFraction));
   if (phase === 'done') done = total;
   return Math.min(100, Math.floor((done / total) * 100));
 }

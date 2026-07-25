@@ -98,6 +98,19 @@ describe('bundleValidation', () => {
     assert.equal(rows[3].status, 'pending');
   });
 
+  it('buildImportChecklist exposes commit counts', () => {
+    const rows = buildImportChecklist({
+      offlineManifestDone: true,
+      louvoresManifestDone: true,
+      seenParts: new Set(),
+      phase: 'commit',
+      commitCounts: { ok: 12, fail: 1, total: 100 }
+    });
+    const commit = rows.find((r) => r.id === 'commit');
+    assert.equal(commit?.status, 'active');
+    assert.deepEqual(commit?.counts, { ok: 12, fail: 1, total: 100 });
+  });
+
   it('importChecklistPercentage moves with steps', () => {
     assert.equal(
       importChecklistPercentage({
@@ -118,6 +131,16 @@ describe('bundleValidation', () => {
         phase: 'part',
         partInFlight: true
       }) > 40
+    );
+    assert.ok(
+      importChecklistPercentage({
+        offlineManifestDone: true,
+        louvoresManifestDone: true,
+        completedParts: 3,
+        totalParts: 3,
+        phase: 'commit',
+        commitFraction: 0.5
+      }) >= 90
     );
     assert.equal(
       importChecklistPercentage({
