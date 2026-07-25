@@ -16,11 +16,14 @@ import {
   validateBundleRoot,
   listPartFilenames,
   listCategoriesFromOfflineManifest,
-  initialImportConcurrency
+  initialImportConcurrency,
+  buildImportChecklist,
+  importChecklistPercentage
 } from './bundleValidation.js';
 import { iterateZipEntriesCd } from './zipCdReader.js';
 
 const logger = createLogger('OfflineBundleImporter');
+const LOG = '[Import]';
 
 const OFFLINE_MANIFEST_NAME = 'offline-manifest.json';
 const LOUVORES_MANIFEST_NAME = 'louvores-manifest.json';
@@ -128,10 +131,40 @@ export class OfflineBundleImporter {
     const seenParts = new Set();
     /** @type {Set<string> | null} */
     let requiredParts = null;
+    let offlineManifestDone = false;
+    let louvoresManifestDone = false;
     let pdfsStored = 0;
     let completedParts = 0;
     // ponytail: degrau 0 serial; concurrency>1 reserved for future pool (heuristic already computed)
     void concurrency;
+
+    const emitProgress = (phase, detail, { currentPart = null, partInFlight = false } = {}) => {
+      const totalParts = requiredParts?.size || 0;
+      const checklist = buildImportChecklist({
+        offlineManifest,
+        offlineManifestDone,
+        louvoresManifestDone,
+        seenParts,
+        currentPart,
+        phase
+      });
+      const percentage = importChecklistPercentage({
+        offlineManifestDone,
+        louvoresManifestDone,
+        completedParts,
+        totalParts,
+        phase,
+        partInFlight
+      });
+      onProgress({
+        phase,
+        completed: completedParts,
+        total: totalParts,
+        percentage,
+        detail,
+        checklist
+      });
+    };
 
     const throwIfAborted = () => {
       if (signal.aborted) {
@@ -153,8 +186,6 @@ export class OfflineBundleImporter {
      */
     const processPart = async (partName, data) => {
       throwIfAborted();
-      console.info(`[OfflineBundleImporter] Processing part: ${partName} (${data.byteLength} bytes)`);
-      logger.info(`Processing part: ${partName}`);
       const stagingAdapter = new CacheStorageAdapter(stagingName);
       stagingAdapter.startBatchMode();
 
@@ -164,6 +195,7 @@ export class OfflineBundleImporter {
           if (isUnsafeZipPath(entryName)) return false;
           return zipEntryBasename(entryName).toLowerCase().endsWith('.pdf');
         });
+        console.info(`${LOG}   extraindo ${pdfEntries.length} PDFs de ${partName}`);
 
         for (const [entryName, fileData] of pdfEntries) {
           throwIfAborted();
@@ -176,6 +208,7 @@ export class OfflineBundleImporter {
           );
           pdfsStored += 1;
         }
+        return pdfEntries.length;
       } finally {
         stagingAdapter.endBatchMode();
       }
@@ -183,10 +216,9 @@ export class OfflineBundleImporter {
 
     try {
       await discardStaging();
-      console.info(
-        `[OfflineBundleImporter] Reading zip-mãe via central directory (${file.size} bytes)`
-      );
-      onProgress({ phase: 'scan', completed: 0, total: 1, percentage: 0, detail: 'A ler pacote…' });
+      const sizeMb = (file.size / (1024 * 1024)).toFixed(1);
+      console.info(`${LOG} a ler zip-mãe (${sizeMb} MB)…`);
+      emitProgress('scan', 'A ler pacote…');
 
       // ponytail: CD + slice — streaming Unzip breaks on yazl data-descriptors + nested zips
       for await (const entry of iterateZipEntriesCd(file, signal)) {
@@ -199,28 +231,28 @@ export class OfflineBundleImporter {
         if (!base || base.startsWith('.')) continue;
 
         if (base === OFFLINE_MANIFEST_NAME) {
+          console.info(`${LOG} ▶ Manifesto Offline`);
           offlineManifest = JSON.parse(new TextDecoder().decode(entry.data));
           requiredParts = new Set(listPartFilenames(offlineManifest));
           if (requiredParts.size === 0) {
             throw new Error('offline-manifest.json não lista nenhuma part ZIP');
           }
+          offlineManifestDone = true;
           console.info(
-            `[OfflineBundleImporter] offline-manifest OK (${requiredParts.size} lotes)`
+            `${LOG} ✓ Manifesto Offline — ${requiredParts.size} lotes`
           );
-          onProgress({
-            phase: 'scan',
-            completed: 0,
-            total: requiredParts.size,
-            percentage: 1,
-            detail: 'Manifesto lido'
-          });
+          emitProgress('scan', 'Manifesto Offline');
           continue;
         }
 
         if (base === LOUVORES_MANIFEST_NAME) {
+          console.info(`${LOG} ▶ Manifesto Louvores`);
           louvoresRawText = new TextDecoder().decode(entry.data);
           louvoresManifest = JSON.parse(louvoresRawText);
-          console.info('[OfflineBundleImporter] louvores-manifest OK');
+          louvoresManifestDone = true;
+          const n = Array.isArray(louvoresManifest) ? louvoresManifest.length : 0;
+          console.info(`${LOG} ✓ Manifesto Louvores — ${n} entradas`);
+          emitProgress('scan', 'Manifesto Louvores');
           continue;
         }
 
@@ -233,24 +265,25 @@ export class OfflineBundleImporter {
         }
 
         if (!requiredParts.has(base)) {
-          logger.info(`Ignoring extra part: ${base}`);
+          console.info(`${LOG} (ignorado) ${base}`);
           continue;
         }
         if (seenParts.has(base)) {
           throw new Error(`Part duplicada no zip-mãe: ${base}`);
         }
-        seenParts.add(base);
 
-        onProgress({
-          phase: 'part',
-          completed: completedParts,
-          total: requiredParts.size,
-          percentage: Math.floor((completedParts / Math.max(requiredParts.size, 1)) * 90),
-          detail: `A extrair ${base}…`
+        const mb = (entry.data.byteLength / (1024 * 1024)).toFixed(1);
+        console.info(
+          `${LOG} ▶ ${base} (${completedParts + 1}/${requiredParts.size}, ${mb} MB)`
+        );
+        emitProgress('part', `A extrair ${base}…`, {
+          currentPart: base,
+          partInFlight: true
         });
 
+        let pdfCount = 0;
         try {
-          await processPart(base, entry.data);
+          pdfCount = await processPart(base, entry.data);
         } catch (e) {
           if (isMemoryPressureError(e)) {
             throw new Error(
@@ -259,14 +292,12 @@ export class OfflineBundleImporter {
           }
           throw e;
         }
+        seenParts.add(base);
         completedParts += 1;
-        onProgress({
-          phase: 'part',
-          completed: completedParts,
-          total: requiredParts.size,
-          percentage: Math.floor((completedParts / Math.max(requiredParts.size, 1)) * 90),
-          detail: base
-        });
+        console.info(
+          `${LOG} ✓ ${base} — ${pdfCount} PDFs (${completedParts}/${requiredParts.size})`
+        );
+        emitProgress('part', base);
       }
 
       if (!offlineManifest || !louvoresManifest || !louvoresRawText) {
@@ -284,26 +315,18 @@ export class OfflineBundleImporter {
         throw new Error(rootCheck.errors.join('; '));
       }
 
-      onProgress({
-        phase: 'commit',
-        completed: completedParts,
-        total: completedParts,
-        percentage: 92,
-        detail: 'A confirmar no cache…'
-      });
+      console.info(`${LOG} ▶ Confirmar no cache…`);
+      emitProgress('commit', 'A confirmar no cache…');
 
       await this._commitStaging(stagingName, mainName);
       await this._applyManifests(offlineManifest, louvoresManifest, louvoresRawText, appCacheName);
 
       const categories = listCategoriesFromOfflineManifest(offlineManifest);
 
-      onProgress({
-        phase: 'done',
-        completed: pdfsStored,
-        total: pdfsStored,
-        percentage: 100,
-        detail: 'Concluído'
-      });
+      console.info(
+        `${LOG} ✓ Concluído — ${pdfsStored} PDFs, ${categories.length} categorias`
+      );
+      emitProgress('done', 'Concluído');
 
       logger.info(`Import OK: ${pdfsStored} PDFs, ${categories.length} categories`);
 
@@ -312,6 +335,7 @@ export class OfflineBundleImporter {
       await discardStaging();
       const err = /** @type {{ name?: string, message?: string }} */ (e);
       if (err?.name === 'AbortError' || signal.aborted) {
+        console.info(`${LOG} cancelado`);
         return {
           success: false,
           pdfsStored: 0,
@@ -320,7 +344,7 @@ export class OfflineBundleImporter {
           error: 'Importação cancelada'
         };
       }
-      console.error('[OfflineBundleImporter] Import failed; staging discarded', e);
+      console.error(`${LOG} falhou — staging descartado`, e);
       logger.error('Import failed; staging discarded', e instanceof Error ? e : new Error(String(e)));
       return {
         success: false,

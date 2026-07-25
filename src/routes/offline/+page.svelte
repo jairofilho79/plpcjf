@@ -41,6 +41,14 @@
   let importJustFinished = false;
   /** @type {HTMLInputElement | null} */
   let bundleFileInput = null;
+  /** @type {Array<{ id: string, label: string, status: 'pending' | 'active' | 'done' }>} */
+  let importChecklist = [];
+
+  const IMPORT_STATUS_LABEL = {
+    pending: 'A fazer',
+    active: 'Em progresso',
+    done: 'Concluído'
+  };
 
   // Selected categories for download
   /**
@@ -985,6 +993,7 @@
   async function cancelDownload() {
     console.log('[Offline Page] Cancelling download/import');
     await offlineManager.cancelDownload();
+    if (isImportingBundle) importChecklist = [];
   }
 
   /**
@@ -999,6 +1008,7 @@
 
     isImportingBundle = true;
     importJustFinished = false;
+    importChecklist = [];
     offline.updateState({
       downloading: true,
       progress: 0,
@@ -1011,6 +1021,9 @@
     try {
       const result = await offlineManager.importOfflineBundle(file, {
         onProgress: (p) => {
+          if (Array.isArray(p.checklist)) {
+            importChecklist = p.checklist;
+          }
           offline.updateState({
             downloading: true,
             progress: p.percentage || 0,
@@ -1022,6 +1035,7 @@
       });
 
       if (result.cancelled) {
+        importChecklist = [];
         offline.updateState({
           downloading: false,
           progress: 0,
@@ -1032,6 +1046,7 @@
       }
 
       if (!result.success) {
+        importChecklist = [];
         offline.updateState({ downloading: false, progress: 0 });
         errorTitle = 'Falha na importação';
         errorMessage =
@@ -1046,6 +1061,7 @@
       lastSavedCategories = [...downloadedCategories];
       selectedCategories = [...downloadedCategories];
       importJustFinished = true;
+      importChecklist = [];
 
       offline.updateState({
         downloading: false,
@@ -1061,6 +1077,7 @@
       }
     } catch (error) {
       console.error('[Offline Page] Bundle import error:', error);
+      importChecklist = [];
       offline.updateState({ downloading: false, progress: 0 });
       errorTitle = 'Falha na importação';
       errorMessage =
@@ -1362,21 +1379,31 @@
       <div class="progress-section">
         <div class="progress-info">
           <p class="progress-title">{isImportingBundle ? 'A importar pacote offline…' : 'Baixando PDFs...'}</p>
-          <p class="progress-stats">
-            {#if isImportingBundle}
-              {completed} de {total || '?'} lotes
-            {:else}
+          {#if !isImportingBundle}
+            <p class="progress-stats">
               {completed} de {total} PDFs baixados
-            {/if}
-            {#if failed > 0}
-              <span class="failed-count">({failed} falharam)</span>
-            {/if}
-          </p>
+              {#if failed > 0}
+                <span class="failed-count">({failed} falharam)</span>
+              {/if}
+            </p>
+          {/if}
         </div>
         <div class="progress-bar-container">
           <div class="progress-bar" style="width: {progress}%"></div>
         </div>
         <p class="progress-percentage">{progress}%</p>
+        {#if isImportingBundle && importChecklist.length}
+          <ul class="import-checklist">
+            {#each importChecklist as item (item.id)}
+              <li class="import-checklist-item" data-status={item.status}>
+                <span class="import-checklist-label">{item.label}</span>
+                <span class="import-status-tag" data-status={item.status}
+                  >{IMPORT_STATUS_LABEL[item.status]}</span
+                >
+              </li>
+            {/each}
+          </ul>
+        {/if}
         <div class="action-buttons">
           <button class="btn btn-danger" on:click={cancelDownload}>
             {isImportingBundle ? 'Cancelar importação' : 'Cancelar Download'}
@@ -2243,6 +2270,61 @@
     font-weight: 700;
     color: var(--text-light);
     margin: 0 0 1rem 0;
+  }
+
+  .import-checklist {
+    list-style: none;
+    margin: 0 0 1.25rem;
+    padding: 0;
+    text-align: left;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+
+  .import-checklist-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    padding: 0.5rem 0.65rem;
+    border: 1px solid rgba(212, 175, 55, 0.25);
+    border-radius: 0.35rem;
+    background: rgba(0, 0, 0, 0.15);
+  }
+
+  .import-checklist-label {
+    font-size: 0.875rem;
+    color: var(--text-light);
+    min-width: 0;
+  }
+
+  .import-status-tag {
+    flex-shrink: 0;
+    font-size: 0.6875rem;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    padding: 0.2rem 0.45rem;
+    border-radius: 0.25rem;
+    border: 1px solid transparent;
+  }
+
+  .import-status-tag[data-status='pending'] {
+    color: #c8c2b4;
+    border-color: rgba(200, 194, 180, 0.35);
+    background: rgba(200, 194, 180, 0.08);
+  }
+
+  .import-status-tag[data-status='active'] {
+    color: #1a1a1a;
+    border-color: var(--gold-color);
+    background: var(--gold-color);
+  }
+
+  .import-status-tag[data-status='done'] {
+    color: #d4edda;
+    border-color: rgba(40, 167, 69, 0.55);
+    background: rgba(40, 167, 69, 0.2);
   }
 
   .progress-note {

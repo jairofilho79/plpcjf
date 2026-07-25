@@ -26,6 +26,117 @@ export function zipEntryBasename(entryName) {
 }
 
 /**
+ * @typedef {'pending' | 'active' | 'done'} ImportChecklistStatus
+ * @typedef {{ id: string, label: string, status: ImportChecklistStatus }} ImportChecklistItem
+ */
+
+/**
+ * Checklist rows for zip-mãe import UI.
+ * @param {object} opts
+ * @param {unknown} [opts.offlineManifest]
+ * @param {boolean} opts.offlineManifestDone
+ * @param {boolean} opts.louvoresManifestDone
+ * @param {Set<string>} opts.seenParts
+ * @param {string | null} [opts.currentPart]
+ * @param {string} opts.phase
+ * @returns {ImportChecklistItem[]}
+ */
+export function buildImportChecklist({
+  offlineManifest,
+  offlineManifestDone,
+  louvoresManifestDone,
+  seenParts,
+  currentPart = null,
+  phase
+}) {
+  /** @type {ImportChecklistItem[]} */
+  const items = [
+    {
+      id: 'offline-manifest',
+      label: 'Manifesto Offline',
+      status: offlineManifestDone ? 'done' : 'active'
+    },
+    {
+      id: 'louvores-manifest',
+      label: 'Manifesto Louvores',
+      status: louvoresManifestDone
+        ? 'done'
+        : offlineManifestDone
+          ? 'active'
+          : 'pending'
+    }
+  ];
+
+  const packages =
+    offlineManifest && typeof offlineManifest === 'object'
+      ? /** @type {{ packages?: Record<string, { parts?: Array<{ filename?: string }> }> }} */ (
+          offlineManifest
+        ).packages
+      : null;
+
+  if (packages && typeof packages === 'object') {
+    for (const [catName, pkg] of Object.entries(packages)) {
+      const parts = Array.isArray(pkg?.parts) ? pkg.parts : [];
+      const total = parts.length;
+      const done = parts.filter((p) =>
+        seenParts.has(zipEntryBasename(p?.filename || ''))
+      ).length;
+      const isCurrent =
+        !!currentPart &&
+        parts.some((p) => zipEntryBasename(p?.filename || '') === currentPart);
+      /** @type {ImportChecklistStatus} */
+      let status = 'pending';
+      if (total > 0 && done >= total) status = 'done';
+      else if (isCurrent || done > 0) status = 'active';
+      items.push({
+        id: `cat:${catName}`,
+        label: `${catName} (${done}/${total})`,
+        status
+      });
+    }
+  }
+
+  /** @type {ImportChecklistStatus} */
+  let commitStatus = 'pending';
+  if (phase === 'commit') commitStatus = 'active';
+  if (phase === 'done') commitStatus = 'done';
+  items.push({ id: 'commit', label: 'Confirmar no cache', status: commitStatus });
+
+  return items;
+}
+
+/**
+ * Soft percentage from checklist steps (manifests + parts + commit).
+ * @param {object} opts
+ * @param {boolean} opts.offlineManifestDone
+ * @param {boolean} opts.louvoresManifestDone
+ * @param {number} opts.completedParts
+ * @param {number} opts.totalParts
+ * @param {string} opts.phase
+ * @param {boolean} [opts.partInFlight]
+ * @returns {number}
+ */
+export function importChecklistPercentage({
+  offlineManifestDone,
+  louvoresManifestDone,
+  completedParts,
+  totalParts,
+  phase,
+  partInFlight = false
+}) {
+  const total = 2 + Math.max(totalParts, 0) + 1;
+  if (total <= 0) return 0;
+  let done =
+    (offlineManifestDone ? 1 : 0) +
+    (louvoresManifestDone ? 1 : 0) +
+    completedParts;
+  if (partInFlight) done += 0.4;
+  if (phase === 'commit') done += 0.5;
+  if (phase === 'done') done = total;
+  return Math.min(100, Math.floor((done / total) * 100));
+}
+
+/**
  * @param {unknown} offlineManifest
  * @returns {string[]}
  */

@@ -10,7 +10,9 @@ import {
   zipEntryBasename,
   listPartFilenames,
   validateBundleRoot,
-  listCategoriesFromOfflineManifest
+  listCategoriesFromOfflineManifest,
+  buildImportChecklist,
+  importChecklistPercentage
 } from './bundleValidation.js';
 
 describe('bundleValidation', () => {
@@ -66,5 +68,66 @@ describe('bundleValidation', () => {
   it('zipEntryBasename strips directories', () => {
     assert.equal(zipEntryBasename('a/b/c.zip'), 'c.zip');
     assert.equal(zipEntryBasename('c.zip'), 'c.zip');
+  });
+
+  it('buildImportChecklist tracks category parts and tags', () => {
+    const offlineManifest = {
+      packages: {
+        'Gestos em Gravura': {
+          parts: [
+            { filename: 'Gestos-em-Gravura-1.zip' },
+            { filename: 'Gestos-em-Gravura-2.zip' },
+            { filename: 'Gestos-em-Gravura-3.zip' }
+          ]
+        }
+      }
+    };
+    const rows = buildImportChecklist({
+      offlineManifest,
+      offlineManifestDone: true,
+      louvoresManifestDone: true,
+      seenParts: new Set(['Gestos-em-Gravura-1.zip']),
+      currentPart: 'Gestos-em-Gravura-2.zip',
+      phase: 'part'
+    });
+    assert.equal(rows[0].status, 'done');
+    assert.equal(rows[1].status, 'done');
+    assert.equal(rows[2].label, 'Gestos em Gravura (1/3)');
+    assert.equal(rows[2].status, 'active');
+    assert.equal(rows[3].id, 'commit');
+    assert.equal(rows[3].status, 'pending');
+  });
+
+  it('importChecklistPercentage moves with steps', () => {
+    assert.equal(
+      importChecklistPercentage({
+        offlineManifestDone: false,
+        louvoresManifestDone: false,
+        completedParts: 0,
+        totalParts: 3,
+        phase: 'scan'
+      }),
+      0
+    );
+    assert.ok(
+      importChecklistPercentage({
+        offlineManifestDone: true,
+        louvoresManifestDone: true,
+        completedParts: 1,
+        totalParts: 3,
+        phase: 'part',
+        partInFlight: true
+      }) > 40
+    );
+    assert.equal(
+      importChecklistPercentage({
+        offlineManifestDone: true,
+        louvoresManifestDone: true,
+        completedParts: 3,
+        totalParts: 3,
+        phase: 'done'
+      }),
+      100
+    );
   });
 });
