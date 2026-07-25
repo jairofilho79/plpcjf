@@ -17,8 +17,15 @@ compatibility_flags = ["nodejs_compat"]
 binding = "LOUVORES_BUCKET"
 bucket_name = "pls-louvores"
 
-# LOUVORES_MANIFEST_CHECKSUM: definir só no Cloudflare Pages → Settings → Variables (Production/Preview).
-# Hex 64 do louvores-manifest.json (UTF-8); publicar manifesto no R2 antes de atualizar. Vazio = 204 no endpoint.
+# Variáveis de ambiente (texto simples — não usar Secret no dashboard).
+# Dashboard sobrescreve estes valores no deploy; manter alinhado ou remover do painel.
+[vars]
+# SHA-256 hex (64 chars) do louvores-manifest.json no R2 (corpo UTF-8).
+# Publicar o manifest no R2 antes de atualizar. Vazio ou inválido → 204 em /louvores-manifest.sha256
+LOUVORES_MANIFEST_CHECKSUM = ""
+
+[env.production.vars]
+LOUVORES_MANIFEST_CHECKSUM = ""
 
 # JWT_SECRET será configurado via wrangler secret (NÃO coloque aqui!)
 # Use: wrangler secret put JWT_SECRET (para dev)

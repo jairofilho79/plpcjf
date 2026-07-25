@@ -1,7 +1,7 @@
 <script>
   import { onMount } from 'svelte';
   import { goto } from '$app/navigation';
-  import { Download, AlertCircle, CheckCircle, Info, Package, TrendingUp, RefreshCw } from 'lucide-svelte';
+  import { Download, AlertCircle, CheckCircle, Info, Package, TrendingUp, RefreshCw, Upload } from 'lucide-svelte';
   import { offline, isDownloading } from '$lib/stores/offline';
   import { CATEGORY_OPTIONS } from '$lib/stores/filters';
   import { louvores, loadLouvores, louvoresLoaded } from '$lib/stores/louvores';
@@ -14,14 +14,12 @@
   import {
     initStatsCache,
     getCachedStats,
+    getAllCachedStats,
     cacheStats,
-    cacheAllStats,
-    invalidateCategory,
     invalidateCategories,
     clearCache as clearStatsCache,
     recordCalculationTime,
-    getCacheMetrics,
-    getAllCachedStats
+    getCacheMetrics
   } from '$lib/utils/statsCache';
   import statsCalculator from '$lib/offline/stats/StatsCalculator.js';
   import offlineEvents, { EVENTS as OFFLINE_EVENTS } from '$lib/offline/core/OfflineEvents.js';
@@ -39,6 +37,18 @@
   let errorTitle = 'Erro';
   let errorMessage = '';
   let isDownloadingMissing = false;
+  let isImportingBundle = false;
+  let importJustFinished = false;
+  /** @type {HTMLInputElement | null} */
+  let bundleFileInput = null;
+  /** @type {Array<{ id: string, label: string, status: 'pending' | 'active' | 'done', counts?: { ok: number, fail: number, total: number } }>} */
+  let importChecklist = [];
+
+  const IMPORT_STATUS_LABEL = {
+    pending: 'A fazer',
+    active: 'Em progresso',
+    done: 'Concluído'
+  };
 
   // Selected categories for download
   /**
@@ -71,7 +81,10 @@
   let requiredPackagesInfo = null;
   
   let isLoadingStats = false;
-  let isInitializing = true; // Controla estado de carregamento inicial
+  /** @type {boolean} Painel de stats visível (capa com cache; cálculo só ao atualizar) */
+  let statsRequested = true;
+  /** true = a mostrar cache com capa; false = já atualizado nesta sessão */
+  let statsStale = true;
   let isValidating = false; // Controla validação de erros (background)
   let needsSync = false;
   let isSyncing = false;
@@ -101,6 +114,21 @@
   
   // Controla se lazy loading está ativo
   let lazyLoadingEnabled = false;
+  let statsCacheInited = false;
+
+  /**
+   * Dados leves necessários antes de download/stats (sem varrer Cache Storage).
+   */
+  async function ensureLouvoresReady() {
+    if ($louvores.length > 0) return;
+    await loadLouvores();
+  }
+
+  function ensureStatsCacheReady() {
+    if (statsCacheInited) return;
+    initStatsCache();
+    statsCacheInited = true;
+  }
   
   /**
    * FASE 3: Setup Intersection Observer para lazy loading otimizado de stats
@@ -297,168 +325,56 @@
     }
   }
 
-  // Load saved categories and check downloaded categories on mount
+  // Bootstrap leve: localStorage + listeners. Nada de Cache Storage / stats / migration no open.
   onMount(() => {
-    // Check offline available status
     offlineAvailable = checkOfflineAvailable();
-    
-    // FASE 3: Inicializar sistema de cache
-    initStatsCache();
-    
-    // FASE 3: Habilitar métricas em modo desenvolvimento
+    openCachedStats(); // capa imediata com cache; sem cálculo pesado
+
     if (typeof window !== 'undefined' && window.location.hostname === 'localhost') {
       performanceMetrics.enabled = true;
     }
-    
-    // Inicialização assíncrona
-    (async () => {
-      // FASE 1: Operações críticas - carregam dados básicos para renderização inicial
-      try {
-        // Inicializar store offline explicitamente (lazy initialization)
-        await offline.lazyInitialize();
-        
-        // Carregar louvores primeiro
-        await loadLouvores();
-        
-        // Garantir que cachedPdfs está atualizado antes de verificar categorias baixadas
-        await offline.loadCachedPdfsList(false, true);
-        await new Promise(resolve => setTimeout(resolve, 50)); // Pequeno delay para garantir atualização
-        
-        // Agora verificar categorias baixadas com dados atualizados
-        const downloadedCats = await offline.checkAndUpdateDownloadedCategories();
-        downloadedCategories = downloadedCats;
-        
-        // Load saved categories for selection
-        const saved = offline.getSavedCategories();
-        if (saved && saved.length > 0) {
-          selectedCategories = saved;
-        }
-        
-        // Ensure downloaded categories are ALWAYS selected and cannot be deselected
-        // Merge downloaded categories with saved categories, ensuring downloaded ones are included
-        const allCategories = [...new Set([...selectedCategories, ...downloadedCategories])];
-        selectedCategories = allCategories;
-        
-        // Initialize lastSavedCategories to prevent unnecessary saves during initialization
-        lastSavedCategories = [...selectedCategories];
-        hasInitializedCategories = true;
-        
-        // FIX: Invalidate stats for downloaded categories since validation just completed
-        // This ensures UI shows fresh stats after validation
-        if (downloadedCats.length > 0) {
-          // Invalidate all caches: persistent, memory, and StatsCalculator
-          invalidateCategories(downloadedCats);
-          downloadedCats.forEach(cat => statsCache.delete(cat));
-          // Also invalidate StatsCalculator's internal cache
-          downloadedCats.forEach(cat => statsCalculator.invalidateCategory(cat));
-        }
-        
-        // FASE 3: Carregar stats do cache para renderização inicial rápida
-        const cachedStats = getAllCachedStats();
-        if (Object.keys(cachedStats).length > 0) {
-          categoryStats = { ...cachedStats };
-          // Atualizar cache em memória
-          Object.entries(cachedStats).forEach(([cat, stats]) => {
-            statsCache.set(cat, stats);
-          });
-        }
-        
-        // Initialize lastCachedPdfsCount after loading cached PDFs
-        const initialState = $offline;
-        if (initialState.cachedPdfs) {
-          lastCachedPdfsCount = initialState.cachedPdfs.length;
-        }
-        
-        // Marcar inicialização básica como completa - permite renderização
-        isInitializing = false;
-      } catch (error) {
-        console.error('[Offline Page] Error during critical initialization:', error);
-        isInitializing = false;
+
+    // Categorias só do localStorage (sem varrer PDFs)
+    const saved = offline.getSavedCategories() || [];
+    const downloaded = offline.getDownloadedCategories() || [];
+    downloadedCategories = downloaded;
+    selectedCategories = [...new Set([...saved, ...downloaded])];
+    lastSavedCategories = [...selectedCategories];
+    hasInitializedCategories = true;
+
+    // Louvores em background — libera botões de download quando chegar
+    loadLouvores().catch((err) => {
+      console.warn('[Offline Page] Background louvores load failed:', err);
+    });
+
+    setupCacheSync();
+    const unsubscribe = onCacheSync(() => {
+      needsSync = true;
+    });
+    syncUnsubscribe = /** @type {(() => void) | null} */ (unsubscribe) || null;
+
+    offlineEvents.on(OFFLINE_EVENTS.DOWNLOAD_COMPLETE, async (event) => {
+      const detail = event.detail || {};
+      const categories = detail.categories || [];
+      if (categories.length === 0) return;
+
+      invalidateCategories(categories);
+      categories.forEach((cat) => {
+        statsCache.delete(cat);
+        statsCalculator.invalidateCategory(cat);
+        loadedCategories.delete(cat);
+      });
+
+      if (statsRequested) {
+        statsStale = true;
       }
-      
-      // FASE 2: Operações não-críticas - executadas em background após renderização
-      // Carregar stats apenas para categorias selecionadas inicialmente (lazy loading completo vem depois)
-      if (selectedCategories.length > 0) {
-        // Carregar stats de categorias selecionadas primeiro (prioridade)
-        loadCategoryStatsForCategories(selectedCategories).catch(err => {
-          console.error('[Offline Page] Error loading initial stats:', err);
-        });
-      }
-      
-      // Validar erros em background (não bloqueante)
-      isValidating = true;
-      offline.validateAndClearError().catch(err => {
-        console.error('[Offline Page] Error validating errors:', err);
-      }).finally(() => {
-        isValidating = false;
-      });
-    
-      // Setup cache sync listener
-      setupCacheSync();
-      const unsubscribe = onCacheSync(() => {
-        needsSync = true;
-        console.log('[Offline Page] Cache sync required from another tab');
-      });
-      syncUnsubscribe = /** @type {(() => void) | null} */ (unsubscribe) || null;
-      
-      // FASE 4: Listen for stats invalidation events
-      offlineEvents.on(OFFLINE_EVENTS.DOWNLOAD_COMPLETE, async (event) => {
-        const detail = event.detail || {};
-        const categories = detail.categories || [];
-        
-        if (categories.length > 0) {
-          console.log('[Offline Page] FASE 4: Stats invalidated for categories after download:', categories);
-          
-          // Invalidate all caches for affected categories
-          invalidateCategories(categories);
-          categories.forEach(cat => {
-            statsCache.delete(cat);
-            statsCalculator.invalidateCategory(cat);
-            loadedCategories.delete(cat);
-          });
-          
-          // Force reload cached PDFs list to ensure we have latest data
-          await offline.loadCachedPdfsList(false, true);
-          
-          // Reload stats for affected categories (force recalculation)
-          await loadCategoryStatsForCategories(categories, true).catch(err => {
-            console.error('[Offline Page] Error reloading stats after download:', err);
-          });
-        }
-      });
-      
-      // Listen for cache sync events
-      window.addEventListener('cache-sync-required', handleCacheSyncRequired);
-      
-      // Listen for offline cache updated events (from download completion)
-      window.addEventListener('offline-cache-updated', handleOfflineCacheUpdated);
-      
-      // Check for sync needed on window focus
-      window.addEventListener('focus', checkSyncOnFocus);
-      
-      // Check sync status periodically
-      syncCheckInterval = setInterval(async () => {
-        const changed = await checkCacheVersionChanged();
-        if (changed) {
-          needsSync = true;
-        }
-      }, 30000); // Check every 30 seconds
-      
-      // Check if migration V2 is needed
-      const migrationCompleted = await cacheMigrationV2.isMigrationCompleted();
-      migrationNeeded = !migrationCompleted;
-      
-      // ============================================
-      // FASE 2: Remoção de triggers automáticos de stats
-      // Stats são geradas apenas após download completo ou manualmente
-      // ============================================
-    })();
-    
-    // Retornar função de cleanup síncrona
+    });
+
+    window.addEventListener('cache-sync-required', handleCacheSyncRequired);
+    window.addEventListener('offline-cache-updated', handleOfflineCacheUpdated);
+
     return () => {
-      if (syncUnsubscribe) {
-        syncUnsubscribe();
-      }
+      if (syncUnsubscribe) syncUnsubscribe();
       if (categoryObserver) {
         categoryObserver.disconnect();
         categoryObserver = null;
@@ -575,9 +491,10 @@
           
           // Force reload cached PDFs list to ensure we have latest data
           await offline.loadCachedPdfsList(false, true);
-          
-          // Reload stats for updated categories (force recalculation)
-          await loadCategoryStatsForCategories(updatedDownloaded, true);
+
+          if (statsRequested) {
+            statsStale = true;
+          }
         }
       } finally {
         isProcessingCacheUpdate = false;
@@ -823,8 +740,28 @@
     }
   }
 
-  // Load category availability statistics (all categories)
+  /**
+   * Mostra stats do cache local (rápido) com capa “desatualizado”.
+   * O cálculo real só corre ao clicar em atualizar.
+   */
+  function openCachedStats() {
+    ensureStatsCacheReady();
+    const cached = getAllCachedStats();
+    if (Object.keys(cached).length > 0) {
+      categoryStats = { ...cached };
+      Object.entries(cached).forEach(([cat, stats]) => {
+        statsCache.set(cat, stats);
+      });
+    }
+    statsRequested = true;
+    statsStale = true;
+  }
+
+  // Load category availability statistics (all categories) — sob pedido
   async function loadCategoryStats(force = false) {
+    statsRequested = true;
+    ensureStatsCacheReady();
+    await ensureLouvoresReady();
     if (!$louvores.length) return;
     
     // Prevent excessive calls - only allow if forced or enough time has passed
@@ -843,6 +780,7 @@
     // Usar função específica para todas as categorias
     await loadCategoryStatsForCategories(CATEGORY_OPTIONS, force);
     lastStatsLoadTime = now;
+    statsStale = false;
   }
 
   // Track download completion to update categories
@@ -891,9 +829,10 @@
           needsStatsRecalculation = false; // Reset flag
         }
         
-        // Reload stats after download (force to bypass rate limiting)
-        // This ensures UI updates with fresh stats after validation
-        await loadCategoryStats(true);
+        // Após download: marcar stats como desatualizadas (capa), sem recalcular agora
+        if (statsRequested) {
+          statsStale = true;
+        }
         
         // Set offline available flag after download completes
         // Check if all categories are downloaded
@@ -912,7 +851,7 @@
   
   // Save selected categories automatically when they change (after initialization)
   // Only save if categories actually changed to prevent loops
-  $: if (!isInitializing && hasInitializedCategories) {
+  $: if (hasInitializedCategories) {
     const categoriesStr = JSON.stringify([...selectedCategories].sort());
     const lastSavedStr = JSON.stringify([...lastSavedCategories].sort());
     
@@ -929,40 +868,12 @@
   
   // Track cached PDFs count to detect changes
   let lastCachedPdfsCount = 0;
-  let isProcessingCacheChange = false;
   
-  // React to cached PDFs changes - invalidate and reload stats when cache changes
-  $: if (!isInitializing && !isProcessingCacheChange && state.cachedPdfs) {
+  // React to cached PDFs changes — só marca como desatualizado (capa)
+  $: if (statsRequested && state.cachedPdfs) {
     const currentCount = state.cachedPdfs.length;
-    // Only react if count actually changed (not just on initial load)
     if (lastCachedPdfsCount > 0 && currentCount !== lastCachedPdfsCount) {
-      console.log('[Offline Page] Cached PDFs count changed:', lastCachedPdfsCount, '->', currentCount);
-      
-      // Prevent recursive updates
-      isProcessingCacheChange = true;
-      
-      // Invalidate all stats to force recalculation with new cache state
-      const allCategories = Object.keys(categoryStats);
-      if (allCategories.length > 0) {
-        invalidateCategories(allCategories);
-        allCategories.forEach(cat => {
-          statsCache.delete(cat);
-          statsCalculator.invalidateCategory(cat);
-        });
-        loadedCategories.clear();
-        
-        // Reload stats for all categories that have been loaded
-        loadCategoryStatsForCategories(allCategories, true)
-          .then(() => {
-            isProcessingCacheChange = false;
-          })
-          .catch(err => {
-            console.error('[Offline Page] Error reloading stats after cache change:', err);
-            isProcessingCacheChange = false;
-          });
-      } else {
-        isProcessingCacheChange = false;
-      }
+      statsStale = true;
     }
     lastCachedPdfsCount = currentCount;
   }
@@ -1054,7 +965,8 @@
    * Start download
    */
   async function startDownload() {
-    if (!canDownload) return;
+    await ensureLouvoresReady();
+    if (!$louvores.length || downloading) return;
 
     console.log('[Offline Page] Starting download for categories:', selectedCategories);
     
@@ -1079,15 +991,116 @@
    * FASE 5: Now uses OfflineManager directly
    */
   async function cancelDownload() {
-    console.log('[Offline Page] Cancelling download');
+    console.log('[Offline Page] Cancelling download/import');
     await offlineManager.cancelDownload();
+    if (isImportingBundle) importChecklist = [];
+  }
+
+  /**
+   * Import zip-mãe from local file (offline-first).
+   * @param {Event} event
+   */
+  async function handleBundleFileSelected(event) {
+    const input = /** @type {HTMLInputElement} */ (event.currentTarget);
+    const file = input.files && input.files[0];
+    input.value = '';
+    if (!file || downloading || isImportingBundle || isDownloadingMissing) return;
+
+    isImportingBundle = true;
+    importJustFinished = false;
+    importChecklist = [];
+    offline.updateState({
+      downloading: true,
+      progress: 0,
+      completed: 0,
+      failed: 0,
+      total: 0,
+      error: null
+    });
+
+    try {
+      const result = await offlineManager.importOfflineBundle(file, {
+        onProgress: (p) => {
+          if (Array.isArray(p.checklist)) {
+            importChecklist = p.checklist;
+          }
+          offline.updateState({
+            downloading: true,
+            progress: p.percentage || 0,
+            completed: p.completed || 0,
+            total: p.total || 0,
+            failed: 0
+          });
+        }
+      });
+
+      if (result.cancelled) {
+        importChecklist = [];
+        offline.updateState({
+          downloading: false,
+          progress: 0,
+          completed: 0,
+          total: 0
+        });
+        return;
+      }
+
+      if (!result.success) {
+        importChecklist = [];
+        offline.updateState({ downloading: false, progress: 0 });
+        errorTitle = 'Falha na importação';
+        errorMessage =
+          result.error ||
+          'Não foi possível importar o pacote. O cache anterior foi mantido (rollback).';
+        showErrorModal = true;
+        return;
+      }
+
+      setOfflineAvailable(true);
+      downloadedCategories = result.categories || [];
+      lastSavedCategories = [...downloadedCategories];
+      selectedCategories = [...downloadedCategories];
+      importJustFinished = true;
+      importChecklist = [];
+
+      offline.updateState({
+        downloading: false,
+        progress: 100,
+        completed: result.pdfsStored,
+        total: result.pdfsStored,
+        failed: 0
+      });
+
+      await offline.loadCachedPdfsList(false, true);
+      if (statsRequested) {
+        statsStale = true;
+      }
+    } catch (error) {
+      console.error('[Offline Page] Bundle import error:', error);
+      importChecklist = [];
+      offline.updateState({ downloading: false, progress: 0 });
+      errorTitle = 'Falha na importação';
+      errorMessage =
+        error?.message ||
+        'Erro inesperado na importação. O cache anterior foi mantido (rollback).';
+      showErrorModal = true;
+    } finally {
+      isImportingBundle = false;
+    }
+  }
+
+  function triggerBundleFilePicker() {
+    if (downloading || isImportingBundle || isDownloadingMissing) return;
+    bundleFileInput?.click();
   }
 
   /**
    * Download all categories automatically
    */
   async function downloadAllCategories() {
-    if (downloading || !louvoresReady) return;
+    if (downloading) return;
+    await ensureLouvoresReady();
+    if (!$louvores.length) return;
 
     console.log('[Offline Page] Starting download for all categories');
     
@@ -1136,7 +1149,9 @@
    * Handle download of missing PDFs
    */
   async function handleDownloadMissingPdfs() {
-    if (isDownloadingMissing || downloading || !louvoresReady) return;
+    if (isDownloadingMissing || downloading) return;
+    await ensureLouvoresReady();
+    if (!$louvores.length) return;
 
     isDownloadingMissing = true;
     showErrorModal = false;
@@ -1182,8 +1197,9 @@
       // Reload cached PDFs list to update stats
       await offline.loadCachedPdfsList(true, false);
 
-      // Reload stats after download
-      await loadCategoryStats(true);
+      if (statsRequested) {
+        statsStale = true;
+      }
 
       // Show error modal if there were errors
       if (!result.success || result.errors.length > 0) {
@@ -1317,57 +1333,6 @@
 <div class="max-w-4xl mx-auto">
   <!-- Body -->
   <div class="page-body">
-      <!-- Skeleton Screen - Mostrar durante inicialização -->
-      {#if isInitializing}
-        <div class="skeleton-container">
-          <!-- Skeleton para availability summary -->
-          <div class="skeleton availability-summary">
-            <div class="skeleton-header">
-              <div class="skeleton-icon"></div>
-              <div class="skeleton-title"></div>
-            </div>
-            <div class="skeleton-stats">
-              <div class="skeleton-stat"></div>
-              <div class="skeleton-stat"></div>
-              <div class="skeleton-stat"></div>
-              <div class="skeleton-stat"></div>
-            </div>
-            <div class="skeleton-progress-bar"></div>
-          </div>
-          
-          <!-- Skeleton para info box -->
-          <div class="skeleton info-box">
-            <div class="skeleton-icon"></div>
-            <div class="skeleton-content">
-              <div class="skeleton-line"></div>
-              <div class="skeleton-line"></div>
-              <div class="skeleton-line short"></div>
-            </div>
-          </div>
-          
-          <!-- Skeleton para category list -->
-          <div class="skeleton category-section">
-            <div class="skeleton-title"></div>
-            <div class="skeleton-category-list">
-              {#each Array(5) as _}
-                <div class="skeleton category-item">
-                  <div class="skeleton-checkbox"></div>
-                  <div class="skeleton-category-info">
-                    <div class="skeleton-category-header">
-                      <div class="skeleton-category-label"></div>
-                      <div class="skeleton-badge"></div>
-                    </div>
-                    <div class="skeleton-category-stats"></div>
-                    <div class="skeleton-progress-bar"></div>
-                  </div>
-                </div>
-              {/each}
-            </div>
-          </div>
-        </div>
-      {/if}
-    
-    {#if !isInitializing}
 
       <!-- Migration progress -->
       {#if isMigrating && migrationProgress}
@@ -1409,13 +1374,73 @@
         </div>
       {/if}
 
-      <!-- Overall availability summary -->
-      {#if totalStats.total > 0}
-        <div class="availability-summary">
-          <div class="summary-header">
-            <TrendingUp class="w-5 h-5 summary-icon" />
-            <h3 class="summary-title">Disponibilidade Geral</h3>
-            <!-- FASE 2: Botão manual de atualização de stats -->
+      {#if downloading}
+      <!-- Download / import progress -->
+      <div class="progress-section">
+        <div class="progress-info">
+          <p class="progress-title">{isImportingBundle ? 'A importar pacote offline…' : 'Baixando PDFs...'}</p>
+          {#if !isImportingBundle}
+            <p class="progress-stats">
+              {completed} de {total} PDFs baixados
+              {#if failed > 0}
+                <span class="failed-count">({failed} falharam)</span>
+              {/if}
+            </p>
+          {/if}
+        </div>
+        <div class="progress-bar-container">
+          <div class="progress-bar" style="width: {progress}%"></div>
+        </div>
+        <p class="progress-percentage">{progress}%</p>
+        {#if isImportingBundle && importChecklist.length}
+          <ul class="import-checklist">
+            {#each importChecklist as item (item.id)}
+              <li class="import-checklist-item" data-status={item.status}>
+                <span class="import-checklist-label">{item.label}</span>
+                <span class="import-checklist-meta">
+                  {#if item.counts}
+                    <span class="import-counts" aria-label="válidos, inválidos, total">
+                      <span class="import-count-ok">{item.counts.ok}</span>
+                      <span class="import-count-sep">;</span>
+                      <span class="import-count-fail">{item.counts.fail}</span>
+                      <span class="import-count-sep">,</span>
+                      <span class="import-count-total">{item.counts.total}</span>
+                    </span>
+                  {/if}
+                  <span class="import-status-tag" data-status={item.status}
+                    >{IMPORT_STATUS_LABEL[item.status]}</span
+                  >
+                </span>
+              </li>
+            {/each}
+          </ul>
+        {/if}
+        <div class="action-buttons">
+          <button class="btn btn-danger" on:click={cancelDownload}>
+            {isImportingBundle ? 'Cancelar importação' : 'Cancelar Download'}
+          </button>
+        </div>
+      </div>
+      {:else if progress >= 100}
+      <div class="complete-section">
+        <CheckCircle class="w-16 h-16 complete-icon" />
+        <p class="complete-title">{importJustFinished ? 'Importação concluída!' : 'Download concluído!'}</p>
+        <p class="complete-stats">
+          {completed} PDFs {importJustFinished ? 'importados' : 'baixados'} com sucesso
+          {#if failed > 0}
+            <br />
+            <span class="failed-count">{failed} PDFs falharam</span>
+          {/if}
+        </p>
+        <div class="action-buttons"></div>
+      </div>
+      {:else}
+      <!-- Stats: capa com cache ao abrir; cálculo só ao clicar atualizar -->
+      <div class="availability-summary" class:has-stale-overlay={statsStale}>
+        <div class="summary-header">
+          <TrendingUp class="w-5 h-5 summary-icon" />
+          <h3 class="summary-title">Disponibilidade Geral</h3>
+          {#if !statsStale}
             <button
               class="refresh-stats-btn"
               on:click={() => loadCategoryStats(true)}
@@ -1424,47 +1449,66 @@
             >
               <RefreshCw class="w-4 h-4 {isLoadingStats ? 'spinning' : ''}" />
             </button>
-            <!-- FASE 3: Botão de métricas (apenas em desenvolvimento) -->
-            {#if performanceMetrics.enabled && performanceMetrics.lastMetrics}
-              <button
-                class="metrics-btn"
-                on:click={() => {
-                  const metrics = getCacheMetrics();
-                  console.table(metrics);
-                  alert(`Cache Hit Rate: ${(metrics.cacheHitRate * 100).toFixed(1)}%\nAvg Calculation: ${metrics.avgCalculationTime}ms\nAvg Load: ${metrics.avgLoadTime}ms\nCache Size: ${(metrics.cacheSize / 1024).toFixed(2)} KB\nCategories Cached: ${metrics.categoriesCached}`);
-                }}
-                title="Mostrar métricas de performance (desenvolvimento)"
-              >
-                <TrendingUp class="w-4 h-4" />
-              </button>
-            {/if}
+          {/if}
+          {#if performanceMetrics.enabled && performanceMetrics.lastMetrics}
+            <button
+              class="metrics-btn"
+              on:click={() => {
+                const metrics = getCacheMetrics();
+                console.table(metrics);
+                alert(`Cache Hit Rate: ${(metrics.cacheHitRate * 100).toFixed(1)}%\nAvg Calculation: ${metrics.avgCalculationTime}ms\nAvg Load: ${metrics.avgLoadTime}ms\nCache Size: ${(metrics.cacheSize / 1024).toFixed(2)} KB\nCategories Cached: ${metrics.categoriesCached}`);
+              }}
+              title="Mostrar métricas de performance (desenvolvimento)"
+            >
+              <TrendingUp class="w-4 h-4" />
+            </button>
+          {/if}
+        </div>
+        <div class="summary-stats">
+          <div class="stat-item">
+            <span class="stat-value">{totalStats.available}</span>
+            <span class="stat-label">Disponíveis</span>
           </div>
-          <div class="summary-stats">
-            <div class="stat-item">
-              <span class="stat-value">{totalStats.available}</span>
-              <span class="stat-label">Disponíveis</span>
-            </div>
-            <div class="stat-item">
-              <span class="stat-value">{totalStats.missing}</span>
-              <span class="stat-label">Faltantes</span>
-            </div>
-            <div class="stat-item">
-              <span class="stat-value">{totalStats.total}</span>
-              <span class="stat-label">Total</span>
-            </div>
-            <div class="stat-item highlight">
-              <span class="stat-value">{overallPercentage}%</span>
-              <span class="stat-label">Completo</span>
-            </div>
+          <div class="stat-item">
+            <span class="stat-value">{totalStats.missing}</span>
+            <span class="stat-label">Faltantes</span>
           </div>
-          <div class="summary-progress-bar">
-            <div 
-              class="summary-progress-fill" 
-              style="width: {overallPercentage}%"
-            ></div>
+          <div class="stat-item">
+            <span class="stat-value">{totalStats.total}</span>
+            <span class="stat-label">Total</span>
+          </div>
+          <div class="stat-item highlight">
+            <span class="stat-value">{overallPercentage}%</span>
+            <span class="stat-label">Completo</span>
           </div>
         </div>
-      {/if}
+        <div class="summary-progress-bar">
+          <div 
+            class="summary-progress-fill" 
+            style="width: {overallPercentage}%"
+          ></div>
+        </div>
+
+        {#if statsStale}
+          <div class="stats-stale-overlay">
+            <p class="stats-stale-hint">Dados em cache — podem estar desatualizados</p>
+            <button
+              class="btn btn-primary stats-refresh-cta"
+              type="button"
+              on:click={() => loadCategoryStats(true)}
+              disabled={isLoadingStats}
+            >
+              {#if isLoadingStats}
+                <RefreshCw class="w-5 h-5 spinning" />
+                <span>A atualizar…</span>
+              {:else}
+                <RefreshCw class="w-5 h-5" />
+                <span>Clique aqui para atualizar</span>
+              {/if}
+            </button>
+          </div>
+        {/if}
+      </div>
 
       <!-- Info about category persistence and cache limitation -->
       <div class="info-box">
@@ -1496,8 +1540,8 @@
         </div>
       {/if}
 
-      <!-- Loading indicator for stats -->
-      {#if isLoadingStats}
+      <!-- Loading indicator for stats (fora da capa, quando já atualizou e recalcula) -->
+      {#if isLoadingStats && statsRequested && !statsStale}
         <div class="stats-loading-indicator">
           <RefreshCw class="w-4 h-4 spinning" />
           <span>Carregando estatísticas...</span>
@@ -1601,6 +1645,28 @@
 
       <!-- Simplified action button -->
       <div class="action-buttons">
+        <input
+          bind:this={bundleFileInput}
+          type="file"
+          accept=".zip,application/zip,application/x-zip-compressed"
+          class="bundle-file-input"
+          on:change={handleBundleFileSelected}
+        />
+        <button
+          class="btn btn-secondary"
+          type="button"
+          on:click={triggerBundleFilePicker}
+          disabled={downloading || isImportingBundle || isDownloadingMissing}
+          title="Importar zip-mãe (offline-manifest + louvores-manifest + packages) sem rede"
+        >
+          {#if isImportingBundle}
+            <RefreshCw class="w-5 h-5 spinning" />
+            <span>A importar…</span>
+          {:else}
+            <Upload class="w-5 h-5" />
+            <span>Importar pacote offline</span>
+          {/if}
+        </button>
         {#if offlineAvailable}
           <button
             class="btn btn-primary"
@@ -1633,54 +1699,8 @@
           </button>
         {/if}
       </div>
-    {:else if downloading}
-      <!-- Download progress -->
-      <div class="progress-section">
-        <div class="progress-info">
-          <p class="progress-title">Baixando PDFs...</p>
-          <p class="progress-stats">
-            {completed} de {total} PDFs baixados
-            {#if failed > 0}
-              <span class="failed-count">({failed} falharam)</span>
-            {/if}
-          </p>
-        </div>
+      {/if}
 
-        <!-- Progress bar -->
-        <div class="progress-bar-container">
-          <div class="progress-bar" style="width: {progress}%"></div>
-        </div>
-
-        <p class="progress-percentage">{progress}%</p>
-
-        <!-- Cancel button -->
-        <div class="action-buttons">
-          <button
-            class="btn btn-danger"
-            on:click={cancelDownload}
-          >
-            Cancelar Download
-          </button>
-        </div>
-      </div>
-    {:else if progress >= 100}
-      <!-- Download complete -->
-      <div class="complete-section">
-        <CheckCircle class="w-16 h-16 complete-icon" />
-        <p class="complete-title">Download concluído!</p>
-        <p class="complete-stats">
-          {completed} PDFs baixados com sucesso
-          {#if failed > 0}
-            <br />
-            <span class="failed-count">{failed} PDFs falharam</span>
-          {/if}
-        </p>
-
-        <div class="action-buttons">
-          <!-- Download completed, user can navigate away using header -->
-        </div>
-      </div>
-    {/if}
 
     {#if state.error}
       {@const hasActualMissing = Object.values(categoryStats).some(s => s && s.missing > 0)}
@@ -1991,11 +2011,39 @@
   
   /* Availability summary styles */
   .availability-summary {
+    position: relative;
     background-color: var(--background-color);
     border: 2px solid var(--gold-color);
     border-radius: 0.75rem;
     padding: 1.5rem;
     margin-bottom: 1.5rem;
+    overflow: hidden;
+  }
+
+  .stats-stale-overlay {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0.75rem;
+    padding: 1rem;
+    background: rgba(15, 15, 20, 0.55);
+    backdrop-filter: blur(1px);
+    z-index: 2;
+  }
+
+  .stats-stale-hint {
+    margin: 0;
+    color: #f5f5f5;
+    font-size: 0.875rem;
+    text-align: center;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
+  }
+
+  .stats-refresh-cta {
+    max-width: 100%;
   }
   
   /* Garantir contraste no summary */
@@ -2235,6 +2283,94 @@
     margin: 0 0 1rem 0;
   }
 
+  .import-checklist {
+    list-style: none;
+    margin: 0 0 1.25rem;
+    padding: 0;
+    text-align: left;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+
+  .import-checklist-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    padding: 0.5rem 0.65rem;
+    border: 1px solid rgba(212, 175, 55, 0.25);
+    border-radius: 0.35rem;
+    background: rgba(0, 0, 0, 0.15);
+  }
+
+  .import-checklist-label {
+    font-size: 0.875rem;
+    color: var(--text-light);
+    min-width: 0;
+  }
+
+  .import-checklist-meta {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    flex-shrink: 0;
+  }
+
+  .import-counts {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    font-size: 0.8125rem;
+    font-weight: 600;
+    display: inline-flex;
+    align-items: baseline;
+    gap: 0.15rem;
+  }
+
+  .import-count-ok {
+    color: #4ade80;
+  }
+
+  .import-count-fail {
+    color: #f87171;
+  }
+
+  .import-count-total {
+    color: #f5f5f5;
+  }
+
+  .import-count-sep {
+    color: rgba(245, 245, 245, 0.45);
+    font-weight: 400;
+  }
+
+  .import-status-tag {
+    flex-shrink: 0;
+    font-size: 0.6875rem;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    padding: 0.2rem 0.45rem;
+    border-radius: 0.25rem;
+    border: 1px solid transparent;
+  }
+
+  .import-status-tag[data-status='pending'] {
+    color: #c8c2b4;
+    border-color: rgba(200, 194, 180, 0.35);
+    background: rgba(200, 194, 180, 0.08);
+  }
+
+  .import-status-tag[data-status='active'] {
+    color: #1a1a1a;
+    border-color: var(--gold-color);
+    background: var(--gold-color);
+  }
+
+  .import-status-tag[data-status='done'] {
+    color: #d4edda;
+    border-color: rgba(40, 167, 69, 0.55);
+    background: rgba(40, 167, 69, 0.2);
+  }
+
   .progress-note {
     font-size: 0.875rem;
     color: var(--text-light);
@@ -2294,6 +2430,7 @@
   /* Action buttons */
   .action-buttons {
     display: flex;
+    flex-wrap: wrap;
     gap: 1rem;
     justify-content: flex-end;
     margin-top: 1.5rem;
@@ -2329,6 +2466,26 @@
     transform: translateY(-2px);
     box-shadow: 0 4px 8px rgba(212, 175, 55, 0.3);
   }
+
+  .btn-secondary {
+    background-color: #fff;
+    color: var(--text-dark);
+    border-color: var(--gold-color);
+  }
+
+  .btn-secondary:hover:not(:disabled) {
+    background-color: #f5f5f5;
+  }
+
+  .bundle-file-input {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    opacity: 0;
+    overflow: hidden;
+    z-index: -1;
+  }
+
   .btn-danger {
     background-color: #dc3545;
     color: white;
