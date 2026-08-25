@@ -17,6 +17,7 @@
   import LouvorCard from '$lib/components/LouvorCard.svelte';
   import GestureButton from '$lib/components/GestureButton.svelte';
   import { ChevronLeft, ChevronRight, RefreshCw } from 'lucide-svelte';
+  import { groupLouvoresByGroupId } from '$lib/utils/groupLouvores.js';
 
   /** @type {boolean} */
   let isOnline = browser ? navigator.onLine : true;
@@ -360,8 +361,9 @@
   }
 
   $: itemsPerPage = $bibliotecaItemsPerPage;
-  $: totalPages = Math.ceil(sortedLouvores.length / itemsPerPage);
-  $: paginatedLouvores = sortedLouvores.slice(
+  $: groupedLouvores = groupLouvoresByGroupId(sortedLouvores);
+  $: totalPages = Math.ceil(groupedLouvores.length / itemsPerPage);
+  $: paginatedLouvores = groupedLouvores.slice(
     (currentPage - 1) * itemsPerPage,
     currentPage * itemsPerPage
   );
@@ -369,7 +371,7 @@
   // Reset to page 1 when items per page changes
   $: {
     if (itemsPerPage && urlSyncInitialized && !pageInitializedFromUrl) {
-      const newTotalPages = Math.ceil(sortedLouvores.length / itemsPerPage);
+      const newTotalPages = Math.ceil(groupedLouvores.length / itemsPerPage);
       if (currentPage > newTotalPages && newTotalPages > 0) {
         setPage(1, { scroll: false });
       }
@@ -740,10 +742,10 @@
   }
   
   /**
-   * @param {{ pdfId: any; }} louvor
+   * @param {{ groupId?: string, materials?: { pdfId?: string }[] }} group
    */
-  function getLouvorKey(louvor) {
-    return louvor.pdfId || '';
+  function getGroupKey(group) {
+    return group.groupId || group.materials?.[0]?.pdfId || '';
   }
 
   // Handlers for Special Arrangement Filters
@@ -955,8 +957,8 @@
         </div>
         
         <div class="louvores-list">
-          {#each paginatedLouvores as louvor (getLouvorKey(louvor))}
-            <LouvorCard {louvor} />
+          {#each paginatedLouvores as group (getGroupKey(group))}
+            <LouvorCard louvor={group.materials[0]} materials={group.materials} />
           {/each}
         </div>
         

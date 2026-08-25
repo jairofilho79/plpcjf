@@ -1,36 +1,63 @@
 <script>
-  import { onMount, onDestroy } from 'svelte';
-  import { browser } from '$app/environment';
   import { Plus, Check } from 'lucide-svelte';
   import { getPdfRelPath } from '$lib/utils/pathUtils';
-  import { 
-    fetchPdfAsBlob, 
-    sharePdf, 
-    savePdf, 
-    buildOnlineReaderUrl, 
-    openPdfNewTabOfflineFirst 
+  import {
+    fetchPdfAsBlob,
+    sharePdf,
+    savePdf,
+    buildOnlineReaderUrl,
+    openPdfNewTabOfflineFirst
   } from '$lib/utils/pdfUtils';
   import { goto } from '$app/navigation';
   import { carousel } from '$lib/stores/carousel';
   import { pdfViewer } from '$lib/stores/pdfViewer';
   import { isPdfAvailableInIndex } from '$lib/utils/pdfIndex';
-  import { ensurePdfAvailable, validatePdfWithStrategies, validatePdfAvailability, getCachedValidation, checkEffectiveConnectivity } from '$lib/utils/pdfValidation';
-  
+  import {
+    ensurePdfAvailable,
+    validatePdfAvailability,
+    getCachedValidation,
+    checkEffectiveConnectivity
+  } from '$lib/utils/pdfValidation';
+  import {
+    pickPreferredMaterial,
+    readLastMaterialPdfId,
+    resolveGroupId,
+    writeLastMaterialPdfId
+  } from '$lib/utils/groupLouvores.js';
+
   export let louvor;
+  /** @type {any[] | null} Materiais do mesmo groupId (após filtro). */
+  export let materials = null;
   /** Ex.: posição na lista guardada: "1)" */
   export let titlePrefix = '';
-  
-  $: pdfPath = getPdfRelPath(louvor);
-  $: isInCarousel = $carousel.some(item => 
-    item.pdfId === louvor.pdfId
-  );
-  
+
+  /** @type {string | null} */
+  let openedPdfIdOverride = null;
+  /** @type {string | null} */
+  let openedPdfIdGroup = null;
+
+  $: materialList =
+    Array.isArray(materials) && materials.length > 0 ? materials : louvor ? [louvor] : [];
+  $: isGrouped = materialList.length > 1;
+  $: groupId = resolveGroupId(louvor || materialList[0] || {});
+  $: preferredPdfId =
+    openedPdfIdGroup === groupId && openedPdfIdOverride
+      ? openedPdfIdOverride
+      : readLastMaterialPdfId(groupId);
+  $: preferredMaterial = pickPreferredMaterial(materialList, preferredPdfId) || louvor;
+  $: pdfPath = getPdfRelPath(preferredMaterial || louvor);
+  $: isInCarousel = $carousel.some((item) => item.pdfId === preferredMaterial?.pdfId);
+  // ponytail: Set so {#each} {@const} sees $carousel changes (fn call hid the dep)
+  $: carouselPdfIds = new Set(($carousel || []).map((c) => c.pdfId).filter(Boolean));
+
   let isCheckingAvailability = false;
   let availabilityError = null;
   let cardElement;
   let isSharing = false;
   let isSaving = false;
-  
+  /** @type {string | null} */
+  let busyPdfId = null;
+
   function getCategoryIcon(category) {
     if (!category) return null;
     if (category === 'Partitura') {
@@ -44,113 +71,117 @@
     }
     return null;
   }
-  
-  async function handleCardClick() {
+
+  function rememberOpened(item) {
+    if (!item?.pdfId) return;
+    writeLastMaterialPdfId(groupId, item.pdfId);
+    openedPdfIdOverride = item.pdfId;
+    openedPdfIdGroup = groupId;
+  }
+
+  /**
+   * @param {any} item
+   */
+  async function openLouvor(item) {
+    if (!item) return;
+    const path = getPdfRelPath(item);
     const mode = $pdfViewer;
-    
+
     if (mode === 'share' || mode === 'save') {
-      // Definir estado de loading antes de começar
       if (mode === 'share') {
         isSharing = true;
       } else {
         isSaving = true;
       }
-      
+      busyPdfId = item.pdfId;
+
       try {
-        const blob = await fetchPdfAsBlob(pdfPath);
+        const blob = await fetchPdfAsBlob(path);
         if (mode === 'share') {
-          await sharePdf(blob, louvor.pdf, louvor.nome);
+          await sharePdf(blob, item.pdf, item.nome);
         } else {
-          await savePdf(blob, louvor.pdf);
+          await savePdf(blob, item.pdf);
         }
+        rememberOpened(item);
       } catch (err) {
         console.error('Erro ao processar PDF:', err);
-        window.open(pdfPath, '_blank');
+        window.open(path, '_blank');
       } finally {
-        // Limpar estado de loading
         isSharing = false;
         isSaving = false;
+        busyPdfId = null;
       }
       return;
     }
-    
+
     if (mode === 'leitor') {
-      // FASE 2: Cache de Validação - verificar cache primeiro
       isCheckingAvailability = true;
       availabilityError = null;
-      
+      busyPdfId = item.pdfId;
+
       try {
         let validated = false;
-        // Verificar cache de validação primeiro (Fase 2)
-        const cached = getCachedValidation(louvor.pdfId);
+        const cached = getCachedValidation(item.pdfId);
         if (cached && cached.available) {
-          validated = true;
-          // Cache diz que está disponível - usar caminho original do pdfId (NÃO usar cached.url que pode estar normalizado)
-          const fileParam = encodeURIComponent(`/${pdfPath}`);
-          const tituloParam = encodeURIComponent(louvor.nome || '');
-          const subtituloText = `${louvor.categoria || ''} | ${louvor.classificacao || ''}`.trim();
+          rememberOpened(item);
+          const fileParam = encodeURIComponent(`/${path}`);
+          const tituloParam = encodeURIComponent(item.nome || '');
+          const subtituloText = `${item.categoria || ''} | ${item.classificacao || ''}`.trim();
           const subtituloParam = encodeURIComponent(subtituloText);
           const url = `/leitor?file=${fileParam}&titulo=${tituloParam}&subtitulo=${subtituloParam}&validated=true`;
           goto(url);
           isCheckingAvailability = false;
+          busyPdfId = null;
           return;
         }
-        
-        // Se não estiver no cache ou cache diz que não está disponível, fazer validação
-        // Quick check via index first (mas não bloqueia se index for null ou desatualizado)
-        const indexCheck = isPdfAvailableInIndex(louvor.pdfId);
-        
+
+        const indexCheck = isPdfAvailableInIndex(item.pdfId);
         let shouldProceed = false;
-        
+
         if (indexCheck === true) {
-          // Index diz que está disponível - confiar mas fazer validação rápida
           try {
-            const quickValidation = await validatePdfAvailability(pdfPath, louvor.pdfId);
+            const quickValidation = await validatePdfAvailability(path, item.pdfId);
             if (quickValidation.available) {
               shouldProceed = true;
               validated = true;
             } else if (quickValidation.needsDownload && navigator.onLine) {
-              // PDF não está offline mas pode ser baixado - permitir abertura (leitor tentará baixar)
               shouldProceed = true;
             }
           } catch (err) {
             console.warn('[LouvorCard] Quick validation failed, proceeding anyway:', err);
-            // Se validação falhar por erro técnico, permitir abertura
             shouldProceed = true;
           }
         } else {
-          // Index é false ou null - fazer validação completa
-          const isAvailable = await ensurePdfAvailable(pdfPath);
-          
+          const isAvailable = await ensurePdfAvailable(path);
+
           if (isAvailable) {
             shouldProceed = true;
             validated = true;
           } else {
-            // Verificar se pode ser baixado online
-            const validation = await validatePdfAvailability(pdfPath, louvor.pdfId);
+            const validation = await validatePdfAvailability(path, item.pdfId);
             const effectiveOnline = await checkEffectiveConnectivity({ timeoutMs: 1500 });
             if (validation.needsDownload && effectiveOnline) {
-              // PDF não está offline mas pode ser baixado - permitir abertura
               shouldProceed = true;
             } else if (!effectiveOnline && validation.available === false) {
-              // Realmente não disponível e offline - mostrar erro
-              availabilityError = 'PDF não está disponível offline. Por favor, baixe primeiro na página de configuração offline.';
+              availabilityError =
+                'PDF não está disponível offline. Por favor, baixe primeiro na página de configuração offline.';
               isCheckingAvailability = false;
+              busyPdfId = null;
               return;
             } else {
-              // Se houver dúvida (SW não pronto, erro temporário), permitir abertura
-              // O leitor tentará carregar e mostrará erro apropriado se realmente não estiver disponível
-              console.warn('[LouvorCard] Validation uncertain, allowing navigation - leitor will handle errors');
+              console.warn(
+                '[LouvorCard] Validation uncertain, allowing navigation - leitor will handle errors'
+              );
               shouldProceed = true;
             }
           }
         }
-        
+
         if (shouldProceed) {
-          // PDF está disponível ou pode ser baixado, proceder com navegação
-          const fileParam = encodeURIComponent(`/${pdfPath}`);
-          const tituloParam = encodeURIComponent(louvor.nome || '');
-          const subtituloText = `${louvor.categoria || ''} | ${louvor.classificacao || ''}`.trim();
+          rememberOpened(item);
+          const fileParam = encodeURIComponent(`/${path}`);
+          const tituloParam = encodeURIComponent(item.nome || '');
+          const subtituloText = `${item.categoria || ''} | ${item.classificacao || ''}`.trim();
           const subtituloParam = encodeURIComponent(subtituloText);
           const validatedParam = validated ? '&validated=true' : '';
           const url = `/leitor?file=${fileParam}&titulo=${tituloParam}&subtitulo=${subtituloParam}${validatedParam}`;
@@ -158,90 +189,169 @@
         }
       } catch (err) {
         console.error('Erro ao validar PDF:', err);
-        // Em caso de erro, permitir abertura - leitor tentará carregar
-        // Não adicionar validated=true aqui pois validação falhou
-        const fileParam = encodeURIComponent(`/${pdfPath}`);
-        const tituloParam = encodeURIComponent(louvor.nome || '');
-        const subtituloText = `${louvor.categoria || ''} | ${louvor.classificacao || ''}`.trim();
+        rememberOpened(item);
+        const fileParam = encodeURIComponent(`/${path}`);
+        const tituloParam = encodeURIComponent(item.nome || '');
+        const subtituloText = `${item.categoria || ''} | ${item.classificacao || ''}`.trim();
         const subtituloParam = encodeURIComponent(subtituloText);
         const url = `/leitor?file=${fileParam}&titulo=${tituloParam}&subtitulo=${subtituloParam}`;
         goto(url);
       } finally {
         isCheckingAvailability = false;
+        busyPdfId = null;
       }
       return;
     }
-    
+
     if (mode === 'online') {
-      const readerUrl = buildOnlineReaderUrl(pdfPath);
+      rememberOpened(item);
+      const readerUrl = buildOnlineReaderUrl(path);
       window.open(readerUrl, '_blank', 'noopener');
       return;
     }
-    
+
     if (mode === 'newtab') {
-      await openPdfNewTabOfflineFirst(`/${pdfPath}`, louvor.pdf);
+      rememberOpened(item);
+      await openPdfNewTabOfflineFirst(`/${path}`, item.pdf);
       return;
     }
   }
-  
-  function handleAddToCarousel() {
-    carousel.addLouvor(louvor);
+
+  async function handleCardClick() {
+    await openLouvor(preferredMaterial || louvor);
   }
-  
-  $: categoryIcon = getCategoryIcon(louvor.categoria);
-  
-  // Nenhum prefetch automático de PDF aqui: o carregamento é feito sob demanda pelo leitor
+
+  /** @param {any} [item] */
+  function handleAddToCarousel(item) {
+    const target = item || preferredMaterial || louvor;
+    if (target) carousel.addLouvor(target);
+  }
+
+  $: categoryIcon = getCategoryIcon(louvor?.categoria);
+
+  /**
+   * @param {any} item
+   * @returns {string}
+   */
+  function materialButtonLabel(item) {
+    const cat = item?.categoria || 'Sem categoria';
+    const sameCat = materialList.filter((m) => m.categoria === item?.categoria).length;
+    if (sameCat <= 1) return cat;
+    const pdfName = String(item?.pdf || '')
+      .replace(/\.pdf$/i, '')
+      .trim();
+    return pdfName ? `${cat} · ${pdfName}` : cat;
+  }
 </script>
 
-<div class="louvor-card" bind:this={cardElement}>
+<div class="louvor-card" class:grouped={isGrouped} bind:this={cardElement}>
   {#if availabilityError}
     <div class="availability-error" role="alert">
       {availabilityError}
     </div>
   {/if}
-  <a
-    href={pdfPath}
-    on:click|preventDefault={handleCardClick}
-    class="louvor-info"
-    class:checking={isCheckingAvailability}
-    class:processing={isSharing || isSaving}
-  >
-    <div class="louvor-title">
-      {#if titlePrefix}<span class="louvor-title-prefix">{titlePrefix} </span>{/if}
-      <strong>#{louvor.numero || 'N/A'}</strong> - {louvor.nome || 'Sem título'}
-      {#if isSharing}
-        <span class="processing-indicator">Compartilhando...</span>
-      {:else if isSaving}
-        <span class="processing-indicator">Baixando...</span>
-      {/if}
-    </div>
-    <div class="louvor-subtitles">
+
+  {#if isGrouped}
+    <div class="louvor-info header-only">
+      <div class="louvor-title">
+        {#if titlePrefix}<span class="louvor-title-prefix">{titlePrefix} </span>{/if}
+        <strong>#{louvor.numero || 'N/A'}</strong> - {louvor.nome || 'Sem título'}
+        {#if isSharing}
+          <span class="processing-indicator">Compartilhando...</span>
+        {:else if isSaving}
+          <span class="processing-indicator">Baixando...</span>
+        {/if}
+      </div>
       <div class="louvor-classification">
         {louvor.classificacao || 'Sem classificação'}
       </div>
-      <div class="louvor-category">
-        {#if categoryIcon}
-          <svg class="category-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d={categoryIcon} />
-          </svg>
-        {/if}
-        <span>{louvor.categoria || 'Sem categoria'}</span>
-      </div>
     </div>
-  </a>
-  
-  <button
-    on:click={handleAddToCarousel}
-    disabled={isInCarousel}
-    class="add-button"
-    title="Adicionar à playlist de louvores"
-  >
-    {#if isInCarousel}
-      <Check class="w-5 h-5" />
-    {:else}
-      <Plus class="w-5 h-5" />
-    {/if}
-  </button>
+
+    <div class="materials" role="group" aria-label="Materiais">
+      {#each materialList as item (item.pdfId || item.categoria)}
+        {@const icon = getCategoryIcon(item.categoria)}
+        {@const inCarousel = !!item?.pdfId && carouselPdfIds.has(item.pdfId)}
+        {@const itemPath = getPdfRelPath(item)}
+        <div class="material-row">
+          <a
+            href={itemPath}
+            class="material-open"
+            class:busy={busyPdfId === item.pdfId}
+            class:checking={isCheckingAvailability && busyPdfId === item.pdfId}
+            title={`Abrir ${materialButtonLabel(item)}`}
+            on:click|preventDefault={() => openLouvor(item)}
+          >
+            <span class="icon-wrap" aria-hidden="true">
+              {#if icon}
+                <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d={icon} />
+                </svg>
+              {/if}
+            </span>
+            <span class="label-main">{materialButtonLabel(item)}</span>
+          </a>
+          <button
+            type="button"
+            class="add-button material-add"
+            title="Adicionar à playlist de louvores"
+            disabled={inCarousel}
+            on:click={() => handleAddToCarousel(item)}
+          >
+            {#if inCarousel}
+              <Check class="w-5 h-5" />
+            {:else}
+              <Plus class="w-5 h-5" />
+            {/if}
+          </button>
+        </div>
+      {/each}
+    </div>
+  {:else}
+    <a
+      href={pdfPath}
+      on:click|preventDefault={handleCardClick}
+      class="louvor-info"
+      class:checking={isCheckingAvailability}
+      class:processing={isSharing || isSaving}
+    >
+      <div class="louvor-title">
+        {#if titlePrefix}<span class="louvor-title-prefix">{titlePrefix} </span>{/if}
+        <strong>#{louvor.numero || 'N/A'}</strong> - {louvor.nome || 'Sem título'}
+        {#if isSharing}
+          <span class="processing-indicator">Compartilhando...</span>
+        {:else if isSaving}
+          <span class="processing-indicator">Baixando...</span>
+        {/if}
+      </div>
+      <div class="louvor-subtitles">
+        <div class="louvor-classification">
+          {louvor.classificacao || 'Sem classificação'}
+        </div>
+        <div class="louvor-category">
+          {#if categoryIcon}
+            <svg class="category-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d={categoryIcon} />
+            </svg>
+          {/if}
+          <span>{louvor.categoria || 'Sem categoria'}</span>
+        </div>
+      </div>
+    </a>
+
+    <button
+      type="button"
+      on:click={() => handleAddToCarousel()}
+      disabled={isInCarousel}
+      class="add-button"
+      title="Adicionar à playlist de louvores"
+    >
+      {#if isInCarousel}
+        <Check class="w-5 h-5" />
+      {:else}
+        <Plus class="w-5 h-5" />
+      {/if}
+    </button>
+  {/if}
 </div>
 
 <style>
@@ -257,12 +367,16 @@
     box-shadow: var(--shadow-md);
     transition: all 0.2s ease;
   }
-  
+
+  .louvor-card.grouped {
+    grid-template-columns: 1fr;
+  }
+
   .louvor-card:hover {
     box-shadow: var(--shadow-lg);
     transform: translateY(-1px);
   }
-  
+
   .louvor-info {
     display: flex;
     flex-direction: column;
@@ -271,7 +385,11 @@
     color: var(--text-light);
     min-width: 0;
   }
-  
+
+  .louvor-info.header-only {
+    grid-column: 1;
+  }
+
   .louvor-title-prefix {
     font-weight: 600;
     opacity: 0.95;
@@ -291,20 +409,20 @@
     -webkit-line-clamp: 2;
     -webkit-box-orient: vertical;
   }
-  
+
   .louvor-subtitles {
     display: flex;
     flex-direction: column;
     gap: 0.25rem;
   }
-  
+
   .louvor-classification {
     font-size: 0.8125rem;
     color: var(--text-light);
     opacity: 0.9;
     line-height: 1.4;
   }
-  
+
   .louvor-category {
     display: flex;
     align-items: center;
@@ -314,14 +432,14 @@
     opacity: 0.9;
     line-height: 1.4;
   }
-  
+
   .category-icon {
     width: 1rem;
     height: 1rem;
     color: var(--text-light);
     flex-shrink: 0;
   }
-  
+
   .add-button {
     background-color: var(--card-color);
     color: var(--text-dark);
@@ -338,18 +456,99 @@
     align-self: center;
     flex-shrink: 0;
   }
-  
+
   .add-button:hover:not(:disabled) {
     background-color: var(--gold-light);
     transform: scale(1.05);
   }
-  
+
   .add-button:disabled {
     background-color: var(--badge-gray-bg);
     cursor: not-allowed;
     opacity: 0.6;
   }
-  
+
+  .materials {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    margin-top: 0.15rem;
+    padding-top: 0.7rem;
+    border-top: 1px solid rgba(212, 175, 55, 0.35);
+  }
+
+  .material-row {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    align-items: stretch;
+    min-height: 2.75rem;
+    background: rgba(255, 248, 225, 0.1);
+    border: 2px solid var(--gold-color);
+    border-radius: 0.5rem;
+    overflow: hidden;
+  }
+
+  .material-open {
+    display: flex;
+    align-items: center;
+    gap: 0.55rem;
+    min-width: 0;
+    padding: 0.55rem 0.7rem;
+    color: var(--text-light);
+    text-decoration: none;
+    font-size: 0.8125rem;
+    font-weight: 700;
+    line-height: 1.2;
+    transition: background 0.15s ease;
+  }
+
+  .material-open:hover,
+  .material-open:focus-visible {
+    background: rgba(212, 175, 55, 0.28);
+    outline: none;
+  }
+
+  .material-open.busy,
+  .material-open.checking {
+    opacity: 0.6;
+    cursor: wait;
+    pointer-events: none;
+  }
+
+  .material-open .icon-wrap {
+    flex-shrink: 0;
+    width: 1.75rem;
+    height: 1.75rem;
+    border-radius: 0.35rem;
+    background: rgba(255, 248, 225, 0.18);
+    border: 1px solid rgba(212, 175, 55, 0.45);
+    display: grid;
+    place-items: center;
+  }
+
+  .material-open .icon-wrap svg {
+    width: 1.05rem;
+    height: 1.05rem;
+  }
+
+  .material-open .label-main {
+    min-width: 0;
+  }
+
+  .material-add {
+    border: none;
+    border-left: 2px solid var(--gold-color);
+    border-radius: 0;
+    height: auto;
+    min-height: 100%;
+    min-width: 2.75rem;
+    align-self: stretch;
+  }
+
+  .material-add:hover:not(:disabled) {
+    transform: none;
+  }
+
   .availability-error {
     grid-column: 1 / -1;
     padding: 0.5rem;
@@ -361,14 +560,14 @@
     font-size: 0.875rem;
     text-align: center;
   }
-  
+
   .louvor-info.checking,
   .louvor-info.processing {
     opacity: 0.6;
     cursor: wait;
     pointer-events: none;
   }
-  
+
   .processing-indicator {
     display: inline-block;
     margin-left: 0.5rem;
@@ -378,4 +577,3 @@
     color: var(--gold-color);
   }
 </style>
-

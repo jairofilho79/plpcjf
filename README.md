@@ -91,12 +91,14 @@ static/                    # Assets estáticos
 
 ### Cloudflare Pages
 
+Projeto: `plpcjf`. O domínio **plpcg.com** só atualiza com deploy de **Production** (`--branch=main`). Sem isso, o Wrangler publica em **Preview** (URL `*.plpcjf.pages.dev`).
+
 ```bash
-# Deploy manual
+# Preview (branch atual) — não atualiza plpcg.com
 npm run deploy
 
-# Ou configure CI/CD no GitHub Actions
-# (veja .github/workflows/deploy.yml)
+# Produção (plpcg.com)
+npm run build && npx wrangler pages deploy .svelte-kit/cloudflare --project-name=plpcjf --branch=main
 ```
 
 ### Configuração no Cloudflare Dashboard

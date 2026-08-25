@@ -20,6 +20,7 @@
   import LouvorCard from '$lib/components/LouvorCard.svelte';
   import CarouselChips from '$lib/components/CarouselChips.svelte';
   import LouvorPaginationControls from '$lib/components/LouvorPaginationControls.svelte';
+  import { groupLouvoresByGroupId } from '$lib/utils/groupLouvores.js';
 
   /** Em conjunto com `id` em SearchBar.svelte — só esse input bloqueia sync URL → pesquisa */
   const LOUVOR_SEARCH_INPUT_ID = 'louvor-search-input';
@@ -64,10 +65,11 @@
   function finalizeFilteredResults(results) {
     filteredResults = results;
     const ipp = get(bibliotecaItemsPerPage);
-    const maxP = results.length === 0 ? 1 : Math.max(1, Math.ceil(results.length / ipp));
+    const groupCount = groupLouvoresByGroupId(results).length;
+    const maxP = groupCount === 0 ? 1 : Math.max(1, Math.ceil(groupCount / ipp));
     if (shouldResetPageOnFilterResult) {
       // #region agent log
-      fetch('http://127.0.0.1:7440/ingest/a9d50c94-866c-49ac-b737-468ccc2df6c6',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'8c7e1b'},body:JSON.stringify({sessionId:'8c7e1b',runId:'post-fix',hypothesisId:'H5',location:'src/routes/+page.svelte:finalizeFilteredResults:resetToFirstPage',message:'finalizeFilteredResults reset page because criteria changed',data:{resultsLength:results.length,itemsPerPage:ipp,maxPage:maxP,currentPageBeforeReset:currentPage,pageInitializedFromUrl,searchQuery,urlHref:browser && $page?.url ? $page.url.href : ''},timestamp:Date.now()})}).catch(()=>{});
+      fetch('http://127.0.0.1:7440/ingest/a9d50c94-866c-49ac-b737-468ccc2df6c6',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'8c7e1b'},body:JSON.stringify({sessionId:'8c7e1b',runId:'post-fix',hypothesisId:'H5',location:'src/routes/+page.svelte:finalizeFilteredResults:resetToFirstPage',message:'finalizeFilteredResults reset page because criteria changed',data:{resultsLength:results.length,groupCount,itemsPerPage:ipp,maxPage:maxP,currentPageBeforeReset:currentPage,pageInitializedFromUrl,searchQuery,urlHref:browser && $page?.url ? $page.url.href : ''},timestamp:Date.now()})}).catch(()=>{});
       // #endregion
       currentPage = 1;
       pageInput = '1';
@@ -95,7 +97,8 @@
    */
   function setPage(p, { scroll = true, skipUrlUpdate = false } = {}) {
     const ipp = get(bibliotecaItemsPerPage);
-    const tp = filteredResults.length === 0 ? 1 : Math.max(1, Math.ceil(filteredResults.length / ipp));
+    const groupCount = groupLouvoresByGroupId(filteredResults).length;
+    const tp = groupCount === 0 ? 1 : Math.max(1, Math.ceil(groupCount / ipp));
     const maxPage = tp > 0 ? tp : 1;
     const pageNum = Math.max(1, Math.min(maxPage, p));
     const pageHrefBeforeUpdate = browser && $page?.url ? $page.url.href : '';
@@ -477,10 +480,11 @@
     );
   }
 
+  $: groupedResults = groupLouvoresByGroupId(filteredResults);
   $: itemsPerPageHome = $bibliotecaItemsPerPage;
   $: totalPagesHome =
-    filteredResults.length === 0 ? 1 : Math.max(1, Math.ceil(filteredResults.length / itemsPerPageHome));
-  $: paginatedResults = filteredResults.slice(
+    groupedResults.length === 0 ? 1 : Math.max(1, Math.ceil(groupedResults.length / itemsPerPageHome));
+  $: paginatedResults = groupedResults.slice(
     (currentPage - 1) * itemsPerPageHome,
     currentPage * itemsPerPageHome
   );
@@ -600,11 +604,10 @@
   }
   
   /**
-     * @param {{ pdfId: any; }} louvor
-     */
-  function getLouvorKey(louvor) {
-    // Use pdfId as the unique identifier
-    return louvor.pdfId || '';
+   * @param {{ groupId?: string, materials?: { pdfId?: string }[] }} group
+   */
+  function getGroupKey(group) {
+    return group.groupId || group.materials?.[0]?.pdfId || '';
   }
 </script>
 
@@ -662,7 +665,7 @@
   </div>
   
   <div id="home-louvores-results" class="mt-8 flex justify-center">
-    {#if filteredResults.length > 0}
+    {#if groupedResults.length > 0}
       <div class="louvores-container w-full max-w-4xl">
         <span class="container-tag">Louvores</span>
 
@@ -681,8 +684,8 @@
         />
 
         <div class="louvores-list">
-          {#each paginatedResults as louvor (getLouvorKey(louvor))}
-            <LouvorCard {louvor} />
+          {#each paginatedResults as group (getGroupKey(group))}
+            <LouvorCard louvor={group.materials[0]} materials={group.materials} />
           {/each}
         </div>
 

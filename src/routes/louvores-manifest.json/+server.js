@@ -16,25 +16,24 @@ export async function GET({ platform, url }) {
       }
     }
 
-    // Fallback: In development, try to fetch from static file
-    // The file should be in static/louvores-manifest.json
+    // Dev/local: R2 ausente — buscar o manifesto de produção
+    // ponytail: same-origin /louvores-manifest.json recursa neste handler e devolve []
     try {
-      const staticUrl = new URL('/louvores-manifest.json', url.origin).toString();
-      const staticResponse = await fetch(staticUrl);
-      
-      if (staticResponse.ok) {
-        const manifestData = await staticResponse.text();
+      const prodResponse = await fetch('https://plpcg.com/louvores-manifest.json', {
+        headers: { Accept: 'application/json' }
+      });
+      if (prodResponse.ok) {
+        const manifestData = await prodResponse.text();
         return new Response(manifestData, { headers: corsHeaders });
       }
     } catch (e) {
-      console.warn('Could not fetch from static file:', e);
+      console.warn('Could not fetch louvores-manifest from plpcg.com:', e);
     }
 
-    // Last resort: return empty array
-    console.warn('No manifest available from R2 or static');
-    return new Response(JSON.stringify([]), { 
-      status: 200, 
-      headers: corsHeaders 
+    console.warn('No manifest available from R2 or plpcg.com');
+    return new Response(JSON.stringify([]), {
+      status: 200,
+      headers: corsHeaders
     });
   } catch (error) {
     console.error('Error serving manifest:', error);
