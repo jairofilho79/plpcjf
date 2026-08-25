@@ -3,6 +3,7 @@ import { describe, it } from 'node:test';
 import {
   categorySortIndex,
   groupLouvoresByGroupId,
+  groupMaterialsByClassificacao,
   pickPreferredMaterial,
   resolveGroupId
 } from './groupLouvores.js';
@@ -59,6 +60,54 @@ describe('groupLouvoresByGroupId', () => {
   it('returns empty for empty/invalid input', () => {
     assert.deepEqual(groupLouvoresByGroupId([]), []);
     assert.deepEqual(groupLouvoresByGroupId(null), []);
+  });
+});
+
+describe('groupMaterialsByClassificacao', () => {
+  it('splits mixed classifications in first-seen order', () => {
+    const materials = [
+      { classificacao: 'PES', categoria: 'Cifra nível II', pdfId: '1' },
+      { classificacao: 'Coletânea Adultos', categoria: 'Cifra nível I', pdfId: '2' },
+      { classificacao: 'PES', categoria: 'Partitura', pdfId: '3' }
+    ];
+    const sections = groupMaterialsByClassificacao(materials);
+    assert.deepEqual(
+      sections.map((s) => s.classificacao),
+      ['PES', 'Coletânea Adultos']
+    );
+    assert.deepEqual(
+      sections[0].materials.map((m) => m.categoria),
+      ['Partitura', 'Cifra nível II']
+    );
+    assert.equal(sections[1].materials.length, 1);
+  });
+
+  it('keeps a single section when classification matches', () => {
+    const materials = [
+      { classificacao: 'PES (Encontro de Louvor Abril 2025)', categoria: 'Cifra', pdfId: 'a' },
+      { classificacao: 'PES (Encontro de Louvor Abril 2025)', categoria: 'Partitura', pdfId: 'b' }
+    ];
+    const sections = groupMaterialsByClassificacao(materials);
+    assert.equal(sections.length, 1);
+    assert.equal(sections[0].classificacao, 'PES (Encontro de Louvor Abril 2025)');
+    assert.deepEqual(
+      sections[0].materials.map((m) => m.categoria),
+      ['Partitura', 'Cifra']
+    );
+  });
+
+  it('uses Sem classificação for empty labels', () => {
+    const sections = groupMaterialsByClassificacao([
+      { categoria: 'Partitura', pdfId: '1' },
+      { classificacao: '  ', categoria: 'Cifra', pdfId: '2' }
+    ]);
+    assert.equal(sections.length, 1);
+    assert.equal(sections[0].classificacao, 'Sem classificação');
+  });
+
+  it('returns empty for empty/invalid input', () => {
+    assert.deepEqual(groupMaterialsByClassificacao([]), []);
+    assert.deepEqual(groupMaterialsByClassificacao(null), []);
   });
 });
 

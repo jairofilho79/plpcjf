@@ -67,6 +67,39 @@ export function groupLouvoresByGroupId(list) {
 }
 
 /**
+ * Particiona materiais do mesmo groupId por classificação (ordem da 1ª ocorrência).
+ * @param {any[]} materials
+ * @returns {{ classificacao: string, materials: any[] }[]}
+ */
+export function groupMaterialsByClassificacao(materials) {
+  if (!Array.isArray(materials) || materials.length === 0) return [];
+
+  /** @type {Map<string, any[]>} */
+  const buckets = new Map();
+  /** @type {string[]} */
+  const order = [];
+
+  for (const item of materials) {
+    const key =
+      item?.classificacao != null && String(item.classificacao).trim() !== ''
+        ? String(item.classificacao)
+        : 'Sem classificação';
+    if (!buckets.has(key)) {
+      buckets.set(key, []);
+      order.push(key);
+    }
+    buckets.get(key).push(item);
+  }
+
+  return order.map((classificacao) => ({
+    classificacao,
+    materials: [...buckets.get(classificacao)].sort(
+      (a, b) => categorySortIndex(a.categoria) - categorySortIndex(b.categoria)
+    )
+  }));
+}
+
+/**
  * Material preferido para + / default: último aberto na sessão, senão primeiro na ordem de categoria.
  * @param {any[]} materials
  * @param {string | null | undefined} lastPdfId

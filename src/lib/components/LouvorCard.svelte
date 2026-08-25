@@ -19,6 +19,7 @@
     checkEffectiveConnectivity
   } from '$lib/utils/pdfValidation';
   import {
+    groupMaterialsByClassificacao,
     pickPreferredMaterial,
     readLastMaterialPdfId,
     resolveGroupId,
@@ -39,6 +40,7 @@
   $: materialList =
     Array.isArray(materials) && materials.length > 0 ? materials : louvor ? [louvor] : [];
   $: isGrouped = materialList.length > 1;
+  $: materialsByClassificacao = groupMaterialsByClassificacao(materialList);
   $: groupId = resolveGroupId(louvor || materialList[0] || {});
   $: preferredPdfId =
     openedPdfIdGroup === groupId && openedPdfIdOverride
@@ -262,50 +264,53 @@
           <span class="processing-indicator">Baixando...</span>
         {/if}
       </div>
-      <div class="louvor-classification">
-        {louvor.classificacao || 'Sem classificação'}
-      </div>
     </div>
 
-    <div class="materials" role="group" aria-label="Materiais">
-      {#each materialList as item (item.pdfId || item.categoria)}
-        {@const icon = getCategoryIcon(item.categoria)}
-        {@const inCarousel = !!item?.pdfId && carouselPdfIds.has(item.pdfId)}
-        {@const itemPath = getPdfRelPath(item)}
-        <div class="material-row">
-          <a
-            href={itemPath}
-            class="material-open"
-            class:busy={busyPdfId === item.pdfId}
-            class:checking={isCheckingAvailability && busyPdfId === item.pdfId}
-            title={`Abrir ${materialButtonLabel(item)}`}
-            on:click|preventDefault={() => openLouvor(item)}
-          >
-            <span class="icon-wrap" aria-hidden="true">
-              {#if icon}
-                <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d={icon} />
-                </svg>
+    {#each materialsByClassificacao as section (section.classificacao)}
+      <div class="arranjo-head">
+        <div class="arranjo-kicker">Arranjo</div>
+        <div class="arranjo-name">{section.classificacao}</div>
+      </div>
+      <div class="materials" role="group" aria-label={`Materiais · ${section.classificacao}`}>
+        {#each section.materials as item (item.pdfId || item.categoria)}
+          {@const icon = getCategoryIcon(item.categoria)}
+          {@const inCarousel = !!item?.pdfId && carouselPdfIds.has(item.pdfId)}
+          {@const itemPath = getPdfRelPath(item)}
+          <div class="material-row">
+            <a
+              href={itemPath}
+              class="material-open"
+              class:busy={busyPdfId === item.pdfId}
+              class:checking={isCheckingAvailability && busyPdfId === item.pdfId}
+              title={`Abrir ${materialButtonLabel(item)}`}
+              on:click|preventDefault={() => openLouvor(item)}
+            >
+              <span class="icon-wrap" aria-hidden="true">
+                {#if icon}
+                  <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d={icon} />
+                  </svg>
+                {/if}
+              </span>
+              <span class="label-main">{materialButtonLabel(item)}</span>
+            </a>
+            <button
+              type="button"
+              class="add-button material-add"
+              title="Adicionar à playlist de louvores"
+              disabled={inCarousel}
+              on:click={() => handleAddToCarousel(item)}
+            >
+              {#if inCarousel}
+                <Check class="w-5 h-5" />
+              {:else}
+                <Plus class="w-5 h-5" />
               {/if}
-            </span>
-            <span class="label-main">{materialButtonLabel(item)}</span>
-          </a>
-          <button
-            type="button"
-            class="add-button material-add"
-            title="Adicionar à playlist de louvores"
-            disabled={inCarousel}
-            on:click={() => handleAddToCarousel(item)}
-          >
-            {#if inCarousel}
-              <Check class="w-5 h-5" />
-            {:else}
-              <Plus class="w-5 h-5" />
-            {/if}
-          </button>
-        </div>
-      {/each}
-    </div>
+            </button>
+          </div>
+        {/each}
+      </div>
+    {/each}
   {:else}
     <a
       href={pdfPath}
@@ -468,13 +473,43 @@
     opacity: 0.6;
   }
 
+  .louvor-info.header-only .louvor-title {
+    margin-bottom: 0;
+  }
+
+  .arranjo-head {
+    margin: 0.55rem 0 0.4rem;
+  }
+
+  .arranjo-kicker {
+    font-size: 0.65rem;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-light);
+    opacity: 0.8;
+    margin-bottom: 0.1rem;
+    line-height: 1.2;
+  }
+
+  .arranjo-name {
+    font-size: 0.95rem;
+    font-weight: 800;
+    line-height: 1.25;
+    color: var(--text-light);
+  }
+
   .materials {
     display: flex;
     flex-direction: column;
     gap: 0.5rem;
-    margin-top: 0.15rem;
-    padding-top: 0.7rem;
-    border-top: 1px solid rgba(212, 175, 55, 0.35);
+    margin-top: 0;
+    padding-top: 0;
+    border-top: none;
+  }
+
+  .arranjo-head + .materials {
+    margin-bottom: 0.15rem;
   }
 
   .material-row {
