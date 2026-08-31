@@ -86,7 +86,11 @@
   }
 </script>
 
-<div class="w-full max-w-4xl p-4 bg-card-color rounded-lg border-2 flex flex-wrap gap-2 items-center justify-center filter-container">
+<div
+  class="w-full max-w-4xl p-4 bg-card-color rounded-lg border-2 flex flex-wrap gap-2 items-center justify-center filter-container"
+  role="group"
+  aria-label="Filtrar por categoria"
+>
   <span class="container-tag">Material</span>
   <button
     type="button"
@@ -116,6 +120,8 @@
         class:active={isCategoryActive}
         class:disabled={isDisabled}
         disabled={isDisabled}
+        aria-pressed={isCategoryActive}
+        aria-label={`Categoria ${category}`}
       >
         {#if isDisabled}
           <WifiOff class="w-4 h-4 offline-icon" />

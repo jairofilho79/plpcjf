@@ -45,12 +45,19 @@
       0 -1px 1px rgba(255, 255, 255, 0.15);
   }
 
-  /* Remover outline azul padrão de inputs em focus */
-  input:focus,
-  input:focus-visible,
-  input:active {
-    outline: none !important;
-    box-shadow: none !important;
+  /* Suprime só o realce nativo do browser em clique/digitação; o teclado
+     continua com indicador próprio, definido logo abaixo. */
+  input:focus:not(:focus-visible) {
+    outline: none;
+    box-shadow: none;
+  }
+
+  /* Indicador de foco por teclado — dourado sobre o marrom do fundo e
+     sobre o creme dos cards, legível nos dois. */
+  :where(a, button, input, select, textarea, summary, [tabindex]):focus-visible {
+    outline: 2px solid var(--gold-color);
+    outline-offset: 2px;
+    border-radius: 4px;
   }
 }
 

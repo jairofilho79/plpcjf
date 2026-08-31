@@ -52,7 +52,11 @@
 </script>
 
 {#if normalizedClassifications.length > 0}
-  <div class="w-full max-w-4xl p-4 bg-card-color rounded-lg border-2 flex flex-wrap gap-2 items-center justify-center filter-container">
+  <div
+    class="w-full max-w-4xl p-4 bg-card-color rounded-lg border-2 flex flex-wrap gap-2 items-center justify-center filter-container"
+    role="group"
+    aria-label="Filtrar por arranjo"
+  >
     <span class="container-tag">Arranjo</span>
     <button
       type="button"
@@ -77,6 +81,8 @@
           type="button"
           class="filter-chip"
           class:active={isClassificationActive}
+          aria-pressed={isClassificationActive}
+          aria-label={`Arranjo ${classification}`}
         >
           <span>{classification}</span>
         </button>

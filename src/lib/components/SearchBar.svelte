@@ -45,6 +45,7 @@
         type="button"
         class="clear-button"
         title="Limpar pesquisa"
+        aria-label="Limpar pesquisa"
       >
         <svg class="clear-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <line x1="18" y1="6" x2="6" y2="18"></line>
@@ -61,6 +62,7 @@
       on:keydown={handleKeydown}
       on:blur={() => dispatch('blur')}
       placeholder="Pesquisar louvor..."
+      aria-label="Buscar louvor por nome ou número"
       class="search-input"
       class:has-text={searchQuery.trim()}
       class:has-icon={!searchQuery.trim()}
@@ -134,7 +136,9 @@
     color: var(--text-dark) !important;
     background-color: transparent;
     border: none;
-    outline: none !important;
+    /* outline fica a cargo de :focus:not(:focus-visible) abaixo e do anel
+       dourado :focus-visible global em app.css — sem !important aqui para
+       não sobrepor o anel de teclado. */
     border-radius: 0.5rem; /* padronizado com wrapper */
     transition: padding-left 0.3s cubic-bezier(0.4, 0, 0.2, 1);
   }
@@ -158,16 +162,13 @@
     opacity: 0.6;
   }
   
-  .search-input:focus {
-    outline: none !important;
-    box-shadow: none !important;
+  /* Igual à regra global de app.css: some para mouse/toque, mantém o anel
+     dourado (herdado de :focus-visible em app.css) para teclado. */
+  .search-input:focus:not(:focus-visible) {
+    outline: none;
+    box-shadow: none;
   }
-  
-  .search-input:focus-visible {
-    outline: none !important;
-    box-shadow: none !important;
-  }
-  
+
   .search-input.has-text {
     padding-left: 2.75rem;
   }

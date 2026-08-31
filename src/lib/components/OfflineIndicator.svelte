@@ -20,7 +20,16 @@
   $: hasCategoryDownloaded = savedCategories && savedCategories.length > 0;
   $: isLeitorOffline = browser ? localStorage.getItem('IS_LEITOR_OFFLINE') === 'true' : false;
   $: isOfflineReady = hasCategoryDownloaded && isLeitorOffline;
-  
+
+  // Rótulo de estado para leitor de tela — anunciado sempre que o valor muda (aria-live)
+  $: statusLabel = downloading
+    ? `Baixando para uso offline, ${progress}% concluído`
+    : isOfflineReady
+      ? 'App pronta para uso offline'
+      : enabled
+        ? (isOnline ? 'Modo offline ativo, conectado' : 'Modo offline ativo, sem conexão')
+        : '';
+
   let showTooltip = false;
   /**
    * @type {ReturnType<typeof setTimeout> | undefined}
@@ -64,6 +73,8 @@
     on:click={handleClick}
     role="button"
     tabindex="0"
+    aria-live="polite"
+    aria-label={statusLabel}
     on:keydown={(e) => e.key === 'Enter' && handleClick()}
   >
     {#if downloading}
