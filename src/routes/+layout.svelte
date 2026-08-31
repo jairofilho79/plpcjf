@@ -112,14 +112,21 @@
       checkAndFixUrl();
       setTimeout(checkAndFixUrl, 100);
       
-      registerServiceWorker().then(() => {
+      /** @type {(() => void) | null} */
+      let swCleanup = null;
+      /** @type {(() => void) | null} */
+      let swMessageCleanup = null;
+
+      registerServiceWorker().then(({ cleanup }) => {
+        swCleanup = cleanup;
+
         // Setup Service Worker message listener
-        setupServiceWorkerMessageListener();
-        
+        swMessageCleanup = setupServiceWorkerMessageListener();
+
         // Setup BroadcastChannel for cross-tab sync
         setupCacheSync();
       });
-      
+
       // Pré-carregamento inteligente baseado na rota atual
       smartPreloadPdfJs();
 
@@ -129,6 +136,8 @@
         removeLouvoresChecksumTriggers();
         removeStaleChunkListeners();
         cancelStaleRecoveryReset();
+        swCleanup?.();
+        swMessageCleanup?.();
       };
     }
   });

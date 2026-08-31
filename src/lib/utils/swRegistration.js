@@ -5,48 +5,49 @@ let swRegistration = null;
 
 /**
  * Register the service worker
- * @returns {Promise<ServiceWorkerRegistration|null>}
+ * @returns {Promise<{ registration: ServiceWorkerRegistration | null, cleanup: () => void }>}
  */
 export async function registerServiceWorker() {
   if (!('serviceWorker' in navigator)) {
     console.warn('[SW Registration] Service workers not supported');
-    return null;
+    return { registration: null, cleanup: () => {} };
   }
 
   try {
-    // Register the service worker
-    const registration = await navigator.serviceWorker.register('/sw.js', {
-      scope: '/'
-    });
-
+    const registration = await navigator.serviceWorker.register('/sw.js', { scope: '/' });
     swRegistration = registration;
 
-    // Check for updates periodically
-    setInterval(() => {
+    // Verificar atualizações periodicamente (a cada hora)
+    const updateIntervalId = setInterval(() => {
       registration.update();
-    }, 60 * 60 * 1000); // Check every hour
+    }, 60 * 60 * 1000);
 
-    // Handle updates
-    registration.addEventListener('updatefound', () => {
+    const onUpdateFound = () => {
       const newWorker = registration.installing;
-      
-      if (newWorker) {
-        newWorker.addEventListener('statechange', () => {
-          if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
-            // New service worker available
-            console.log('[SW Registration] New service worker available');
-            // Notify user about update
-            dispatchUpdateEvent();
-          }
-        });
-      }
-    });
+      if (!newWorker) return;
+      newWorker.addEventListener('statechange', () => {
+        if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
+          // Novo service worker disponível
+          console.log('[SW Registration] New service worker available');
+          dispatchUpdateEvent();
+        }
+      });
+    };
+
+    registration.addEventListener('updatefound', onUpdateFound);
 
     console.log('[SW Registration] Service worker registered successfully');
-    return registration;
+
+    return {
+      registration,
+      cleanup: () => {
+        clearInterval(updateIntervalId);
+        registration.removeEventListener('updatefound', onUpdateFound);
+      }
+    };
   } catch (error) {
     console.error('[SW Registration] Failed to register service worker:', error);
-    return null;
+    return { registration: null, cleanup: () => {} };
   }
 }
 
@@ -70,29 +71,47 @@ export async function unregisterServiceWorker() {
 }
 
 /**
- * Send a message to the service worker and wait for response
- * @param {object} message - Message to send
+ * Envia mensagem ao Service Worker e aguarda resposta.
+ * Cancela o timeout e fecha as portas nos dois caminhos — o de sucesso
+ * vazava um timer de 5 min e um par de MessagePort por chamada.
+ *
+ * @param {object} message
+ * @param {{ timeoutMs?: number }} [options]
  * @returns {Promise<any>}
  */
-export function sendMessageToSW(message) {
+export function sendMessageToSW(message, options = {}) {
   return new Promise((resolve, reject) => {
     if (!navigator.serviceWorker.controller) {
       reject(new Error('No service worker controller'));
       return;
     }
 
-    const messageChannel = new MessageChannel();
+    const timeoutMs = Number.isFinite(options.timeoutMs) ? options.timeoutMs : 30000;
+    const channel = new MessageChannel();
+    /** @type {ReturnType<typeof setTimeout> | null} */
+    let timeoutId = null;
 
-    messageChannel.port1.onmessage = (event) => {
+    const cleanup = () => {
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+        timeoutId = null;
+      }
+      try { channel.port1.onmessage = null; } catch {}
+      try { channel.port1.close?.(); } catch {}
+      try { channel.port2.close?.(); } catch {}
+    };
+
+    channel.port1.onmessage = (event) => {
+      cleanup();
       resolve(event.data);
     };
 
-    navigator.serviceWorker.controller.postMessage(message, [messageChannel.port2]);
-
-    // Timeout after 5 minutes for long operations
-    setTimeout(() => {
+    timeoutId = setTimeout(() => {
+      cleanup();
       reject(new Error('Service worker message timeout'));
-    }, 5 * 60 * 1000);
+    }, timeoutMs);
+
+    navigator.serviceWorker.controller.postMessage(message, [channel.port2]);
   });
 }
 
