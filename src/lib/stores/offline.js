@@ -940,20 +940,23 @@ async function startZipDownloadWithSpecificParts(categories, pdfUrls, partsByCat
 
         assertPackageResponse(response, part.filename);
 
-        offlineState.update(s => ({ ...s, phase: 'extraindo' }));
-
-        // Extrai as entradas do ZIP uma a uma (streaming via central directory),
-        // em vez de descomprimir o pacote inteiro em memória de uma só vez.
+        // Ainda 'baixando': é em response.blob() que o corpo do pacote é de
+        // fato lido da rede — no wi-fi fraco que esta função existe para
+        // suportar, é a etapa mais lenta. Rotular 'extraindo' antes disso
+        // mostrava a fase errada com o contador de bytes parado no lugar.
         const blob = await response.blob();
 
         // `blob.size` é o tamanho real transferido — mais confiável que o `size`
-        // declarado no manifesto, que só serve para a estimativa inicial.
+        // declarado no manifesto, que só serve para a estimativa inicial. O
+        // download terminou aqui, então os bytes somam já nesta atualização.
         offlineState.update(s => ({
           ...s,
-          phase: 'gravando',
+          phase: 'extraindo',
           bytesDownloaded: s.bytesDownloaded + blob.size
         }));
 
+        // Extrai as entradas do ZIP uma a uma (streaming via central directory),
+        // em vez de descomprimir o pacote inteiro em memória de uma só vez.
         for await (const { name, data } of iterateZipEntriesCd(blob, zipDownloadController.signal)) {
           if (zipDownloadCancelled) {
             throw new Error('DOWNLOAD_CANCELLED');
@@ -985,7 +988,10 @@ async function startZipDownloadWithSpecificParts(categories, pdfUrls, partsByCat
             ...state,
             completed,
             failed: 0,
-            progress
+            progress,
+            // Só passa a 'gravando' na primeira escrita real: até aqui o laço
+            // ainda está lendo o índice central do ZIP e decidindo o que interessa.
+            phase: 'gravando'
           }));
         }
 
@@ -1950,20 +1956,23 @@ async function startZipDownload(categories, pdfUrls, alreadyDownloadedCategories
 
         assertPackageResponse(response, part.filename);
 
-        offlineState.update(s => ({ ...s, phase: 'extraindo' }));
-
-        // Extrai as entradas do ZIP uma a uma (streaming via central directory),
-        // em vez de descomprimir o pacote inteiro em memória de uma só vez.
+        // Ainda 'baixando': é em response.blob() que o corpo do pacote é de
+        // fato lido da rede — no wi-fi fraco que esta função existe para
+        // suportar, é a etapa mais lenta. Rotular 'extraindo' antes disso
+        // mostrava a fase errada com o contador de bytes parado no lugar.
         const blob = await response.blob();
 
         // `blob.size` é o tamanho real transferido — mais confiável que o `size`
-        // declarado no manifesto, que só serve para a estimativa inicial.
+        // declarado no manifesto, que só serve para a estimativa inicial. O
+        // download terminou aqui, então os bytes somam já nesta atualização.
         offlineState.update(s => ({
           ...s,
-          phase: 'gravando',
+          phase: 'extraindo',
           bytesDownloaded: s.bytesDownloaded + blob.size
         }));
 
+        // Extrai as entradas do ZIP uma a uma (streaming via central directory),
+        // em vez de descomprimir o pacote inteiro em memória de uma só vez.
         for await (const { name, data } of iterateZipEntriesCd(blob, zipDownloadController.signal)) {
           if (zipDownloadCancelled) {
             throw new Error('DOWNLOAD_CANCELLED');
@@ -1995,7 +2004,10 @@ async function startZipDownload(categories, pdfUrls, alreadyDownloadedCategories
             ...state,
             completed,
             failed: 0,
-            progress
+            progress,
+            // Só passa a 'gravando' na primeira escrita real: até aqui o laço
+            // ainda está lendo o índice central do ZIP e decidindo o que interessa.
+            phase: 'gravando'
           }));
         }
 

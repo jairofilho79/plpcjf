@@ -1423,7 +1423,7 @@
             </p>
             {#if bytesDownloaded > 0 || bytesTotal}
               <p class="progress-bytes">
-                {formatSize(bytesDownloaded)}{#if bytesTotal} de {formatSize(bytesTotal)}{/if}
+                {formatSize(bytesDownloaded)}{#if bytesTotal} de {formatSize(bytesTotal)}{/if} baixados
               </p>
             {/if}
           {/if}
