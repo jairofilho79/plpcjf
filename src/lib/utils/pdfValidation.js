@@ -8,10 +8,13 @@ import compositeValidator from '$lib/offline/validation/CompositeValidator.js';
 import cacheStorageAdapter from '$lib/offline/storage/CacheStorageAdapter.js';
 import { createUrlUtf8 } from '$lib/utils/urlEncoding.js';
 import { buildPdfCacheIndex } from './pdfCacheIndex.js';
-
-// Cache de validação de PDFs - Fase 2
-const VALIDATION_CACHE_TTL = 24 * 60 * 60 * 1000; // 24 horas
-const VALIDATION_CACHE_PREFIX = 'pdfValidation_';
+import {
+  readValidationEntry,
+  writeValidationEntry,
+  removeValidationEntry,
+  clearValidationCache,
+  migrateLegacyValidationKeys
+} from './validationCacheStore.js';
 
 /**
  * Verifica conectividade efetiva com a rede (não apenas navigator.onLine).
@@ -47,32 +50,31 @@ export async function checkEffectiveConnectivity(options = {}) {
   }
 }
 
+let legacyMigrationDone = false;
+
+/**
+ * Migra as chaves antigas `pdfValidation_<id>` para o registro único, uma vez por sessão.
+ * `localStorage` indisponível (ex.: modo privado do Safari) apenas faz a função retornar
+ * sem migrar — nunca lança.
+ */
+function ensureLegacyMigration() {
+  if (legacyMigrationDone || typeof localStorage === 'undefined') return;
+  legacyMigrationDone = true;
+  const removed = migrateLegacyValidationKeys(localStorage);
+  if (removed > 0) {
+    console.info(`[PDF Validation] ${removed} chaves de cache antigas consolidadas`);
+  }
+}
+
 /**
  * Obtém resultado de validação do cache
  * @param {string} pdfId - PDF ID (base64)
  * @returns {{available: boolean, url: string} | null} - Resultado do cache ou null se não encontrado/expirado
  */
 export function getCachedValidation(pdfId) {
-  if (!pdfId) return null;
-  
-  try {
-    const key = `${VALIDATION_CACHE_PREFIX}${pdfId}`;
-    const cached = localStorage.getItem(key);
-    if (!cached) return null;
-    
-    const { available, timestamp, url } = JSON.parse(cached);
-    const age = Date.now() - timestamp;
-    
-    if (age > VALIDATION_CACHE_TTL) {
-      localStorage.removeItem(key);
-      return null;
-    }
-    
-    return { available, url };
-  } catch (error) {
-    console.warn('[PDF Validation Cache] Error reading cache:', error);
-    return null;
-  }
+  if (!pdfId || typeof localStorage === 'undefined') return null;
+  ensureLegacyMigration();
+  return readValidationEntry(localStorage, pdfId, Date.now());
 }
 
 /**
@@ -81,54 +83,9 @@ export function getCachedValidation(pdfId) {
  * @param {{available: boolean, url: string}} result - Resultado da validação
  */
 export function cacheValidation(pdfId, result) {
-  if (!pdfId || !result) return;
-  
-  try {
-    const key = `${VALIDATION_CACHE_PREFIX}${pdfId}`;
-    localStorage.setItem(key, JSON.stringify({
-      available: result.available,
-      url: result.url,
-      timestamp: Date.now()
-    }));
-  } catch (error) {
-    console.warn('[PDF Validation Cache] Error writing cache:', error);
-    // Se localStorage estiver cheio, tentar limpar entradas antigas
-    if (error.name === 'QuotaExceededError') {
-      clearExpiredValidationCache();
-    }
-  }
-}
-
-/**
- * Limpa cache de validação expirado
- */
-function clearExpiredValidationCache() {
-  try {
-    const now = Date.now();
-    const keysToRemove = [];
-    
-    for (let i = 0; i < localStorage.length; i++) {
-      const key = localStorage.key(i);
-      if (key && key.startsWith(VALIDATION_CACHE_PREFIX)) {
-        try {
-          const cached = localStorage.getItem(key);
-          if (cached) {
-            const { timestamp } = JSON.parse(cached);
-            if (now - timestamp > VALIDATION_CACHE_TTL) {
-              keysToRemove.push(key);
-            }
-          }
-        } catch {
-          // Se não conseguir parsear, remover
-          keysToRemove.push(key);
-        }
-      }
-    }
-    
-    keysToRemove.forEach(key => localStorage.removeItem(key));
-  } catch (error) {
-    console.warn('[PDF Validation Cache] Error clearing expired cache:', error);
-  }
+  if (!pdfId || !result || typeof localStorage === 'undefined') return;
+  ensureLegacyMigration();
+  writeValidationEntry(localStorage, pdfId, result, Date.now());
 }
 
 /**
@@ -136,32 +93,16 @@ function clearExpiredValidationCache() {
  * @param {string} pdfId - PDF ID (base64)
  */
 export function invalidateValidationCache(pdfId) {
-  if (!pdfId) return;
-  
-  try {
-    const key = `${VALIDATION_CACHE_PREFIX}${pdfId}`;
-    localStorage.removeItem(key);
-  } catch (error) {
-    console.warn('[PDF Validation Cache] Error invalidating cache:', error);
-  }
+  if (!pdfId || typeof localStorage === 'undefined') return;
+  removeValidationEntry(localStorage, pdfId);
 }
 
 /**
  * Limpa todo o cache de validação
  */
 export function clearAllValidationCache() {
-  try {
-    const keysToRemove = [];
-    for (let i = 0; i < localStorage.length; i++) {
-      const key = localStorage.key(i);
-      if (key && key.startsWith(VALIDATION_CACHE_PREFIX)) {
-        keysToRemove.push(key);
-      }
-    }
-    keysToRemove.forEach(key => localStorage.removeItem(key));
-  } catch (error) {
-    console.warn('[PDF Validation Cache] Error clearing all cache:', error);
-  }
+  if (typeof localStorage === 'undefined') return;
+  clearValidationCache(localStorage);
 }
 
 /**
