@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import {
   categorySortIndex,
+  compareLouvorNome,
   groupLouvoresByGroupId,
   groupMaterialsByClassificacao,
   pickPreferredMaterial,
@@ -125,5 +126,33 @@ describe('categorySortIndex / pickPreferredMaterial', () => {
     assert.equal(pickPreferredMaterial(materials, 'b').pdfId, 'b');
     assert.equal(pickPreferredMaterial(materials, 'missing').pdfId, 'a');
     assert.equal(pickPreferredMaterial([], 'a'), null);
+  });
+});
+
+describe('memoização de groupLouvoresByGroupId', () => {
+  it('devolve a mesma referência para a mesma lista', () => {
+    const list = [{ pdfId: 'a', nome: 'A', categoria: 'Partitura' }];
+    assert.equal(groupLouvoresByGroupId(list), groupLouvoresByGroupId(list));
+  });
+
+  it('recalcula para uma lista diferente', () => {
+    const a = [{ pdfId: 'a', nome: 'A', categoria: 'Partitura' }];
+    const b = [{ pdfId: 'b', nome: 'B', categoria: 'Partitura' }];
+    assert.notEqual(groupLouvoresByGroupId(a), groupLouvoresByGroupId(b));
+    assert.equal(groupLouvoresByGroupId(b)[0].groupId, 'b');
+  });
+});
+
+describe('compareLouvorNome', () => {
+  it('ordena em pt-BR ignorando acentos na ordenação primária', () => {
+    const nomes = [{ nome: 'Órgão' }, { nome: 'Obra' }, { nome: 'Amor' }];
+    const ordenado = [...nomes].sort(compareLouvorNome).map((x) => x.nome);
+    assert.deepEqual(ordenado, ['Amor', 'Obra', 'Órgão']);
+  });
+
+  it('tolera nome ausente', () => {
+    const nomes = [{ nome: 'Zelo' }, {}, { nome: 'Amor' }];
+    const ordenado = [...nomes].sort(compareLouvorNome).map((x) => x.nome ?? '');
+    assert.deepEqual(ordenado, ['', 'Amor', 'Zelo']);
   });
 });
