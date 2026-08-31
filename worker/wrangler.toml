@@ -1,0 +1,27 @@
+# Worker `louvores-worker-production`, ligado à rota `*plpcg.com/*`.
+#
+# Este Worker roda ANTES do Cloudflare Pages em toda a zona plpcg.com: ele
+# atende /louvores-manifest.json, /assets/**.pdf e POST /api/upload-louvor,
+# e repassa todo o resto (`fetch(request)`) para o Pages.
+#
+# Consequência importante: os handlers equivalentes em src/routes/ e em
+# src/hooks.server.js NUNCA são alcançados em plpcg.com. Qualquer correção
+# nesses caminhos precisa ser feita aqui também — é por isso que a regra de
+# correspondência de chave é importada de src/lib/server/, e não copiada.
+#
+# O código deste Worker só existia na Cloudflare até 2026-08-31; foi
+# recuperado da API e trazido para cá para não se perder de novo.
+
+name = "louvores-worker"
+main = "index.js"
+compatibility_date = "2024-01-01"
+
+[env.production]
+routes = [{ pattern = "*plpcg.com/*", zone_name = "plpcg.com" }]
+
+[[env.production.r2_buckets]]
+binding = "LOUVORES_BUCKET"
+bucket_name = "pls-louvores"
+
+# JWT_SECRET é secret, definido via `wrangler secret put JWT_SECRET --env production`.
+# Enquanto não existir, POST /api/upload-louvor responde 503 (falha fechada).
