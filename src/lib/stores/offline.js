@@ -579,6 +579,43 @@ function getPackageParts(category, manifest) {
 }
 
 /**
+ * `localStorage` quando dá para usar, `null` quando não dá.
+ *
+ * No Firefox com dados do site bloqueados o próprio getter global lança. Como as
+ * chamadas de retomada acontecem no meio do download, um throw aqui derrubaria o
+ * download inteiro com "Erro ao baixar pacotes ZIP." — as funções de
+ * `partProgress.js` toleram `null` e apenas perdem a retomada.
+ *
+ * @returns {Storage | null}
+ */
+function safeStorage() {
+  try {
+    return typeof localStorage === 'undefined' ? null : localStorage;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * O laço percorreu todas as partes que a categoria tem no manifesto?
+ *
+ * Só nesse caso a retomada pode ser apagada. Um "baixar faltantes" que rodou 1
+ * de 17 partes não pode apagar o estado de um download completo interrompido na
+ * parte 12 — apagar ali custaria ao usuário os ~300 MB de novo.
+ *
+ * @param {string | number} category
+ * @param {any} manifest
+ * @param {Array<any>} processedParts
+ * @returns {boolean}
+ */
+function coversEveryPart(category, manifest, processedParts) {
+  const allParts = getPackageParts(category, manifest);
+  if (allParts.length === 0) return true;
+  const seen = new Set(processedParts.map((part) => part?.filename));
+  return allParts.every((part) => seen.has(part?.filename));
+}
+
+/**
  * Identificação da versão do manifesto, usada na impressão digital das partes.
  * Se o manifesto for regerado, a retomada antiga deixa de valer.
  * @param {any} manifest
@@ -730,6 +767,8 @@ async function startZipDownloadWithSpecificParts(categories, pdfUrls, partsByCat
 
   try {
     const cache = await openPdfCache();
+    // Pode ser null (Firefox com dados do site bloqueados); partProgress tolera.
+    const partsStorage = safeStorage();
 
     // Iterar pelas categorias
     for (const category of categories) {
@@ -751,7 +790,7 @@ async function startZipDownloadWithSpecificParts(categories, pdfUrls, partsByCat
       // de pacotes. A impressão digital garante que não estamos emendando
       // partes novas do servidor em partes velhas do dispositivo.
       const partsFingerprint = fingerprintForCategory(category, manifest, requiredParts);
-      const completedParts = readCompletedParts(localStorage, category, partsFingerprint);
+      const completedParts = readCompletedParts(partsStorage, category, partsFingerprint);
       const cachedPaths = completedParts.size > 0 ? await readCachedPdfPaths(cache) : null;
 
       // Baixar apenas as partes necessárias
@@ -862,11 +901,14 @@ async function startZipDownloadWithSpecificParts(categories, pdfUrls, partsByCat
         await removeZipFromCache(fullPackageUrl);
 
         // Parte inteira gravada: se o download cair na próxima, esta não volta.
-        markPartCompleted(localStorage, category, part.filename, partsFingerprint);
+        markPartCompleted(partsStorage, category, part.filename, partsFingerprint);
       }
 
-      // Categoria concluída: o estado de retomada perdeu a razão de existir.
-      clearCompletedParts(localStorage, category);
+      // Categoria concluída — mas só limpa se este laço cobriu todas as partes
+      // que ela tem no manifesto. Ver `coversEveryPart`.
+      if (coversEveryPart(category, manifest, requiredParts)) {
+        clearCompletedParts(partsStorage, category);
+      }
     }
 
     if (zipDownloadCancelled) {
@@ -1695,6 +1737,8 @@ async function startZipDownload(categories, pdfUrls, alreadyDownloadedCategories
 
   try {
     const cache = await openPdfCache();
+    // Pode ser null (Firefox com dados do site bloqueados); partProgress tolera.
+    const partsStorage = safeStorage();
 
     for (const category of categories) {
       if (zipDownloadCancelled) {
@@ -1711,7 +1755,7 @@ async function startZipDownload(categories, pdfUrls, alreadyDownloadedCategories
 
       // Retomada: mesmas regras da versão por partes específicas.
       const partsFingerprint = fingerprintForCategory(category, manifest, packageParts);
-      const completedParts = readCompletedParts(localStorage, category, partsFingerprint);
+      const completedParts = readCompletedParts(partsStorage, category, partsFingerprint);
       const cachedPaths = completedParts.size > 0 ? await readCachedPdfPaths(cache) : null;
 
       // Download each part
@@ -1822,11 +1866,13 @@ async function startZipDownload(categories, pdfUrls, alreadyDownloadedCategories
         await removeZipFromCache(fullPackageUrl);
 
         // Parte inteira gravada: se o download cair na próxima, esta não volta.
-        markPartCompleted(localStorage, category, part.filename, partsFingerprint);
+        markPartCompleted(partsStorage, category, part.filename, partsFingerprint);
       }
 
-      // Categoria concluída: o estado de retomada perdeu a razão de existir.
-      clearCompletedParts(localStorage, category);
+      // Categoria concluída — aqui o laço é sempre o conjunto completo de partes.
+      if (coversEveryPart(category, manifest, packageParts)) {
+        clearCompletedParts(partsStorage, category);
+      }
     }
 
     if (zipDownloadCancelled) {
@@ -2179,7 +2225,7 @@ async function clearAllCache() {
     localStorage.removeItem(DOWNLOADED_CATEGORIES_KEY);
     localStorage.removeItem(OFFLINE_CATEGORIAS_SALVAS);
     // Sem PDFs no cache, retomar um download interrompido não faz sentido.
-    clearAllCompletedParts(localStorage);
+    clearAllCompletedParts(safeStorage());
     
     // Reset state
     offlineState.set(initialState);

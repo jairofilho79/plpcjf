@@ -98,6 +98,23 @@ describe('impressão digital das partes', () => {
     assert.notEqual(a, b);
   });
 
+  it('muda quando o conteúdo declarado da parte muda', () => {
+    const a = computePartsFingerprint(
+      [{ filename: 'Cifra-1.zip', size: 100, pdfs: ['aaa', 'bbb'] }],
+      '1.0.0'
+    );
+    const b = computePartsFingerprint(
+      [{ filename: 'Cifra-1.zip', size: 100, pdfs: ['aaa', 'ccc'] }],
+      '1.0.0'
+    );
+    const c = computePartsFingerprint(
+      [{ filename: 'Cifra-1.zip', size: 100, pdfs: ['aaa'] }],
+      '1.0.0'
+    );
+    assert.notEqual(a, b);
+    assert.notEqual(a, c);
+  });
+
   it('muda quando o manifesto muda', () => {
     assert.notEqual(
       computePartsFingerprint(partsV1, '1.0.0'),
@@ -249,6 +266,72 @@ describe('fetchWithRetry', () => {
       (error) => error.name === 'AbortError'
     );
     assert.equal(calls, 0);
+  });
+
+  it('trata prazo estourado como retentável', async () => {
+    let calls = 0;
+    // Conexão pendurada: só termina quando alguém aborta.
+    const hangingFetch = (url, init) =>
+      new Promise((_, reject) => {
+        calls++;
+        init.signal.addEventListener('abort', () => {
+          const error = new Error('aborted');
+          error.name = 'AbortError';
+          reject(error);
+        }, { once: true });
+      });
+
+    await assert.rejects(
+      () => fetchWithRetry('/x.zip', {}, {
+        fetchImpl: hangingFetch,
+        attempts: 3,
+        baseDelayMs: 1,
+        timeoutMs: 15
+      }),
+      /Tempo esgotado/
+    );
+    assert.equal(calls, 3);
+  });
+
+  it('cancelamento durante um fetch pendurado não vira retentativa', async () => {
+    const controller = new AbortController();
+    let calls = 0;
+    const hangingFetch = (url, init) =>
+      new Promise((_, reject) => {
+        calls++;
+        setTimeout(() => controller.abort(), 5);
+        init.signal.addEventListener('abort', () => {
+          const error = new Error('aborted');
+          error.name = 'AbortError';
+          reject(error);
+        }, { once: true });
+      });
+
+    await assert.rejects(
+      () => fetchWithRetry('/x.zip', {}, {
+        fetchImpl: hangingFetch,
+        attempts: 3,
+        baseDelayMs: 1,
+        timeoutMs: 5000,
+        signal: controller.signal
+      }),
+      (error) => error.name === 'AbortError'
+    );
+    assert.equal(calls, 1);
+  });
+
+  it('não deixa o prazo matar a leitura do corpo depois dos cabeçalhos', async () => {
+    /** @type {AbortSignal | null} */
+    let seen = null;
+    const fakeFetch = async (url, init) => {
+      seen = init.signal;
+      return { ok: true, status: 200 };
+    };
+    const res = await fetchWithRetry('/x.zip', {}, { fetchImpl: fakeFetch, timeoutMs: 10 });
+    assert.equal(res.ok, true);
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    // O timer foi desarmado ao chegar a resposta: o corpo pode demorar à vontade.
+    assert.equal(seen.aborted, false);
   });
 
   it('respeita o teto de tempo total', async () => {
