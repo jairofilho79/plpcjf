@@ -2,7 +2,7 @@
   import { onMount, onDestroy } from 'svelte';
   import { browser } from '$app/environment';
   import { page } from '$app/stores';
-  import { louvores, loadLouvores, louvoresLoaded, forceRefreshLouvoresFromNetwork } from '$lib/stores/louvores';
+  import { louvores, loadLouvores, louvoresLoaded } from '$lib/stores/louvores';
   import { classificationFilters } from '$lib/stores/classificationFilters';
   import { filters, CATEGORY_OPTIONS } from '$lib/stores/filters';
   import { bibliotecaSort } from '$lib/stores/bibliotecaSort';
@@ -16,29 +16,9 @@
   import PdfViewerSelector from '$lib/components/PdfViewerSelector.svelte';
   import LouvorCard from '$lib/components/LouvorCard.svelte';
   import GestureButton from '$lib/components/GestureButton.svelte';
-  import { ChevronLeft, ChevronRight, RefreshCw } from 'lucide-svelte';
+  import { ChevronLeft, ChevronRight } from 'lucide-svelte';
   import { groupLouvoresByGroupId } from '$lib/utils/groupLouvores.js';
 
-  /** @type {boolean} */
-  let isOnline = browser ? navigator.onLine : true;
-  let catalogRefreshing = false;
-
-  function updateOnlineStatus() {
-    if (browser) {
-      isOnline = navigator.onLine;
-    }
-  }
-
-  async function handleRefreshBancoLouvores() {
-    if (catalogRefreshing) return;
-    catalogRefreshing = true;
-    try {
-      await forceRefreshLouvoresFromNetwork();
-    } finally {
-      catalogRefreshing = false;
-    }
-  }
-  
   // Normalize classification by removing content in parentheses
   /**
    * @param {string} classification
@@ -616,9 +596,6 @@
     
     if (browser) {
       document.addEventListener('click', handleClickOutside);
-      updateOnlineStatus();
-      window.addEventListener('online', updateOnlineStatus);
-      window.addEventListener('offline', updateOnlineStatus);
 
       // Inicializar valores da URL uma única vez
       if ($page && $page.url) {
@@ -728,8 +705,6 @@
     if (browser) {
       if (initTimeout) clearTimeout(initTimeout);
       document.removeEventListener('click', handleClickOutside);
-      window.removeEventListener('online', updateOnlineStatus);
-      window.removeEventListener('offline', updateOnlineStatus);
     }
   });
   
@@ -800,38 +775,6 @@
 </svelte:head>
 
 <div class="max-w-6xl mx-auto px-4">
-  <section
-    class="louvores-catalog-banner"
-    role="region"
-    aria-label="Atualização da lista de louvores a partir do servidor"
-  >
-    <div class="louvores-catalog-banner__inner">
-      <div class="louvores-catalog-banner__copy">
-        <h2 class="louvores-catalog-banner__title font-garamond">Atualizar a lista de louvores</h2>
-        <p class="louvores-catalog-banner__text">
-          Obtém do servidor a versão mais recente do catálogo (louvores, categorias e referências aos PDFs). As
-          alterações passam a valer aqui na biblioteca e na busca da página inicial. Use quando houver louvores
-          novos ou correções publicadas. É necessário estar online; em conexões lentas o processo pode levar
-          alguns segundos ou corromper, necessitando tentar novamente.
-        </p>
-      </div>
-      <button
-        type="button"
-        class="louvores-catalog-banner__action"
-        disabled={!isOnline || catalogRefreshing}
-        aria-busy={catalogRefreshing}
-        on:click={handleRefreshBancoLouvores}
-      >
-        {#if catalogRefreshing}
-          <RefreshCw class="louvores-catalog-banner__action-icon" aria-hidden="true" />
-          <span>Atualizando…</span>
-        {:else}
-          <span>Atualizar agora</span>
-        {/if}
-      </button>
-    </div>
-  </section>
-
   <div class="flex flex-col items-center mt-8 space-y-4">
     <CategoryFilters />
     
@@ -1311,109 +1254,5 @@
   }
 
   /* Faixa de atualização do manifesto — alinhada ao tema (borgonha, dourado, creme no botão) */
-  .louvores-catalog-banner {
-    margin: 1.5rem auto 0;
-    width: 100%;
-    max-width: 56rem;
-    border-radius: 0.625rem;
-    border: 2px solid var(--gold-color);
-    background: #632a2a;
-    box-shadow: var(--shadow-md);
-    padding: 1rem 1.15rem;
-  }
-
-  @media (min-width: 640px) {
-    .louvores-catalog-banner {
-      padding: 1.1rem 1.35rem;
-    }
-  }
-
-  .louvores-catalog-banner__inner {
-    display: flex;
-    flex-direction: column;
-    align-items: stretch;
-    gap: 1rem;
-  }
-
-  @media (min-width: 640px) {
-    .louvores-catalog-banner__inner {
-      flex-direction: row;
-      align-items: center;
-      justify-content: space-between;
-      gap: 1.25rem;
-    }
-  }
-
-  .louvores-catalog-banner__copy {
-    min-width: 0;
-  }
-
-  .louvores-catalog-banner__title {
-    margin: 0 0 0.4rem;
-    font-weight: 700;
-    font-size: 1.125rem;
-    letter-spacing: 0.02em;
-    line-height: 1.25;
-    color: #ffffff;
-    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
-  }
-
-  @media (min-width: 640px) {
-    .louvores-catalog-banner__title {
-      font-size: 1.2rem;
-    }
-  }
-
-  .louvores-catalog-banner__text {
-    margin: 0;
-    font-size: 0.875rem;
-    line-height: 1.5;
-    color: rgba(255, 255, 255, 0.94);
-  }
-
-  .louvores-catalog-banner__action {
-    flex-shrink: 0;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    gap: 0.45rem;
-    min-height: 2.75rem;
-    padding: 0.5rem 1.1rem;
-    border-radius: 0.5rem;
-    border: 2px solid var(--gold-color);
-    background: var(--card-color);
-    color: var(--text-dark);
-    font-weight: 600;
-    font-size: 0.875rem;
-    cursor: pointer;
-    transition: background 0.2s ease, box-shadow 0.2s ease, transform 0.15s ease;
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
-  }
-
-  .louvores-catalog-banner__action:hover:not(:disabled) {
-    background: #fffef6;
-    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15);
-  }
-
-  .louvores-catalog-banner__action:active:not(:disabled) {
-    transform: scale(0.98);
-  }
-
-  .louvores-catalog-banner__action:disabled {
-    cursor: not-allowed;
-    opacity: 0.55;
-  }
-
-  .louvores-catalog-banner__action-icon {
-    width: 1rem;
-    height: 1rem;
-    animation: louvores-banner-spin 0.85s linear infinite;
-  }
-
-  @keyframes louvores-banner-spin {
-    to {
-      transform: rotate(360deg);
-    }
-  }
 </style>
 
