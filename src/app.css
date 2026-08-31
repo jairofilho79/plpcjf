@@ -52,11 +52,16 @@
     box-shadow: none;
   }
 
-  /* Indicador de foco por teclado — dourado sobre o marrom do fundo e
-     sobre o creme dos cards, legível nos dois. */
+  /* Indicador de foco por teclado — anel de duas cores porque nenhuma cor
+     única cobre os dois fundos em que elementos focáveis aparecem: o anel
+     escuro (mesma cor do fundo do app) é quem garante contraste sobre o
+     creme dos cards (11.56:1), e o halo dourado é quem garante contraste
+     sobre o marrom do app (5.84:1) — cada um carrega o sinal na superfície
+     onde o outro falha. Ver relatório da Task 8 para os 4 números medidos. */
   :where(a, button, input, select, textarea, summary, [tabindex]):focus-visible {
-    outline: 2px solid var(--gold-color);
+    outline: 2px solid var(--background-color);
     outline-offset: 2px;
+    box-shadow: 0 0 0 4px var(--gold-color);
     border-radius: 4px;
   }
 }
