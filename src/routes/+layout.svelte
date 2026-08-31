@@ -14,11 +14,12 @@
     installStaleChunkRecoveryListeners,
     scheduleStaleRecoveryCounterReset
   } from '$lib/utils/staleChunkRecovery';
-  import { 
-    getPdfJsPriority, 
-    shouldPreload, 
-    preloadPdfJs, 
-    requestIdleCallback 
+  import {
+    getPdfJsPriority,
+    shouldPreload,
+    preloadPdfJs,
+    warmPdfJsCache,
+    requestIdleCallback
   } from '$lib/utils/pdfjsLoader';
   
   // Handle overflow for /leitor route
@@ -69,9 +70,11 @@
     } else if (priority === 'medium') {
       // Carregar após recursos críticos (requestIdleCallback)
       requestIdleCallback(() => {
-        preloadPdfJs({ priority: 'medium', loadViewer: false }).catch(err => {
-          console.warn('[Layout] Erro ao pré-carregar PDF.js:', err);
-        });
+        preloadPdfJs({ priority: 'medium', loadViewer: false })
+          .then(() => warmPdfJsCache())
+          .catch(err => {
+            console.warn('[Layout] Erro ao pré-carregar PDF.js:', err);
+          });
       }, { timeout: 2000 });
     }
     // 'low' e 'none' não carregam automaticamente

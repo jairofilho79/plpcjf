@@ -249,6 +249,48 @@ export async function loadPdfJsComplete(options = {}) {
 }
 
 /**
+ * Garante que core, worker e viewer do PDF.js entrem no cache do Service Worker
+ * mesmo que o usuário nunca abra /leitor com rede.
+ *
+ * As URLs são resolvidas pelo Vite (/_app/immutable/...), então não podem ser
+ * pré-cacheadas por uma lista fixa no sw.js — daí o aquecimento no cliente.
+ *
+ * Cada fetch() aqui é interceptado pelo listener 'fetch' do Service Worker
+ * (rota 'hashed-asset' de sw-router.js, casa com /_app/immutable/*): é o
+ * handler handleHashedAsset(), não este fetch, quem decide a estratégia de
+ * rede e grava a resposta no APP_CACHE. Por isso o `cache: 'force-cache'`
+ * abaixo não compete com a estratégia network-first do handler — ele nunca
+ * chega a valer, porque handleHashedAsset() refaz o fetch internamente com
+ * sua própria opção de cache antes de responder. O objetivo real desta
+ * chamada é apenas disparar a requisição para que o Service Worker a veja
+ * passar e a cacheie; o resultado da resposta em si não é usado aqui.
+ *
+ * Silencioso por design: falhar aqui nunca deve quebrar navegação.
+ * @returns {Promise<void>}
+ */
+export async function warmPdfJsCache() {
+  if (typeof window === 'undefined') return;
+
+  try {
+    const [coreUrlMod, workerUrlMod, viewerUrlMod] = await Promise.all([
+      import('pdfjs-dist/build/pdf.mjs?url'),
+      import('pdfjs-dist/build/pdf.worker.min.mjs?url'),
+      import('pdfjs-dist/web/pdf_viewer.mjs?url')
+    ]);
+
+    const urls = [coreUrlMod.default, workerUrlMod.default, viewerUrlMod.default];
+
+    await Promise.allSettled(
+      urls.filter(Boolean).map((url) => fetch(url, { cache: 'force-cache' }))
+    );
+
+    console.info('[PDF.js Loader] Cache aquecido para uso offline');
+  } catch (error) {
+    console.warn('[PDF.js Loader] Falha ao aquecer cache do PDF.js:', error);
+  }
+}
+
+/**
  * Polyfill para requestIdleCallback (exportado para uso externo)
  */
 export { requestIdleCallback };

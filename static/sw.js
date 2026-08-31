@@ -59,11 +59,12 @@ if (IS_DEV) {
 const APP_SHELL = self.SW_APP_SHELL_PATHS;
 const APP_SHELL_INSTALL = APP_SHELL.filter((path) => path !== '/louvores-manifest.json');
 
-// PDF.js modules to cache for faster loading
+// Só a folha de estilo do viewer é servida de /pdfjs/ (leitor/+page.svelte).
+// O core, o worker e o viewer do PDF.js são importados pelo Vite e chegam como
+// /_app/immutable/*, aquecidos pelo cliente em warmPdfJsCache() —
+// ver src/lib/utils/pdfjsLoader.js. Pré-cachear os módulos antigos de /pdfjs/
+// aqui baixava 2,26 MB por instalação que nunca eram lidos pelo app.
 const PDFJS_MODULES = [
-  '/pdfjs/build/pdf.mjs',
-  '/pdfjs/web/pdf_viewer.mjs',
-  '/pdfjs/build/pdf.worker.min.mjs',
   '/pdfjs/web/pdf_viewer.css'
 ];
 
