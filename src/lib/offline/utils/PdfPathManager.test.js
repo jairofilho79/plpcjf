@@ -1,111 +1,115 @@
 /**
- * PDF Path Manager Tests
- * Tests for PdfPathManager normalization preserving case and accents
+ * Normalização de caminho que preserva caixa e acentos.
+ * Run: node --test src/lib/offline/utils/PdfPathManager.test.js
  */
 
+import { describe, it } from 'node:test';
+import assert from 'node:assert/strict';
 import PdfPathManager from './PdfPathManager.js';
 
-describe('PdfPathManager', () => {
-  describe('normalizeForStorage', () => {
-    test('preserves case and accents', () => {
-      const path = 'assets/Cifra nível I/arquivo.pdf';
-      const normalized = PdfPathManager.normalizeForStorage(path);
-      expect(normalized).toBe('assets/Cifra nível I/arquivo.pdf');
-    });
-
-    test('preserves uppercase in category names', () => {
-      const path = 'assets/ColAdultos/001.pdf';
-      const normalized = PdfPathManager.normalizeForStorage(path);
-      expect(normalized).toBe('assets/ColAdultos/001.pdf');
-    });
-
-    test('adds assets/ prefix if missing', () => {
-      const path = 'Categoria/arquivo.pdf';
-      const normalized = PdfPathManager.normalizeForStorage(path);
-      expect(normalized).toBe('assets/Categoria/arquivo.pdf');
-    });
-
-    test('handles paths already with assets/ prefix', () => {
-      const path = 'assets/Categoria/arquivo.pdf';
-      const normalized = PdfPathManager.normalizeForStorage(path);
-      expect(normalized).toBe('assets/Categoria/arquivo.pdf');
-    });
-
-    test('removes leading slashes', () => {
-      const path = '/assets/Categoria/arquivo.pdf';
-      const normalized = PdfPathManager.normalizeForStorage(path);
-      expect(normalized).toBe('assets/Categoria/arquivo.pdf');
-    });
-
-    test('removes protocol and domain', () => {
-      const path = 'https://example.com/assets/Categoria/arquivo.pdf';
-      const normalized = PdfPathManager.normalizeForStorage(path);
-      expect(normalized).toBe('assets/Categoria/arquivo.pdf');
-    });
-
-    test('normalizes Windows path separators', () => {
-      const path = 'assets\\Categoria\\arquivo.pdf';
-      const normalized = PdfPathManager.normalizeForStorage(path);
-      expect(normalized).toBe('assets/Categoria/arquivo.pdf');
-    });
-
-    test('handles empty string', () => {
-      const normalized = PdfPathManager.normalizeForStorage('');
-      expect(normalized).toBe('');
-    });
-
-    test('handles null/undefined', () => {
-      expect(PdfPathManager.normalizeForStorage(null)).toBe('');
-      expect(PdfPathManager.normalizeForStorage(undefined)).toBe('');
-    });
+describe('PdfPathManager.normalizeForStorage', () => {
+  it('preserva caixa e acentos', () => {
+    assert.equal(
+      PdfPathManager.normalizeForStorage('assets/Cifra nível I/arquivo.pdf'),
+      'assets/Cifra nível I/arquivo.pdf'
+    );
   });
 
-  describe('createRequestUrl', () => {
-    test('creates full URL with origin', () => {
-      const path = 'assets/Categoria/arquivo.pdf';
-      const url = PdfPathManager.createRequestUrl(path, 'https://example.com');
-      expect(url).toContain('https://example.com');
-      expect(url).toContain('assets/Categoria/arquivo.pdf');
-    });
-
-    test('normalizes path before creating URL', () => {
-      const path = 'Categoria/arquivo.pdf';
-      const url = PdfPathManager.createRequestUrl(path, 'https://example.com');
-      expect(url).toContain('assets/Categoria/arquivo.pdf');
-    });
-
-    test('handles empty path', () => {
-      const url = PdfPathManager.createRequestUrl('');
-      expect(url).toBe('');
-    });
+  it('preserva maiúsculas em nome de categoria', () => {
+    assert.equal(
+      PdfPathManager.normalizeForStorage('assets/ColAdultos/001.pdf'),
+      'assets/ColAdultos/001.pdf'
+    );
   });
 
-  describe('createSearchVariations', () => {
-    test('generates multiple URL variations', () => {
-      const path = 'assets/Categoria/arquivo.pdf';
-      const variations = PdfPathManager.createSearchVariations(path, 'https://example.com');
-      expect(variations.length).toBeGreaterThan(0);
-      expect(variations.every(v => typeof v === 'string')).toBe(true);
-    });
+  it('acrescenta o prefixo assets/ quando falta', () => {
+    assert.equal(
+      PdfPathManager.normalizeForStorage('Categoria/arquivo.pdf'),
+      'assets/Categoria/arquivo.pdf'
+    );
+  });
 
-    test('variations include normalized path', () => {
-      const path = 'Categoria/arquivo.pdf';
-      const variations = PdfPathManager.createSearchVariations(path, 'https://example.com');
-      const hasNormalized = variations.some(v => v.includes('assets/Categoria/arquivo.pdf'));
-      expect(hasNormalized).toBe(true);
-    });
+  it('não duplica o prefixo assets/ quando já existe', () => {
+    assert.equal(
+      PdfPathManager.normalizeForStorage('assets/Categoria/arquivo.pdf'),
+      'assets/Categoria/arquivo.pdf'
+    );
+  });
 
-    test('removes duplicates', () => {
-      const path = 'assets/Categoria/arquivo.pdf';
-      const variations = PdfPathManager.createSearchVariations(path, 'https://example.com');
-      const unique = new Set(variations);
-      expect(variations.length).toBe(unique.size);
-    });
+  it('remove barras iniciais', () => {
+    assert.equal(
+      PdfPathManager.normalizeForStorage('/assets/Categoria/arquivo.pdf'),
+      'assets/Categoria/arquivo.pdf'
+    );
+  });
 
-    test('handles empty path', () => {
-      const variations = PdfPathManager.createSearchVariations('');
-      expect(variations).toEqual([]);
-    });
+  it('remove protocolo e domínio', () => {
+    assert.equal(
+      PdfPathManager.normalizeForStorage('https://example.com/assets/Categoria/arquivo.pdf'),
+      'assets/Categoria/arquivo.pdf'
+    );
+  });
+
+  it('converte separador do Windows para barra', () => {
+    assert.equal(
+      PdfPathManager.normalizeForStorage('assets\\Categoria\\arquivo.pdf'),
+      'assets/Categoria/arquivo.pdf'
+    );
+  });
+
+  it('devolve string vazia para string vazia', () => {
+    assert.equal(PdfPathManager.normalizeForStorage(''), '');
+  });
+
+  it('devolve string vazia para null e undefined', () => {
+    assert.equal(PdfPathManager.normalizeForStorage(null), '');
+    assert.equal(PdfPathManager.normalizeForStorage(undefined), '');
   });
 });
 
+describe('PdfPathManager.createRequestUrl', () => {
+  it('monta a URL completa a partir da origem', () => {
+    const url = PdfPathManager.createRequestUrl('assets/Categoria/arquivo.pdf', 'https://example.com');
+    assert.equal(url, 'https://example.com/assets/Categoria/arquivo.pdf');
+  });
+
+  it('normaliza o caminho antes de montar a URL', () => {
+    const url = PdfPathManager.createRequestUrl('Categoria/arquivo.pdf', 'https://example.com');
+    assert.equal(url, 'https://example.com/assets/Categoria/arquivo.pdf');
+  });
+
+  it('devolve string vazia para caminho vazio', () => {
+    assert.equal(PdfPathManager.createRequestUrl(''), '');
+  });
+});
+
+describe('PdfPathManager.createSearchVariations', () => {
+  it('gera pelo menos uma variação, todas string', () => {
+    const variacoes = PdfPathManager.createSearchVariations(
+      'assets/Categoria/arquivo.pdf',
+      'https://example.com'
+    );
+    assert.ok(variacoes.length > 0);
+    assert.ok(variacoes.every((v) => typeof v === 'string'));
+  });
+
+  it('as variações incluem o caminho normalizado', () => {
+    const variacoes = PdfPathManager.createSearchVariations(
+      'Categoria/arquivo.pdf',
+      'https://example.com'
+    );
+    assert.ok(variacoes.some((v) => v.includes('assets/Categoria/arquivo.pdf')));
+  });
+
+  it('não repete variações', () => {
+    const variacoes = PdfPathManager.createSearchVariations(
+      'assets/Categoria/arquivo.pdf',
+      'https://example.com'
+    );
+    assert.equal(variacoes.length, new Set(variacoes).size);
+  });
+
+  it('devolve lista vazia para caminho vazio', () => {
+    assert.deepEqual(PdfPathManager.createSearchVariations(''), []);
+  });
+});

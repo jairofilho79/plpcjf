@@ -1,4 +1,10 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+/**
+ * Checksum do louvores-manifest.json: janela de 24 h e backoff.
+ * Run: node --test src/lib/utils/louvoresManifestChecksum.test.js
+ */
+
+import { describe, it, beforeEach, afterEach } from 'node:test';
+import assert from 'node:assert/strict';
 import {
   MANIFEST_SYNC_RETRY_DELAYS_MIN,
   parseExpectedChecksumFromResponseBody,
@@ -11,79 +17,73 @@ import {
   writeManifestBodySha256
 } from './louvoresManifestChecksum.js';
 
-function createLocalStorageMock() {
-  const store = new Map();
+/** Storage de memória com a mesma interface de window.localStorage. */
+function criarStorage() {
+  const mapa = new Map();
   return {
-    getItem: (key) => (store.has(key) ? store.get(key) : null),
-    setItem: (key, value) => {
-      store.set(key, String(value));
-    },
-    removeItem: (key) => {
-      store.delete(key);
-    },
-    clear: () => {
-      store.clear();
-    }
+    get length() { return mapa.size; },
+    key(i) { return [...mapa.keys()][i] ?? null; },
+    getItem(k) { return mapa.has(k) ? mapa.get(k) : null; },
+    setItem(k, v) { mapa.set(k, String(v)); },
+    removeItem(k) { mapa.delete(k); }
   };
 }
 
 describe('louvoresManifestChecksum', () => {
   beforeEach(() => {
-    vi.stubGlobal('localStorage', createLocalStorageMock());
+    // O módulo lê o `localStorage` global, não um parâmetro injetado.
+    globalThis.localStorage = criarStorage();
   });
 
   afterEach(() => {
-    vi.unstubAllGlobals();
-    vi.useRealTimers();
+    delete globalThis.localStorage;
   });
 
-  it('sha256HexUtf8 matches known empty string digest', async () => {
-    const h = await sha256HexUtf8('');
-    expect(h).toBe('e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855');
+  it('sha256HexUtf8 bate com o digest conhecido da string vazia', async () => {
+    assert.equal(
+      await sha256HexUtf8(''),
+      'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855'
+    );
   });
 
-  it('parseExpectedChecksumFromResponseBody accepts 64 hex and lowercases', () => {
-    const u = 'ABCDEF0123456789'.repeat(4);
-    expect(parseExpectedChecksumFromResponseBody(`  ${u}  `)).toBe(u.toLowerCase());
-    expect(parseExpectedChecksumFromResponseBody('not-hex')).toBe(null);
-    expect(parseExpectedChecksumFromResponseBody('')).toBe(null);
+  it('parseExpectedChecksumFromResponseBody aceita 64 hex e devolve minúsculo', () => {
+    const maiusculo = 'ABCDEF0123456789'.repeat(4);
+    assert.equal(parseExpectedChecksumFromResponseBody(`  ${maiusculo}  `), maiusculo.toLowerCase());
+    assert.equal(parseExpectedChecksumFromResponseBody('not-hex'), null);
+    assert.equal(parseExpectedChecksumFromResponseBody(''), null);
   });
 
-  it('shouldFetchExpectedChecksum requires baseline, online, and 24h window', async () => {
-    const body = '[{"pdfId":"x"}]';
-    const hash = await sha256HexUtf8(body);
-    writeManifestBodySha256(hash);
-    const now = 1_000_000_000_000;
+  it('shouldFetchExpectedChecksum exige baseline, estar online e a janela de 24 h', async () => {
+    const corpo = '[{"pdfId":"x"}]';
+    writeManifestBodySha256(await sha256HexUtf8(corpo));
+    const agora = 1_000_000_000_000;
 
-    expect(shouldFetchExpectedChecksum(now, false)).toBe(false);
-    expect(shouldFetchExpectedChecksum(now, true)).toBe(true);
+    assert.equal(shouldFetchExpectedChecksum(agora, false), false);
+    assert.equal(shouldFetchExpectedChecksum(agora, true), true);
 
-    writeChecksumLastOkAt(now);
-    expect(shouldFetchExpectedChecksum(now + 1, true)).toBe(false);
-    expect(shouldFetchExpectedChecksum(now + 24 * 60 * 60 * 1000, true)).toBe(true);
+    writeChecksumLastOkAt(agora);
+    assert.equal(shouldFetchExpectedChecksum(agora + 1, true), false);
+    assert.equal(shouldFetchExpectedChecksum(agora + 24 * 60 * 60 * 1000, true), true);
   });
 
-  it('recordManifestSyncFailure applies 1–2–4–8–16 min then 24h cooldown', () => {
-    vi.useFakeTimers();
+  it('recordManifestSyncFailure aplica 1–2–4–8–16 min e depois 24 h de espera', () => {
     const t0 = 10_000_000_000_000;
-    vi.setSystemTime(t0);
     resetManifestSyncPenalty();
 
     let t = t0;
     for (let i = 0; i < 4; i++) {
       recordManifestSyncFailure(t);
       const p = readManifestSyncPenalty();
-      expect(p.failStreak).toBe(i + 1);
-      expect(p.cooldownUntil).toBe(0);
-      expect(p.nextRetryAt).toBe(t + MANIFEST_SYNC_RETRY_DELAYS_MIN[i] * 60_000);
+      assert.equal(p.failStreak, i + 1);
+      assert.equal(p.cooldownUntil, 0);
+      assert.equal(p.nextRetryAt, t + MANIFEST_SYNC_RETRY_DELAYS_MIN[i] * 60_000);
       t = p.nextRetryAt;
-      vi.setSystemTime(t);
     }
 
     recordManifestSyncFailure(t);
     const final = readManifestSyncPenalty();
-    expect(final.failStreak).toBe(0);
-    expect(final.nextRetryAt).toBe(0);
-    expect(final.cooldownUntil).toBe(t + 24 * 60 * 60 * 1000);
+    assert.equal(final.failStreak, 0);
+    assert.equal(final.nextRetryAt, 0);
+    assert.equal(final.cooldownUntil, t + 24 * 60 * 60 * 1000);
   });
 });

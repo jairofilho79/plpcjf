@@ -5,8 +5,10 @@
  * between saving and retrieving PDFs from cache
  */
 
-import { decodeUrlUtf8Multiple } from '$lib/utils/urlEncoding.js';
-import { createUrlUtf8 } from '$lib/utils/urlEncoding.js';
+// Caminho relativo, não `$lib`: este módulo precisa carregar sob `node --test`,
+// e o alias `$lib` só existe dentro do Vite. De src/lib/offline/utils/ para
+// src/lib/utils/ são dois níveis acima.
+import { decodeUrlUtf8Multiple, createUrlUtf8 } from '../../utils/urlEncoding.js';
 
 /**
  * PDF Path Manager
