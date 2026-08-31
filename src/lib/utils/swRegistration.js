@@ -3,8 +3,35 @@
 
 import { dev } from '$app/environment';
 import { PDF_CACHE_NAME } from '$lib/offline/sw/swCaches.js';
+import { resolveDebugTargetWorker, buildSetDebugMessage } from './swDebugMessage.js';
 
 let swRegistration = null;
+
+/**
+ * Lê a flag de debug (mesma do leitor: `plpcjf_perf_debug`). Nunca lança.
+ * @returns {boolean}
+ */
+function readDebugFlag() {
+  try {
+    return localStorage.getItem('plpcjf_perf_debug') === '1';
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Manda SET_DEBUG a um worker específico. Best-effort: falha em silêncio se
+ * o worker não existir mais ou não aceitar `postMessage`.
+ * @param {ServiceWorker | null | undefined} worker
+ */
+function sendDebugFlag(worker) {
+  if (!worker) return;
+  try {
+    worker.postMessage(buildSetDebugMessage(readDebugFlag()));
+  } catch {
+    // worker terminado ou mensagem rejeitada: segue sem debug.
+  }
+}
 
 /**
  * Register the service worker
@@ -29,17 +56,20 @@ export async function registerServiceWorker() {
     swRegistration = registration;
 
     // Propaga o gate de debug ao SW (mesma flag do leitor: plpcjf_perf_debug).
-    try {
-      const debugOn = localStorage.getItem('plpcjf_perf_debug') === '1';
-      navigator.serviceWorker.ready.then(() => {
-        navigator.serviceWorker.controller?.postMessage({
-          type: 'SET_DEBUG',
-          data: { enabled: debugOn }
-        });
-      });
-    } catch {
-      // localStorage indisponível: segue sem debug.
-    }
+    // `controller` sozinho não cobre os três casos possíveis neste ponto:
+    // 1) primeira visita: `controller` só é setado depois de `clients.claim()`,
+    //    que roda depois daqui — manda direto para o worker endereçável agora
+    //    (installing/waiting/active), sem esperar `controller` aparecer;
+    // 2) deploy com a aba já aberta: o worker novo só assume o controle bem
+    //    depois deste registro — `controllerchange` reenvia a flag para quem
+    //    estiver no controle a cada troca de worker, presente ou futura;
+    // 3) visita repetida sem update em voo: já cai no caso 1 (active).
+    sendDebugFlag(resolveDebugTargetWorker(registration));
+
+    const onControllerChange = () => {
+      sendDebugFlag(navigator.serviceWorker.controller);
+    };
+    navigator.serviceWorker.addEventListener('controllerchange', onControllerChange);
 
     // Verificar atualizações periodicamente (a cada hora)
     const updateIntervalId = setInterval(() => {
@@ -67,6 +97,7 @@ export async function registerServiceWorker() {
       cleanup: () => {
         clearInterval(updateIntervalId);
         registration.removeEventListener('updatefound', onUpdateFound);
+        navigator.serviceWorker.removeEventListener('controllerchange', onControllerChange);
       }
     };
   } catch (error) {
