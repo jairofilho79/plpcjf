@@ -17,26 +17,18 @@ compatibility_flags = ["nodejs_compat"]
 binding = "LOUVORES_BUCKET"
 bucket_name = "pls-louvores"
 
-# Variáveis de ambiente (texto simples — não usar Secret no dashboard).
+# O checksum do manifest NÃO mora mais aqui.
 #
-# ATENÇÃO — a precedência é o INVERSO do que este comentário dizia antes.
-# Segundo a Cloudflare: "your Wrangler file is the source of truth. You will be able
-# to see, but not edit, the same fields when you log into the Cloudflare dashboard."
-# Ou seja: ESTE arquivo sobrescreve o painel a cada `wrangler pages deploy`, não o contrário.
+# Ele é publicado pela app admin (admin.plpcg.com) como objeto no R2, na chave
+# `louvores-manifest.sha256`, ao lado do próprio manifest — e lido de lá por
+# src/routes/louvores-manifest.sha256/+server.js.
 #
-# Consequência: a app admin (admin.plpcg.com) publica o manifest no R2 e faz PATCH em
-# deployment_configs.production.env_vars via API do Cloudflare — e esse PATCH é desfeito
-# no deploy seguinte deste repositório. É por isso que a atualização automática do
-# catálogo nunca funcionou. O valor abaixo é um PALIATIVO: fica obsoleto assim que a
-# admin publicar um manifest novo. Correção definitiva: mover o checksum para um objeto
-# no R2 ao lado do manifest, tirando-o do controle do deploy.
-[vars]
-# SHA-256 hex (64 chars) do louvores-manifest.json no R2 (corpo UTF-8).
-# Publicar o manifest no R2 antes de atualizar. Vazio ou inválido → 204 em /louvores-manifest.sha256
-LOUVORES_MANIFEST_CHECKSUM = "589a64244894ff57796cbed34e40ce7550ba2e6f7950a7d3891273a56908a9f1"
-
-[env.production.vars]
-LOUVORES_MANIFEST_CHECKSUM = "589a64244894ff57796cbed34e40ce7550ba2e6f7950a7d3891273a56908a9f1"
+# Motivo: este arquivo é a fonte da verdade para env vars do Pages ("your Wrangler
+# file is the source of truth" — docs da Cloudflare), então qualquer valor que a
+# admin escrevesse via API do Pages era desfeito no deploy seguinte daqui. Era por
+# isso que a atualização automática do catálogo nunca funcionou.
+#
+# Não reintroduza LOUVORES_MANIFEST_CHECKSUM aqui nem no painel.
 
 # JWT_SECRET será configurado via wrangler secret (NÃO coloque aqui!)
 # Use: wrangler secret put JWT_SECRET (para dev)
