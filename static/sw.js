@@ -3,11 +3,14 @@
 
 // Import utilities for PDF path normalization
 // NOTE: Service Workers cannot use ES6 imports, so we use importScripts
-importScripts('/sw-utils.js');
+importScripts('/sw-utils.js', '/sw-router.js');
 
 // IMPORTANT: Cache names must match OfflineConfig.js
+// A Service Worker plain script cannot import OfflineConfig.js, so CACHE_VERSION is kept in sync
+// by hand: when bumping it, also bump APP_CACHE_NAME in src/lib/offline/core/OfflineConfig.js to
+// the same `plpc-vN-app` value.
 // All environments use the same cache name to avoid mismatches
-const CACHE_VERSION = 'plpc-v4';
+const CACHE_VERSION = 'plpc-v5';
 const APP_CACHE = `${CACHE_VERSION}-app`;
 const PDF_CACHE = 'plpc-pdfs'; // Single cache name for all environments
 const PDFJS_CACHE = `${CACHE_VERSION}-pdfjs`;
@@ -52,22 +55,16 @@ if (IS_DEV) {
 // Note: Only cache the root '/' HTML shell, not individual SPA routes like '/leitor'
 // SvelteKit's client-side router will handle routing to /leitor once the app shell loads
 // louvores-manifest.json: listed for cache-first at runtime, but excluded from install addAll (~1.3MB).
-const APP_SHELL = [
-  '/',
-  '/manifest.json',
-  '/louvores-manifest.json',
-  '/offline-manifest.json',
-  '/favicon.svg',
-  '/icon-192.png',
-  '/icon-512.png'
-];
+// Definido em /sw-router.js — importScripts publica em self.
+const APP_SHELL = self.SW_APP_SHELL_PATHS;
 const APP_SHELL_INSTALL = APP_SHELL.filter((path) => path !== '/louvores-manifest.json');
 
-// PDF.js modules to cache for faster loading
+// Só a folha de estilo do viewer é servida de /pdfjs/ (leitor/+page.svelte).
+// O core, o worker e o viewer do PDF.js são importados pelo Vite e chegam como
+// /_app/immutable/*, aquecidos pelo cliente em warmPdfJsCache() —
+// ver src/lib/utils/pdfjsLoader.js. Pré-cachear os módulos antigos de /pdfjs/
+// aqui baixava 2,26 MB por instalação que nunca eram lidos pelo app.
 const PDFJS_MODULES = [
-  '/pdfjs/build/pdf.mjs',
-  '/pdfjs/web/pdf_viewer.mjs',
-  '/pdfjs/build/pdf.worker.min.mjs',
   '/pdfjs/web/pdf_viewer.css'
 ];
 
@@ -158,428 +155,358 @@ self.addEventListener('activate', (event) => {
 });
 
 // Fetch event - serve from cache or network
+// Roteamento por /sw-router.js: matchSwRoute decide a rota antes de qualquer handler rodar.
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
-  
-  // Log all package ZIP requests for debugging
-  if (url.pathname.startsWith('/packages/') && url.pathname.endsWith('.zip')) {
-    console.log('[SW] Fetch event for package ZIP:', {
-      pathname: url.pathname,
-      fullUrl: url.href,
-      origin: url.origin,
-      swOrigin: self.location.origin,
-      sameOrigin: url.origin === self.location.origin,
-      requestMode: event.request.mode,
-      requestMethod: event.request.method
-    });
-  }
-  
+
   // Only handle same-origin requests
-  if (url.origin !== self.location.origin) {
-    // Log cross-origin requests for debugging (but don't handle them)
-    if (url.pathname.startsWith('/packages/') && url.pathname.endsWith('.zip')) {
-      console.log('[SW] Cross-origin package request ignored:', url.href, 'SW origin:', self.location.origin);
-    }
-    return;
-  }
+  if (url.origin !== self.location.origin) return;
 
   // Check if this is a navigation request (page load)
   const isNavigationRequest = event.request.mode === 'navigate';
+  const route = matchSwRoute(url.pathname, { isNavigation: isNavigationRequest });
 
-  // Handle PDF.js module requests - Cache First strategy
-  const isPdfJsRequest = !isNavigationRequest && 
-    (url.pathname.startsWith('/pdfjs/') || url.pathname.includes('/pdfjs/'));
-  
-  if (isPdfJsRequest) {
-    // Cache First strategy for PDF.js modules (faster loading after first visit)
-    event.respondWith(
-      caches.open(PDFJS_CACHE)
-        .then(cache => {
-          return cache.match(event.request)
-            .then(cachedResponse => {
-              if (cachedResponse) {
-                console.log('[SW] Serving PDF.js from cache:', url.pathname);
-                return cachedResponse;
-              }
-              
-              // Not in cache, fetch from network and cache
-              console.log('[SW] PDF.js not in cache, fetching from network:', url.pathname);
-              return fetch(event.request)
-                .then(response => {
-                  // Only cache successful responses
-                  if (response && response.status === 200) {
-                    const responseClone = response.clone();
-                    cache.put(event.request, responseClone);
-                    console.log('[SW] Cached PDF.js module:', url.pathname);
-                  }
-                  return response;
-                })
-                .catch(err => {
-                  console.error('[SW] Failed to fetch PDF.js:', url.pathname, err);
-                  throw err;
-                });
-            });
-        })
-    );
-    return;
+  switch (route) {
+    case 'pdfjs':
+      event.respondWith(handlePdfJs(event, url));
+      return;
+    case 'pdf':
+      event.respondWith(handlePdf(event, url));
+      return;
+    case 'navigation':
+      event.respondWith(handleNavigation(event, url));
+      return;
+    case 'checksum':
+      event.respondWith(handleChecksum(event));
+      return;
+    case 'package-zip':
+      event.respondWith(handlePackageZip(event, url));
+      return;
+    case 'hashed-asset':
+      // Em dev os assets do Vite mudam a cada recarga: rede sempre.
+      event.respondWith(IS_DEV ? handleDefault(event, url) : handleHashedAsset(event));
+      return;
+    case 'app-shell':
+      event.respondWith(handleAppShell(event));
+      return;
+    default:
+      event.respondWith(handleDefault(event, url));
+      return;
   }
-  
-  // Handle PDF requests (but not navigation requests for PDF URLs)
-  // Intercept ALL PDF files regardless of path (/pdfs/, /assets/, etc.)
-  // Exclude SvelteKit's internal assets (like JS bundles) by checking URL structure
-  const isPdfRequest = !isNavigationRequest && 
-    url.pathname.endsWith('.pdf') &&
-    // Exclude SvelteKit internal assets by checking if it's a real PDF file request
-    // (not a JS/CSS bundle that happens to have .pdf in the name)
-    !url.pathname.includes('/_app/') &&
-    !url.pathname.includes('/node_modules/');
-  
-  if (isPdfRequest) {
-    // Cache First strategy with unified normalization
-    // Normalize PDF path using same strategy as PdfPathManager
-    // Try multiple URL variations for better cache matching
-    event.respondWith(
-      (async () => {
-        try {
-          // Normalize pathname using unified normalization
-          const normalizedPath = normalizePdfPathForCache(url.pathname);
-          
-          // Generate URL variations for search
-          const searchVariations = createPdfRequestVariations(url.pathname, self.location.origin);
-          
-          // Try direct match first (original request)
-          const cache = await caches.open(PDF_CACHE);
-          let cachedResponse = await cache.match(event.request);
-          
-          if (cachedResponse) {
-            console.log('[SW] Serving PDF from cache (direct match):', url.pathname);
-            return cachedResponse;
-          }
-          
-          // Try variations if direct match failed
-          for (const variationUrl of searchVariations) {
-            try {
-              const variationRequest = new Request(variationUrl);
-              cachedResponse = await cache.match(variationRequest);
-              if (cachedResponse) {
-                console.log('[SW] Serving PDF from cache (variation match):', url.pathname, '->', variationUrl);
-                return cachedResponse;
-              }
-            } catch (e) {
-              // Continue to next variation
-            }
-          }
-          
-          // Not in cache, fetch from network
-          console.log('[SW] PDF not in cache, fetching from network:', url.pathname);
-          const response = await fetch(event.request);
-          
-          // Only cache successful responses
-          if (response && response.status === 200) {
-            const responseClone = response.clone();
-            // Store using normalized path for consistency
-            const normalizedRequestUrl = createUrlUtf8(`/${normalizedPath}`, self.location.origin);
-            const normalizedRequest = new Request(normalizedRequestUrl);
-            await cache.put(normalizedRequest, responseClone);
-            console.log('[SW] Cached PDF (normalized):', normalizedPath);
-            
-            // Notify clients that cache was updated
-            setTimeout(() => {
-              notifyClientsCacheUpdated({ source: 'fetch-handler' });
-            }, 100);
-          }
-          
-          return response;
-        } catch (err) {
-          console.error('[SW] Failed to fetch PDF:', url.pathname, err);
-          
-          // Try cache one more time in case it was added between checks
-          try {
-            const cache = await caches.open(PDF_CACHE);
-            const cached = await cache.match(event.request);
+});
+
+// Cache First strategy for PDF.js modules (faster loading after first visit)
+async function handlePdfJs(event, url) {
+  const cache = await caches.open(PDFJS_CACHE);
+  const cachedResponse = await cache.match(event.request);
+  if (cachedResponse) {
+    console.log('[SW] Serving PDF.js from cache:', url.pathname);
+    return cachedResponse;
+  }
+
+  // Not in cache, fetch from network and cache
+  console.log('[SW] PDF.js not in cache, fetching from network:', url.pathname);
+  try {
+    const response = await fetch(event.request);
+    // Only cache successful responses
+    if (response && response.status === 200) {
+      const responseClone = response.clone();
+      cache.put(event.request, responseClone);
+      console.log('[SW] Cached PDF.js module:', url.pathname);
+    }
+    return response;
+  } catch (err) {
+    console.error('[SW] Failed to fetch PDF.js:', url.pathname, err);
+    throw err;
+  }
+}
+
+// Cache First strategy with unified normalization for PDF requests.
+// Normalize PDF path using same strategy as PdfPathManager.
+// Try multiple URL variations for better cache matching.
+async function handlePdf(event, url) {
+  try {
+    // Normalize pathname using unified normalization
+    const normalizedPath = normalizePdfPathForCache(url.pathname);
+
+    // Generate URL variations for search
+    const searchVariations = createPdfRequestVariations(url.pathname, self.location.origin);
+
+    // Try direct match first (original request)
+    const cache = await caches.open(PDF_CACHE);
+    let cachedResponse = await cache.match(event.request);
+
+    if (cachedResponse) {
+      console.log('[SW] Serving PDF from cache (direct match):', url.pathname);
+      return cachedResponse;
+    }
+
+    // Try variations if direct match failed
+    for (const variationUrl of searchVariations) {
+      try {
+        const variationRequest = new Request(variationUrl);
+        cachedResponse = await cache.match(variationRequest);
+        if (cachedResponse) {
+          console.log('[SW] Serving PDF from cache (variation match):', url.pathname, '->', variationUrl);
+          return cachedResponse;
+        }
+      } catch (e) {
+        // Continue to next variation
+      }
+    }
+
+    // Not in cache, fetch from network
+    console.log('[SW] PDF not in cache, fetching from network:', url.pathname);
+    const response = await fetch(event.request);
+
+    // Only cache successful responses
+    if (response && response.status === 200) {
+      const responseClone = response.clone();
+      // Store using normalized path for consistency
+      const normalizedRequestUrl = createUrlUtf8(`/${normalizedPath}`, self.location.origin);
+      const normalizedRequest = new Request(normalizedRequestUrl);
+      await cache.put(normalizedRequest, responseClone);
+      console.log('[SW] Cached PDF (normalized):', normalizedPath);
+
+      // Notify clients that cache was updated
+      setTimeout(() => {
+        notifyClientsCacheUpdated({ source: 'fetch-handler' });
+      }, 100);
+    }
+
+    return response;
+  } catch (err) {
+    console.error('[SW] Failed to fetch PDF:', url.pathname, err);
+
+    // Try cache one more time in case it was added between checks
+    try {
+      const cache = await caches.open(PDF_CACHE);
+      const cached = await cache.match(event.request);
+      if (cached) {
+        console.log('[SW] Serving PDF from cache after network failure:', url.pathname);
+        return cached;
+      }
+    } catch (cacheErr) {
+      // Ignore cache errors
+    }
+
+    throw err;
+  }
+}
+
+// Requisições de navegação (SPA routing do SvelteKit).
+// Dev: sempre busca a rede para pegar as últimas mudanças, com fallback pro cache.
+// Produção: rede primeiro, com fallback pra rota em cache e por fim pro shell '/'.
+async function handleNavigation(event, url) {
+  console.log('[SW] Navigation request:', url.pathname + url.search, 'mode:', event.request.mode);
+
+  if (IS_DEV) {
+    return fetch(event.request)
+      .then(response => {
+        // Don't cache navigation in development
+        console.log('[SW] Dev: Fetched from network:', url.pathname, 'status:', response.status);
+        return response;
+      })
+      .catch((err) => {
+        // Fallback to cache only when offline in dev
+        console.log('[SW] Dev: Network failed, trying cache:', url.pathname, err);
+        return caches.match(event.request)
+          .then(cached => {
             if (cached) {
-              console.log('[SW] Serving PDF from cache after network failure:', url.pathname);
+              console.log('[SW] Dev: Serving cached route:', url.pathname);
               return cached;
             }
-          } catch (cacheErr) {
-            // Ignore cache errors
-          }
-          
-          throw err;
-        }
-      })()
-    );
-    return;
+            console.log('[SW] Dev: Serving root shell for:', url.pathname);
+            return caches.match('/');
+          });
+      });
   }
 
-  // Handle navigation requests (page loads) - SvelteKit SPA routing
-  if (isNavigationRequest) {
-    // Log navigation request for debugging
-    console.log('[SW] Navigation request:', url.pathname + url.search, 'mode:', event.request.mode);
-    
-    // In development mode, always fetch from network to get latest changes
-    if (IS_DEV) {
-      event.respondWith(
-        fetch(event.request)
-          .then(response => {
-            // Don't cache navigation in development
-            console.log('[SW] Dev: Fetched from network:', url.pathname, 'status:', response.status);
-            return response;
-          })
-          .catch((err) => {
-            // Fallback to cache only when offline in dev
-            console.log('[SW] Dev: Network failed, trying cache:', url.pathname, err);
-            return caches.match(event.request)
-              .then(cached => {
-                if (cached) {
-                  console.log('[SW] Dev: Serving cached route:', url.pathname);
-                  return cached;
-                }
-                console.log('[SW] Dev: Serving root shell for:', url.pathname);
-                return caches.match('/');
+  // Production: Network first, then cache
+  return fetch(event.request)
+    .then(response => {
+      // Cache successful navigation responses
+      if (response && response.status === 200) {
+        const responseClone = response.clone();
+        caches.open(APP_CACHE).then(cache => {
+          cache.put(event.request, responseClone);
+          console.log('[SW] Cached navigation response for:', url.pathname + url.search);
+        });
+      }
+      console.log('[SW] Production: Fetched from network:', url.pathname, 'status:', response.status);
+      return response;
+    })
+    .catch((err) => {
+      // When offline, serve the cached HTML shell for SvelteKit SPA routing
+      // SvelteKit's client-side router will handle the actual route based on the URL
+      console.log('[SW] Production: Navigation request offline for:', url.pathname + url.search, err);
+
+      // Try to serve the specific route from cache first (if previously visited)
+      return caches.match(event.request)
+        .then(cached => {
+          if (cached) {
+            console.log('[SW] Production: Serving cached route:', url.pathname + url.search);
+            return cached;
+          }
+
+          // If specific route not cached, serve the root '/' HTML shell
+          // This is the correct approach for SvelteKit SPA - the same HTML is served
+          // for all routes, and the client-side router handles the actual routing
+          // IMPORTANT: The URL in the address bar is preserved, so SvelteKit router will read it
+          console.log('[SW] Production: Route not cached, serving / shell for SvelteKit routing:', url.pathname + url.search);
+          return caches.match('/')
+            .then(shell => {
+              if (shell) {
+                // Ensure the response preserves the original URL information
+                // SvelteKit router reads from window.location, which is set by the browser
+                // based on the navigation request URL, not the response URL
+                // So we can safely return the shell root HTML
+                return shell;
+              }
+              // If even root is not cached, return a basic HTML that will load SvelteKit
+              console.warn('[SW] Production: Root shell not cached, returning basic response');
+              return new Response('<!DOCTYPE html><html><head><meta charset="utf-8"><title>Loading...</title></head><body>Loading...</body></html>', {
+                headers: { 'Content-Type': 'text/html' }
               });
-          })
-      );
-    } else {
-      // Production: Network first, then cache
-      event.respondWith(
-        fetch(event.request)
-          .then(response => {
-            // Cache successful navigation responses
-            if (response && response.status === 200) {
+            });
+        });
+    });
+}
+
+/** Checksum precisa ser sempre fresco — nunca entra em cache. */
+async function handleChecksum(event) {
+  return fetch(event.request.clone(), { cache: 'no-store' });
+}
+
+// Pacotes ZIP são downloads temporários - nunca entram em cache.
+async function handlePackageZip(event, url) {
+  console.log('[SW] Package ZIP detected:', url.pathname, 'Request URL:', event.request.url, 'Mode:', event.request.mode);
+
+  // Network only - never cache package ZIPs
+  // Use the original request URL (it should already be absolute)
+  const requestUrl = event.request.url;
+
+  console.log('[SW] Fetching package ZIP:', url.pathname, 'Full URL:', requestUrl, 'Origin match:', url.origin === self.location.origin);
+
+  try {
+    const response = await fetch(event.request.clone(), {
+      cache: 'no-store'
+      // Don't set mode: 'cors' for same-origin requests - it can cause issues
+    });
+    console.log('[SW] Package ZIP response:', url.pathname, 'status:', response.status, response.statusText);
+    if (!response.ok) {
+      console.error('[SW] Package ZIP failed:', url.pathname, response.status, response.statusText);
+      // Try to get error body for debugging
+      response.clone().text().then(text => {
+        console.error('[SW] Package ZIP error body:', text.substring(0, 200));
+      }).catch(() => {});
+    }
+    // Return response without caching
+    return response;
+  } catch (err) {
+    console.error('[SW] Failed to fetch package ZIP:', url.pathname, 'URL:', requestUrl, 'Error:', err, 'Error name:', err.name, 'Error message:', err.message);
+    throw err;
+  }
+}
+
+// SvelteKit hashed assets: rede primeiro (evita shell novo + chunk antigo em cache / 404 em deploy).
+async function handleHashedAsset(event) {
+  try {
+    const response = await fetch(event.request.clone(), { cache: 'no-cache' });
+    if (response && response.status === 200) {
+      const clone = response.clone();
+      caches.open(APP_CACHE).then((cache) => {
+        cache.put(event.request, clone);
+      });
+    }
+    return response;
+  } catch {
+    return caches.match(event.request);
+  }
+}
+
+// Handle app shell and manifest requests (non-navigation)
+async function handleAppShell(event) {
+  try {
+    const cachedResponse = await caches.match(event.request);
+    if (cachedResponse) {
+      return cachedResponse;
+    }
+    try {
+      const response = await fetch(event.request);
+      if (response && response.status === 200) {
+        const responseClone = response.clone();
+        caches.open(APP_CACHE).then(cache => {
+          cache.put(event.request, responseClone);
+        });
+      }
+      return response;
+    } catch {
+      // If offline and not in cache, return the cached index if available
+      // This helps ensure the app shell is always available
+      try {
+        return await caches.match('/');
+      } catch {
+        // If even index is not cached, let the request fail normally
+        return fetch(event.request);
+      }
+    }
+  } catch {
+    // If cache.match fails entirely, try network
+    return fetch(event.request);
+  }
+}
+
+// For all other requests (JS, CSS, images, etc.)
+// In production: Cache first, then network
+// In development (non-dev assets): Network first
+async function handleDefault(event, url) {
+  if (IS_DEV) {
+    // Development mode: Network First for non-dev assets (like images, fonts)
+    return fetch(event.request)
+      .then(response => {
+        // Don't cache in development
+        return response;
+      })
+      .catch(() => {
+        // Fallback to cache if offline
+        return caches.match(event.request);
+      });
+  }
+
+  // Production mode: Cache First
+  return caches.match(event.request)
+    .then(cachedResponse => {
+      if (cachedResponse) {
+        return cachedResponse;
+      }
+      // Not in cache, try network
+      return fetch(event.request)
+        .then(response => {
+          // Cache successful responses for future offline use
+          // BUT exclude package ZIPs (they should not be cached)
+          if (response && response.status === 200) {
+            const shouldCache = !(url.pathname.startsWith('/packages/') && url.pathname.endsWith('.zip'));
+            if (shouldCache) {
               const responseClone = response.clone();
               caches.open(APP_CACHE).then(cache => {
                 cache.put(event.request, responseClone);
-                console.log('[SW] Cached navigation response for:', url.pathname + url.search);
               });
             }
-            console.log('[SW] Production: Fetched from network:', url.pathname, 'status:', response.status);
-            return response;
-          })
-          .catch((err) => {
-            // When offline, serve the cached HTML shell for SvelteKit SPA routing
-            // SvelteKit's client-side router will handle the actual route based on the URL
-            console.log('[SW] Production: Navigation request offline for:', url.pathname + url.search, err);
-            
-            // Try to serve the specific route from cache first (if previously visited)
-            return caches.match(event.request)
-              .then(cached => {
-                if (cached) {
-                  console.log('[SW] Production: Serving cached route:', url.pathname + url.search);
-                  return cached;
-                }
-                
-                // If specific route not cached, serve the root '/' HTML shell
-                // This is the correct approach for SvelteKit SPA - the same HTML is served
-                // for all routes, and the client-side router handles the actual routing
-                // IMPORTANT: The URL in the address bar is preserved, so SvelteKit router will read it
-                console.log('[SW] Production: Route not cached, serving / shell for SvelteKit routing:', url.pathname + url.search);
-                return caches.match('/')
-                  .then(shell => {
-                    if (shell) {
-                      // Ensure the response preserves the original URL information
-                      // SvelteKit router reads from window.location, which is set by the browser
-                      // based on the navigation request URL, not the response URL
-                      // So we can safely return the shell root HTML
-                      return shell;
-                    }
-                    // If even root is not cached, return a basic HTML that will load SvelteKit
-                    console.warn('[SW] Production: Root shell not cached, returning basic response');
-                    return new Response('<!DOCTYPE html><html><head><meta charset="utf-8"><title>Loading...</title></head><body>Loading...</body></html>', {
-                      headers: { 'Content-Type': 'text/html' }
-                    });
-                  });
-              });
-          })
-      );
-    }
-    return;
-  }
-
-  // Handle app shell and manifest requests (non-navigation)
-  if (APP_SHELL.some(path => url.pathname === path || url.pathname.startsWith(path))) {
-    event.respondWith(
-      caches.match(event.request)
-        .then(cachedResponse => {
-          if (cachedResponse) {
-            return cachedResponse;
-          }
-          return fetch(event.request)
-            .then(response => {
-              if (response && response.status === 200) {
-                const responseClone = response.clone();
-                caches.open(APP_CACHE).then(cache => {
-                  cache.put(event.request, responseClone);
-                });
-              }
-              return response;
-            })
-            .catch(() => {
-              // If offline and not in cache, return the cached index if available
-              // This helps ensure the app shell is always available
-              return caches.match('/').catch(() => {
-                // If even index is not cached, let the request fail normally
-                return fetch(event.request);
-              });
-            });
-        })
-        .catch(() => {
-          // If cache.match fails entirely, try network
-          return fetch(event.request);
-        })
-    );
-    return;
-  }
-
-  // louvores-manifest.sha256: sempre rede, no-store — nunca APP_CACHE (checksum precisa ser fresco)
-  if (url.pathname === '/louvores-manifest.sha256') {
-    event.respondWith(
-      fetch(event.request.clone(), { cache: 'no-store' })
-        .then((response) => response)
-        .catch((err) => {
-          console.warn('[SW] louvores-manifest.sha256 fetch failed:', err);
-          throw err;
-        })
-    );
-    return;
-  }
-
-  // Handle package ZIP files - do NOT cache these (they are temporary downloads)
-  // Packages are downloaded, extracted, and then should be removed from cache
-  const isPackageZip = !isNavigationRequest && 
-    url.pathname.startsWith('/packages/') && 
-    url.pathname.endsWith('.zip');
-  
-  if (isPackageZip) {
-    console.log('[SW] Package ZIP detected:', url.pathname, 'Request URL:', event.request.url, 'Mode:', event.request.mode);
-    
-    // Network only - never cache package ZIPs
-    // Use the original request URL (it should already be absolute)
-    const requestUrl = event.request.url;
-    
-    console.log('[SW] Fetching package ZIP:', url.pathname, 'Full URL:', requestUrl, 'Origin match:', url.origin === self.location.origin);
-    
-    event.respondWith(
-      fetch(event.request.clone(), { 
-        cache: 'no-store'
-        // Don't set mode: 'cors' for same-origin requests - it can cause issues
-      })
-        .then(response => {
-          console.log('[SW] Package ZIP response:', url.pathname, 'status:', response.status, response.statusText);
-          if (!response.ok) {
-            console.error('[SW] Package ZIP failed:', url.pathname, response.status, response.statusText);
-            // Try to get error body for debugging
-            response.clone().text().then(text => {
-              console.error('[SW] Package ZIP error body:', text.substring(0, 200));
-            }).catch(() => {});
-          }
-          // Return response without caching
-          return response;
-        })
-        .catch(err => {
-          console.error('[SW] Failed to fetch package ZIP:', url.pathname, 'URL:', requestUrl, 'Error:', err, 'Error name:', err.name, 'Error message:', err.message);
-          throw err;
-        })
-    );
-    return;
-  }
-
-  // SvelteKit hashed assets: rede primeiro (evita shell novo + chunk antigo em cache / 404 em deploy).
-  const isSvelteKitHashedAsset =
-    !isNavigationRequest &&
-    (url.pathname.startsWith('/_app/immutable/') ||
-      url.pathname === '/_app/version.json' ||
-      url.pathname === '/_app/env.js');
-
-  if (!IS_DEV && isSvelteKitHashedAsset) {
-    event.respondWith(
-      fetch(event.request.clone(), { cache: 'no-cache' })
-        .then((response) => {
-          if (response && response.status === 200) {
-            const clone = response.clone();
-            caches.open(APP_CACHE).then((cache) => {
-              cache.put(event.request, clone);
-            });
           }
           return response;
         })
-        .catch(() => caches.match(event.request))
-    );
-    return;
-  }
-
-  // Check if this is a development asset (JS/CSS from Vite/SvelteKit)
-  const isDevAsset = isDevelopmentAsset(url);
-
-  // For development assets in dev mode: Network First (bypass cache entirely)
-  if (IS_DEV && isDevAsset) {
-    event.respondWith(
-      fetch(event.request, { cache: 'no-store' })
-        .then(response => {
-          // Don't cache development assets
-          return response;
-        })
         .catch(() => {
-          // Only use cache as last resort in dev mode
-          return caches.match(event.request);
-        })
-    );
-    return;
-  }
-
-  // For all other requests (JS, CSS, images, etc.)
-  // In production: Cache first, then network
-  // In development (non-dev assets): Network first
-  if (IS_DEV) {
-    // Development mode: Network First for non-dev assets (like images, fonts)
-    event.respondWith(
-      fetch(event.request)
-        .then(response => {
-          // Don't cache in development
-          return response;
-        })
-        .catch(() => {
-          // Fallback to cache if offline
-          return caches.match(event.request);
-        })
-    );
-  } else {
-    // Production mode: Cache First
-    event.respondWith(
-      caches.match(event.request)
-        .then(cachedResponse => {
-          if (cachedResponse) {
-            return cachedResponse;
-          }
-          // Not in cache, try network
-          return fetch(event.request)
-            .then(response => {
-              // Cache successful responses for future offline use
-              // BUT exclude package ZIPs (they should not be cached)
-              if (response && response.status === 200) {
-                const shouldCache = !(url.pathname.startsWith('/packages/') && url.pathname.endsWith('.zip'));
-                if (shouldCache) {
-                  const responseClone = response.clone();
-                  caches.open(APP_CACHE).then(cache => {
-                    cache.put(event.request, responseClone);
-                  });
-                }
-              }
-              return response;
-            })
-            .catch(() => {
-              // Offline and not in cache - fetch will fail, but let it fail gracefully
-              // Return a rejected promise so the browser can handle it
-              return Promise.reject(new Error('Network error and not in cache'));
-            });
-        })
-        .catch(() => {
-          // If cache.match fails, try network one more time
-          return fetch(event.request);
-        })
-    );
-  }
-});
+          // Offline and not in cache - fetch will fail, but let it fail gracefully
+          // Return a rejected promise so the browser can handle it
+          return Promise.reject(new Error('Network error and not in cache'));
+        });
+    })
+    .catch(() => {
+      // If cache.match fails, try network one more time
+      return fetch(event.request);
+    });
+}
 
 // Message handling for download control
 self.addEventListener('message', (event) => {

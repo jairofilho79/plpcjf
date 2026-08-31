@@ -27,7 +27,7 @@ const config = {
   // All code (service worker, offline.js, CacheStorageAdapter, etc.) must use the same name
   PDF_CACHE_NAME: 'plpc-pdfs',
   PDF_IMPORT_STAGING_CACHE_NAME: 'plpc-pdfs-import-staging',
-  APP_CACHE_NAME: 'plpc-v4-app',
+  APP_CACHE_NAME: 'plpc-v5-app',
   DEFAULT_PDF_CACHE_FALLBACK: 'plpc-pdfs', // Deprecated: use PDF_CACHE_NAME instead
   ALLOWED_CACHE_NAMES: ['plpc-pdfs', 'plpc-pdfs-import-staging'],
 

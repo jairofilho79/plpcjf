@@ -1,7 +1,6 @@
 import { writable, get } from 'svelte/store';
 import { browser } from '$app/environment';
 import { clearLouvoresManifestFromSwCache } from '$lib/utils/swRegistration';
-import { tokensContent, normalizeForSearch } from '$lib/utils/louvorSearch';
 import { dismissSnackbar, showErrorSnackbar, showInfoSnackbar, showSuccessSnackbar } from '$lib/utils/appSnackbar.js';
 import {
   LOUVORES_MANIFEST_CHECKSUM_URL,
@@ -17,19 +16,19 @@ import {
 } from '$lib/utils/louvoresManifestChecksum.js';
 
 /**
- * Enrich manifest rows with precomputed title tokens and replace store contents.
+ * Aplica o manifesto ao store sem derivar nada.
+ *
+ * Os campos de busca (_searchTitleNorm, _searchContentTokens) são calculados sob
+ * demanda e memoizados em louvorSearch.js — enriquecer aqui custava ~14 mil
+ * normalizações Unicode bloqueando a primeira pintura.
+ *
  * @param {any[]} data
  * @returns {any[]}
  */
 function applyLouvoresManifest(data) {
   const list = Array.isArray(data) ? data : [];
-  const enriched = list.map((item) => ({
-    ...item,
-    _searchContentTokens: tokensContent(item?.nome ?? ''),
-    _searchTitleNorm: normalizeForSearch(item?.nome ?? '')
-  }));
-  louvores.set(enriched);
-  return enriched;
+  louvores.set(list);
+  return list;
 }
 
 /** @type {import('svelte/store').Writable<any[]>} */

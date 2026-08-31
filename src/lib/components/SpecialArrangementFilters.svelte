@@ -39,7 +39,11 @@
 </script>
 
 {#if available.length > 0}
-  <div class="w-full max-w-4xl p-4 bg-card-color rounded-lg border-2 flex flex-wrap gap-2 items-center justify-center filter-container">
+  <div
+    class="w-full max-w-4xl p-4 bg-card-color rounded-lg border-2 flex flex-wrap gap-2 items-center justify-center filter-container"
+    role="group"
+    aria-label="Filtrar por arranjo especial"
+  >
     <span class="container-tag">Arranjo Especial</span>
     <button
       type="button"
@@ -59,14 +63,15 @@
         on:longpress={() => handleSpecialArrangementLongPress(specialArrangement)}
         longPressDuration={500}
         preventDefault={true}
+        ariaLabel={`Arranjo especial ${specialArrangement}`}
+        ariaPressed={isSpecialArrangementActive}
       >
-        <button
-          type="button"
+        <span
           class="filter-chip"
           class:active={isSpecialArrangementActive}
         >
           <span>{specialArrangement}</span>
-        </button>
+        </span>
       </GestureButton>
     {/each}
   </div>

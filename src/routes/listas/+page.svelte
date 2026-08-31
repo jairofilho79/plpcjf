@@ -806,10 +806,15 @@
     flex: 1;
     background: transparent;
     border: none;
-    outline: none;
     font-size: 1rem;
     color: var(--text-dark);
     padding: 0.5rem 0.25rem;
+  }
+
+  /* Igual à regra global de app.css: some para mouse/toque, mantém o anel
+     dourado (herdado de :focus-visible em app.css) para teclado. */
+  .search-input-wrapper input:focus:not(:focus-visible) {
+    outline: none;
   }
 
   .search-input-wrapper input::placeholder {
@@ -1004,6 +1009,11 @@
     border: 2px solid var(--gold-color);
     border-radius: 0.25rem;
     padding: 0.25rem 0.5rem;
+  }
+
+  /* Igual à regra global de app.css: some para mouse/toque, mantém o anel
+     dourado (herdado de :focus-visible em app.css) para teclado. */
+  .playlist-name-input:focus:not(:focus-visible) {
     outline: none;
   }
 

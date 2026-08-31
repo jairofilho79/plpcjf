@@ -501,7 +501,7 @@
       </div>
     {/if}
 
-    <div class="carousel-chips-list" class:expanded={isExpanded}>
+    <div class="carousel-chips-list" class:expanded={isExpanded} role="list" aria-label="Louvores na lista atual">
       {#each $carousel as louvor, index}
         {@const categoryIcon = getCategoryIcon(louvor.categoria)}
         <div
@@ -518,6 +518,7 @@
           class:drag-over={dragOverIndex === index}
           class:checking={checkingPdfId === louvor.pdfId}
           class:processing={processingPdfId === louvor.pdfId}
+          role="listitem"
         >
           <div class="drag-handle" on:mousedown|stopPropagation>
             <GripVertical class="w-4 h-4" />
@@ -549,6 +550,7 @@
             on:click|stopPropagation={() => carousel.removeLouvor(louvor.pdfId)}
             class="chip-remove-button"
             title="Remover"
+            aria-label={`Remover ${louvor.nome || 'louvor'} da lista`}
           >
             <X class="w-3 h-3" />
           </button>

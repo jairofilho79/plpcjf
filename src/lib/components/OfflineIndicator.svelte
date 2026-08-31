@@ -20,7 +20,51 @@
   $: hasCategoryDownloaded = savedCategories && savedCategories.length > 0;
   $: isLeitorOffline = browser ? localStorage.getItem('IS_LEITOR_OFFLINE') === 'true' : false;
   $: isOfflineReady = hasCategoryDownloaded && isLeitorOffline;
-  
+
+  // Nome acessível do botão (lido quando o elemento recebe foco/é consultado).
+  // Inclui o progresso, mas não fica numa região aria-live: mudar um
+  // aria-label não é anunciado de forma confiável, e anunciar a cada tick
+  // de progresso encheria o leitor de tela de porcentagens.
+  $: statusLabel = downloading
+    ? `Baixando para uso offline, ${progress}% concluído`
+    : isOfflineReady
+      ? 'App pronta para uso offline'
+      : enabled
+        ? (isOnline ? 'Modo offline ativo, conectado' : 'Modo offline ativo, sem conexão')
+        : '';
+
+  // Estado "grosso" da conectividade/instalação offline, sem o percentual —
+  // só muda em transições reais (começou a baixar, ficou pronto, mudou
+  // online/offline), nunca a cada tick de progresso.
+  $: connectivityPhase = downloading
+    ? 'downloading'
+    : isOfflineReady
+      ? 'ready'
+      : enabled
+        ? (isOnline ? 'online' : 'offline')
+        : 'idle';
+
+  /** @type {string | undefined} */
+  let lastAnnouncedPhase = undefined;
+  let liveAnnouncement = '';
+
+  // Texto da região aria-live: só é reescrito quando connectivityPhase muda
+  // de valor, então o leitor de tela anuncia uma vez por transição real —
+  // nunca em cada atualização de porcentagem dentro da mesma fase.
+  $: if (connectivityPhase !== lastAnnouncedPhase) {
+    lastAnnouncedPhase = connectivityPhase;
+    liveAnnouncement =
+      connectivityPhase === 'downloading'
+        ? 'Baixando para uso offline'
+        : connectivityPhase === 'ready'
+          ? 'App pronta para uso offline'
+          : connectivityPhase === 'online'
+            ? 'Modo offline ativo, conectado'
+            : connectivityPhase === 'offline'
+              ? 'Modo offline ativo, sem conexão'
+              : '';
+  }
+
   let showTooltip = false;
   /**
    * @type {ReturnType<typeof setTimeout> | undefined}
@@ -64,8 +108,10 @@
     on:click={handleClick}
     role="button"
     tabindex="0"
+    aria-label={statusLabel}
     on:keydown={(e) => e.key === 'Enter' && handleClick()}
   >
+    <span class="sr-only" aria-live="polite" aria-atomic="true">{liveAnnouncement}</span>
     {#if downloading}
       <div class="icon-wrapper downloading-animation">
         <Download class="w-5 h-5" />

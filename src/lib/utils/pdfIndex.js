@@ -4,6 +4,7 @@
 import { getCachedPDFsFast, waitForServiceWorker } from '$lib/utils/swRegistration';
 import { getPdfRelPath } from '$lib/utils/pathUtils';
 import urlNormalizer from '$lib/offline/normalization/UrlNormalizer.js';
+import { buildPdfCacheIndex } from './pdfCacheIndex.js';
 
 const PDF_INDEX_KEY = 'pdfAvailabilityIndex';
 const INDEX_VERSION = 1;
@@ -45,28 +46,10 @@ export async function generatePdfIndex(louvores) {
   try {
     const cachedPdfs = await getCachedPDFsFast();
 
-    // Normalize cached PDF URLs using centralized function (same as findMissingPdfs)
-    const normalizedCacheSet = new Set();
-    cachedPdfs.forEach(url => {
-      const normalized = urlNormalizer.normalizePdfUrl(url);
-      normalizedCacheSet.add(normalized);
-      
-      // Also add filename-only variation (same logic as findMissingPdfs)
-      try {
-        const urlObj = new URL(url);
-        const filename = urlObj.pathname.split('/').pop();
-        if (filename) {
-          const normalizedFilename = urlNormalizer.normalizePdfUrl(filename);
-          normalizedCacheSet.add(normalizedFilename);
-        }
-      } catch {
-        const parts = url.split('/');
-        const filename = parts[parts.length - 1];
-        if (filename) {
-          const normalizedFilename = urlNormalizer.normalizePdfUrl(filename);
-          normalizedCacheSet.add(normalizedFilename);
-        }
-      }
+    // Mesma normalização de antes (minúsculas + sem acento), agora aplicada
+    // uma vez na indexação e uma vez na consulta.
+    const cacheIndex = buildPdfCacheIndex(cachedPdfs, {
+      normalize: (path) => urlNormalizer.normalizePdfUrl(path)
     });
 
     // Process in chunks to avoid blocking UI
@@ -87,51 +70,7 @@ export async function generatePdfIndex(louvores) {
           continue;
         }
 
-        // Normalize expected path using centralized function
-        const normalizedPath = urlNormalizer.normalizePdfUrl(pdfPath);
-        
-        // Check using same strategies as findMissingPdfs
-        let isAvailable = false;
-        
-        // Strategy 1: Exact match
-        if (normalizedCacheSet.has(normalizedPath)) {
-          isAvailable = true;
-        }
-        
-        // Strategy 2: Filename match
-        if (!isAvailable) {
-          const filename = normalizedPath.split('/').pop();
-          if (filename && normalizedCacheSet.has(filename)) {
-            isAvailable = true;
-          }
-        }
-        
-        // Strategy 3: Partial match (same logic as findMissingPdfs)
-        if (!isAvailable) {
-          isAvailable = Array.from(normalizedCacheSet).some(cached => {
-            if (cached === normalizedPath) return true;
-            if (cached.endsWith(normalizedPath)) return true;
-            if (normalizedPath.endsWith(cached)) return true;
-            
-            const cachedFilename = cached.split('/').pop();
-            const expectedFilename = normalizedPath.split('/').pop();
-            if (cachedFilename && expectedFilename && cachedFilename === expectedFilename) {
-              return true;
-            }
-            
-            if (cachedFilename && expectedFilename) {
-              const cachedBase = cachedFilename.replace(/\.pdf$/i, '');
-              const expectedBase = expectedFilename.replace(/\.pdf$/i, '');
-              if (cachedBase && expectedBase && cachedBase === expectedBase) {
-                return true;
-              }
-            }
-            
-            return false;
-          });
-        }
-
-        index.set(louvor.pdfId, isAvailable);
+        index.set(louvor.pdfId, cacheIndex.has(pdfPath));
       }
     };
 

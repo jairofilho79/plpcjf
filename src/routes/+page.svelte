@@ -68,16 +68,10 @@
     const groupCount = groupLouvoresByGroupId(results).length;
     const maxP = groupCount === 0 ? 1 : Math.max(1, Math.ceil(groupCount / ipp));
     if (shouldResetPageOnFilterResult) {
-      // #region agent log
-      fetch('http://127.0.0.1:7440/ingest/a9d50c94-866c-49ac-b737-468ccc2df6c6',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'8c7e1b'},body:JSON.stringify({sessionId:'8c7e1b',runId:'post-fix',hypothesisId:'H5',location:'src/routes/+page.svelte:finalizeFilteredResults:resetToFirstPage',message:'finalizeFilteredResults reset page because criteria changed',data:{resultsLength:results.length,groupCount,itemsPerPage:ipp,maxPage:maxP,currentPageBeforeReset:currentPage,pageInitializedFromUrl,searchQuery,urlHref:browser && $page?.url ? $page.url.href : ''},timestamp:Date.now()})}).catch(()=>{});
-      // #endregion
       currentPage = 1;
       pageInput = '1';
       shouldResetPageOnFilterResult = false;
       if (browser && homeUrlSyncInitialized && $page?.url?.pathname === '/' && !isUpdatingFromUrl) {
-        // #region agent log
-        fetch('http://127.0.0.1:7440/ingest/a9d50c94-866c-49ac-b737-468ccc2df6c6',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'8c7e1b'},body:JSON.stringify({sessionId:'8c7e1b',runId:'post-fix',hypothesisId:'H5',location:'src/routes/+page.svelte:finalizeFilteredResults:updateUrlPage1',message:'finalizeFilteredResults writing pagina=1 to URL',data:{searchQuery,currentPage,urlHref:browser && $page?.url ? $page.url.href : ''},timestamp:Date.now()})}).catch(()=>{});
-        // #endregion
         updateUrlParams({ pagina: 1 });
         lastKnownHomeUrl = { ...lastKnownHomeUrl, pagina: 1 };
       }
@@ -105,18 +99,12 @@
     currentPage = pageNum;
     pageInput = pageNum.toString();
     if (browser && !skipUrlUpdate && !isUpdatingPageFromUrl && homeUrlSyncInitialized && $page?.url?.pathname === '/') {
-      // #region agent log
-      fetch('http://127.0.0.1:7440/ingest/a9d50c94-866c-49ac-b737-468ccc2df6c6',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'8c7e1b'},body:JSON.stringify({sessionId:'8c7e1b',runId:'initial',hypothesisId:'H1',location:'src/routes/+page.svelte:setPage:beforeUpdateUrlParams',message:'setPage requested URL update',data:{requestedPage:p,appliedPage:pageNum,currentPageBeforeUrlWrite:currentPage,pageHrefBeforeUpdate,skipUrlUpdate,isUpdatingPageFromUrl,homeUrlSyncInitialized},timestamp:Date.now()})}).catch(()=>{});
-      // #endregion
       isUpdatingPageFromUrl = true;
       lastKnownHomeUrl = { ...lastKnownHomeUrl, pagina: pageNum };
       updateUrlParams({ pagina: pageNum });
       setTimeout(() => {
         isUpdatingPageFromUrl = false;
       }, 100);
-      // #region agent log
-      fetch('http://127.0.0.1:7440/ingest/a9d50c94-866c-49ac-b737-468ccc2df6c6',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'8c7e1b'},body:JSON.stringify({sessionId:'8c7e1b',runId:'initial',hypothesisId:'H1',location:'src/routes/+page.svelte:setPage:afterUpdateUrlParams',message:'setPage dispatched URL update',data:{appliedPage:pageNum,lastKnownPage:lastKnownHomeUrl.pagina,pagePathname:$page?.url?.pathname || ''},timestamp:Date.now()})}).catch(()=>{});
-      // #endregion
     }
     if (scroll && tp > 0 && browser) {
       document.getElementById('home-louvores-results')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -199,9 +187,6 @@
    * @param {CustomEvent<{ page: number; scroll?: boolean }>} e
    */
   function handleHomePaginationPage(e) {
-    // #region agent log
-    fetch('http://127.0.0.1:7440/ingest/a9d50c94-866c-49ac-b737-468ccc2df6c6',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'8c7e1b'},body:JSON.stringify({sessionId:'8c7e1b',runId:'initial-r2',hypothesisId:'H6',location:'src/routes/+page.svelte:handleHomePaginationPage',message:'pagination control requested page change',data:{requestedPage:e?.detail?.page ?? null,currentPageBeforeSetPage:currentPage,pageInputBeforeSetPage:pageInput,urlHref:browser && $page?.url ? $page.url.href : ''},timestamp:Date.now()})}).catch(()=>{});
-    // #endregion
     setPage(e.detail.page, { scroll: e.detail.scroll !== false });
   }
 
@@ -356,14 +341,8 @@
     const urlPesquisa = (urlParams.pesquisa || '').trim();
     const currentPesquisa = (searchQuery || '').trim();
     if (urlPesquisa === currentPesquisa) return;
-    // #region agent log
-    fetch('http://127.0.0.1:7440/ingest/a9d50c94-866c-49ac-b737-468ccc2df6c6',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'8c7e1b'},body:JSON.stringify({sessionId:'8c7e1b',runId:'initial',hypothesisId:'H2',location:'src/routes/+page.svelte:flushSearchToUrlOnBlur:beforeUpdateUrlParams',message:'blur is forcing search URL sync',data:{urlPesquisa,currentPesquisa,currentPage,pageHref:$page.url.href,lastKnownHomeUrlPage:lastKnownHomeUrl.pagina},timestamp:Date.now()})}).catch(()=>{});
-    // #endregion
     isUpdatingFromUrl = true;
     updateUrlParams(homeSearchUrlParams(searchQuery));
-    // #region agent log
-    fetch('http://127.0.0.1:7440/ingest/a9d50c94-866c-49ac-b737-468ccc2df6c6',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'8c7e1b'},body:JSON.stringify({sessionId:'8c7e1b',runId:'initial',hypothesisId:'H2',location:'src/routes/+page.svelte:flushSearchToUrlOnBlur:afterUpdateUrlParams',message:'blur dispatched search URL sync',data:{currentPage,lastKnownHomeUrlPage:lastKnownHomeUrl.pagina,searchQuery},timestamp:Date.now()})}).catch(()=>{});
-    // #endregion
     setTimeout(() => {
       isUpdatingFromUrl = false;
     }, 0);
@@ -400,9 +379,6 @@
     if (lastFilterCriteriaKey !== null && criteriaKey !== lastFilterCriteriaKey) {
       shouldResetPageOnFilterResult = true;
       pageInitializedFromUrl = false;
-      // #region agent log
-      fetch('http://127.0.0.1:7440/ingest/a9d50c94-866c-49ac-b737-468ccc2df6c6',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'8c7e1b'},body:JSON.stringify({sessionId:'8c7e1b',runId:'post-fix',hypothesisId:'H8',location:'src/routes/+page.svelte:filterLouvores:criteriaChanged',message:'filter criteria changed; scheduling page reset',data:{criteriaKey,lastCriteriaKey:lastFilterCriteriaKey,currentPage,searchQuery},timestamp:Date.now()})}).catch(()=>{});
-      // #endregion
     }
     lastFilterCriteriaKey = criteriaKey;
 
@@ -518,9 +494,6 @@
         }, 100);
       }
       if (urlPag !== currentPage) {
-        // #region agent log
-        fetch('http://127.0.0.1:7440/ingest/a9d50c94-866c-49ac-b737-468ccc2df6c6',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'8c7e1b'},body:JSON.stringify({sessionId:'8c7e1b',runId:'initial',hypothesisId:'H3',location:'src/routes/+page.svelte:reactiveUrlSync:applyUrlPage',message:'URL sync is overriding in-memory currentPage',data:{urlPag,currentPageBeforeSync:currentPage,urlHref:$page.url.href,lastKnownHomeUrlPage:lastKnownHomeUrl.pagina,isUpdatingFromUrl,isUpdatingItemsPerPageFromUrl,isUpdatingPageFromUrl},timestamp:Date.now()})}).catch(()=>{});
-        // #endregion
         isUpdatingPageFromUrl = true;
         currentPage = urlPag;
         pageInput = String(urlPag);
@@ -578,9 +551,6 @@
         
         // Só atualiza a URL se o valor realmente mudou
         if (urlPesquisa !== currentPesquisa) {
-          // #region agent log
-          fetch('http://127.0.0.1:7440/ingest/a9d50c94-866c-49ac-b737-468ccc2df6c6',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'8c7e1b'},body:JSON.stringify({sessionId:'8c7e1b',runId:'initial-r2',hypothesisId:'H7',location:'src/routes/+page.svelte:searchDebounce:writePesquisa',message:'search debounce writing URL params',data:{urlPesquisa,currentPesquisa,pageInitializedFromUrl,urlHref:browser && $page?.url ? $page.url.href : ''},timestamp:Date.now()})}).catch(()=>{});
-          // #endregion
           isUpdatingFromUrl = true;
           updateUrlParams(homeSearchUrlParams(searchQuery));
           // Resetar flag após um pequeno delay para permitir que a URL seja atualizada
@@ -801,7 +771,6 @@
   }
 
   .filter-collapse-trigger:focus-visible {
-    outline: none;
     border-color: var(--gold-color);
     box-shadow: 0 0 0 3px rgba(212, 175, 55, 0.3);
   }

@@ -11,7 +11,8 @@ import {
   waitForServiceWorker,
   invalidateCachedPDFsLocal
 } from '$lib/utils/swRegistration';
-import { unzip } from 'fflate';
+import { iterateZipEntriesCd } from '$lib/offline/import/zipCdReader.js';
+import { buildPdfCacheIndex } from '$lib/utils/pdfCacheIndex.js';
 import { louvores } from './louvores';
 import { validateManifestsIntegrity } from '$lib/utils/manifestValidation';
 import { CATEGORY_OPTIONS } from './filters';
@@ -598,10 +599,9 @@ async function startZipDownloadWithSpecificParts(categories, pdfUrls, partsByCat
     return path || '';
   };
   
-  // Create sets for comparison using original paths
-  const pdfSet = new Set(pdfUrls.map(prepareForComparison));
-  const pdfSetOriginal = new Set(pdfUrls); // Keep original for exact match
-  const remainingSet = new Set(pdfUrls.map(prepareForComparison));
+  // Índice O(1) dos PDFs desejados; `remaining` controla o que ainda falta gravar.
+  const wantedIndex = buildPdfCacheIndex(pdfUrls);
+  const remaining = new Set(pdfUrls.map(prepareForComparison));
   let completed = 0;
 
   offlineState.update(state => ({
@@ -660,57 +660,25 @@ async function startZipDownloadWithSpecificParts(categories, pdfUrls, partsByCat
           throw new Error(`Falha ao baixar o pacote ${part.filename} (${response.status})`);
         }
 
-        const arrayBuffer = await response.arrayBuffer();
-        const entries = await unzipEntries(new Uint8Array(arrayBuffer));
-        const entryNames = Object.keys(entries);
+        // Extrai as entradas do ZIP uma a uma (streaming via central directory),
+        // em vez de descomprimir o pacote inteiro em memória de uma só vez.
+        const blob = await response.blob();
 
-        for (const entryName of entryNames) {
+        for await (const { name, data } of iterateZipEntriesCd(blob, zipDownloadController.signal)) {
           if (zipDownloadCancelled) {
             throw new Error('DOWNLOAD_CANCELLED');
           }
 
-          const preparedPath = normalizeZipEntryName(entryName);
+          const preparedPath = normalizeZipEntryName(name);
+          if (!preparedPath || !preparedPath.endsWith('.pdf')) continue;
 
-          if (!preparedPath || !preparedPath.endsWith('.pdf')) {
-            delete entries[entryName];
-            continue;
-          }
-
-          // Prepare path for comparison (remove leading slash, preserve case and accents)
           const pathForComparison = prepareForComparison(preparedPath);
-          
-          // Só cachear se o PDF está na lista de PDFs necessários
-          // Check both prepared and original sets for maximum compatibility
-          const isInSet = pdfSet.has(pathForComparison) || 
-                         pdfSetOriginal.has(preparedPath) ||
-                         pdfSetOriginal.has(preparedPath.replace(/^\/+/, '')) ||
-                         Array.from(pdfSetOriginal).some(url => {
-                           const urlPrepared = prepareForComparison(url);
-                           return urlPrepared === pathForComparison ||
-                                  urlPrepared.endsWith(pathForComparison) ||
-                                  pathForComparison.endsWith(urlPrepared);
-                         });
-          
-          const isInRemaining = remainingSet.has(pathForComparison) ||
-                                Array.from(remainingSet).some(rem => {
-                                  return rem === pathForComparison ||
-                                         rem.endsWith(pathForComparison) ||
-                                         pathForComparison.endsWith(rem);
-                                });
-          
-          if (!isInSet || !isInRemaining) {
-            delete entries[entryName];
-            continue;
-          }
 
-          const fileData = entries[entryName];
-          delete entries[entryName];
+          // Só grava o que foi pedido e ainda não foi gravado.
+          if (!wantedIndex.has(preparedPath)) continue;
+          if (!remaining.has(pathForComparison)) continue;
 
-          if (!fileData) {
-            continue;
-          }
-
-          const pdfBlob = new Blob([fileData], { type: 'application/pdf' });
+          const pdfBlob = new Blob([data], { type: 'application/pdf' });
           const requestUrl = createUrlUtf8(preparedPath, location.origin);
           const pdfResponse = new Response(pdfBlob, {
             headers: { 'Content-Type': 'application/pdf' }
@@ -718,7 +686,7 @@ async function startZipDownloadWithSpecificParts(categories, pdfUrls, partsByCat
 
           await cache.put(new Request(requestUrl), pdfResponse);
 
-          remainingSet.delete(pathForComparison);
+          remaining.delete(pathForComparison);
           completed++;
 
           const progress = total === 0 ? 100 : Math.min(99, Math.floor((completed / total) * 100));
@@ -729,7 +697,6 @@ async function startZipDownloadWithSpecificParts(categories, pdfUrls, partsByCat
             failed: 0,
             progress
           }));
-
         }
 
         // Remove o arquivo ZIP do cache após processar todos os PDFs
@@ -742,7 +709,7 @@ async function startZipDownloadWithSpecificParts(categories, pdfUrls, partsByCat
       throw new Error('DOWNLOAD_CANCELLED');
     }
 
-    const failed = remainingSet.size;
+    const failed = remaining.size;
     const finalCompleted = Math.min(completed, total - failed);
     const finalProgress = total === 0 ? 100 : Math.floor((finalCompleted / total) * 100);
 
@@ -823,30 +790,14 @@ async function startZipDownloadWithSpecificParts(categories, pdfUrls, partsByCat
     offlineState.update(state => ({
       ...state,
       downloading: false,
-      error: error.message === 'DOWNLOAD_CANCELLED' 
-        ? 'Download cancelado pelo usuário.' 
+      error: error.message === 'DOWNLOAD_CANCELLED' || error?.name === 'AbortError'
+        ? 'Download cancelado pelo usuário.'
         : error.message || 'Erro ao baixar pacotes ZIP.'
     }));
   } finally {
     isZipDownloadActive = false;
     zipDownloadController = null;
   }
-}
-
-/**
- * @param {Uint8Array<ArrayBufferLike>} buffer
- */
-function unzipEntries(buffer) {
-  return new Promise((resolve, reject) => {
-    unzip(buffer, (err, data) => {
-      if (err) {
-        reject(err);
-        return;
-      }
-
-      resolve(data || {});
-    });
-  });
 }
 
 /**
@@ -1529,10 +1480,9 @@ async function startZipDownload(categories, pdfUrls, alreadyDownloadedCategories
     return path || '';
   };
   
-  // Create sets for comparison using original paths
-  const pdfSet = new Set(pdfUrls.map(prepareForComparison));
-  const pdfSetOriginal = new Set(pdfUrls); // Keep original for exact match
-  const remainingSet = new Set(pdfUrls.map(prepareForComparison));
+  // Índice O(1) dos PDFs desejados; `remaining` controla o que ainda falta gravar.
+  const wantedIndex = buildPdfCacheIndex(pdfUrls);
+  const remaining = new Set(pdfUrls.map(prepareForComparison));
   let completed = 0;
 
   // Get manifest
@@ -1606,57 +1556,25 @@ async function startZipDownload(categories, pdfUrls, alreadyDownloadedCategories
           throw new Error(`Falha ao baixar o pacote ${part.filename} (${response.status})`);
         }
 
-        const arrayBuffer = await response.arrayBuffer();
-        const entries = await unzipEntries(new Uint8Array(arrayBuffer));
-        const entryNames = Object.keys(entries);
+        // Extrai as entradas do ZIP uma a uma (streaming via central directory),
+        // em vez de descomprimir o pacote inteiro em memória de uma só vez.
+        const blob = await response.blob();
 
-        for (const entryName of entryNames) {
+        for await (const { name, data } of iterateZipEntriesCd(blob, zipDownloadController.signal)) {
           if (zipDownloadCancelled) {
             throw new Error('DOWNLOAD_CANCELLED');
           }
 
-          const preparedPath = normalizeZipEntryName(entryName);
+          const preparedPath = normalizeZipEntryName(name);
+          if (!preparedPath || !preparedPath.endsWith('.pdf')) continue;
 
-          if (!preparedPath || !preparedPath.endsWith('.pdf')) {
-            delete entries[entryName];
-            continue;
-          }
-
-          // Prepare path for comparison (remove leading slash, preserve case and accents)
           const pathForComparison = prepareForComparison(preparedPath);
-          
-          // Só cachear se o PDF está na lista de PDFs necessários
-          // Check both prepared and original sets for maximum compatibility
-          const isInSet = pdfSet.has(pathForComparison) || 
-                         pdfSetOriginal.has(preparedPath) ||
-                         pdfSetOriginal.has(preparedPath.replace(/^\/+/, '')) ||
-                         Array.from(pdfSetOriginal).some(url => {
-                           const urlPrepared = prepareForComparison(url);
-                           return urlPrepared === pathForComparison ||
-                                  urlPrepared.endsWith(pathForComparison) ||
-                                  pathForComparison.endsWith(urlPrepared);
-                         });
-          
-          const isInRemaining = remainingSet.has(pathForComparison) ||
-                                Array.from(remainingSet).some(rem => {
-                                  return rem === pathForComparison ||
-                                         rem.endsWith(pathForComparison) ||
-                                         pathForComparison.endsWith(rem);
-                                });
-          
-          if (!isInSet || !isInRemaining) {
-            delete entries[entryName];
-            continue;
-          }
 
-          const fileData = entries[entryName];
-          delete entries[entryName];
+          // Só grava o que foi pedido e ainda não foi gravado.
+          if (!wantedIndex.has(preparedPath)) continue;
+          if (!remaining.has(pathForComparison)) continue;
 
-          if (!fileData) {
-            continue;
-          }
-
-          const pdfBlob = new Blob([fileData], { type: 'application/pdf' });
+          const pdfBlob = new Blob([data], { type: 'application/pdf' });
           const requestUrl = createUrlUtf8(preparedPath, location.origin);
           const pdfResponse = new Response(pdfBlob, {
             headers: { 'Content-Type': 'application/pdf' }
@@ -1664,7 +1582,7 @@ async function startZipDownload(categories, pdfUrls, alreadyDownloadedCategories
 
           await cache.put(new Request(requestUrl), pdfResponse);
 
-          remainingSet.delete(pathForComparison);
+          remaining.delete(pathForComparison);
           completed++;
 
           const progress = total === 0 ? 100 : Math.min(99, Math.floor((completed / total) * 100));
@@ -1675,7 +1593,6 @@ async function startZipDownload(categories, pdfUrls, alreadyDownloadedCategories
             failed: 0,
             progress
           }));
-
         }
 
         // Remove o arquivo ZIP do cache após processar todos os PDFs
@@ -1688,7 +1605,7 @@ async function startZipDownload(categories, pdfUrls, alreadyDownloadedCategories
       throw new Error('DOWNLOAD_CANCELLED');
     }
 
-    const failed = remainingSet.size;
+    const failed = remaining.size;
     const finalCompleted = Math.min(completed, total - failed);
     const finalProgress = total === 0 ? 100 : Math.floor((finalCompleted / total) * 100);
 

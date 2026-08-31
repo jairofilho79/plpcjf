@@ -13,6 +13,7 @@ import { atobUTF8 } from '$lib/utils/pathUtils.js';
 import { louvores } from '$lib/stores/louvores.js';
 import { get } from 'svelte/store';
 import offlineEvents, { EVENTS } from '../core/OfflineEvents.js';
+import { getConfig } from '../core/OfflineConfig.js';
 import { createLogger } from '../utils/OfflineLogger.js';
 import { browser } from '$app/environment';
 import { notifyCacheUpdate, updateCacheVersion } from '$lib/utils/cacheSync.js';
@@ -546,9 +547,9 @@ export class DownloadManager {
               ? packageUrl 
               : `${packageDownloader.basePath}/${packageUrl}`;
             
-            // Remove from APP_CACHE (plpc-v4-app) where Service Worker might have cached it
+            // Remove from APP_CACHE (OfflineConfig.js APP_CACHE_NAME) where Service Worker might have cached it
             if (typeof caches !== 'undefined') {
-              const cache = await caches.open('plpc-v4-app');
+              const cache = await caches.open(getConfig('APP_CACHE_NAME'));
               const packageRequest = new Request(fullPackageUrl);
               const deleted = await cache.delete(packageRequest);
               if (deleted) {

@@ -20,6 +20,15 @@
   export let usePointerCaptureWhilePressed = false;
   /** @type {string | undefined} */
   export let ariaLabel = undefined;
+  /**
+   * Estado pressionado/selecionado (para botões que funcionam como toggle,
+   * ex.: chips de filtro). Deixe undefined nos demais usos — omitir o
+   * atributo por completo é o que garante que o leitor de tela não anuncie
+   * um alternador (toggle) onde não existe um; `aria-pressed="false"` teria
+   * esse efeito indesejado.
+   * @type {boolean | undefined}
+   */
+  export let ariaPressed = undefined;
 
   const dispatch = createEventDispatcher();
 
@@ -343,6 +352,21 @@
     // para evitar duplicação de eventos
     event.preventDefault();
   }
+
+  /**
+   * Ativação por teclado (Enter/Espaço). Diferente do clique por mouse/touque,
+   * que dispara 'click' via detectAndDispatchGesture (mouseup/touchend), o
+   * teclado nunca passa por ali — sem isto, o botão fica inoperável via
+   * teclado. Dispara 'click' diretamente aqui, uma única vez por tecla.
+   * Não chama handleClick: aquele existe só para descartar o clique nativo
+   * duplicado que mouse/touch já tratou, e não deve interferir aqui.
+   */
+  function handleKeydown(event) {
+    if (disabled) return;
+    if (event.key !== 'Enter' && event.key !== ' ') return;
+    event.preventDefault();
+    dispatch('click', event);
+  }
   
   function handleSelectStart(event) {
     if (preventDefault) {
@@ -383,14 +407,8 @@
   tabindex={disabled ? -1 : 0}
   aria-disabled={disabled}
   aria-label={ariaLabel}
-  on:keydown={(e) => {
-    if (e.key === 'Enter' || e.key === ' ') {
-      e.preventDefault();
-      if (!disabled) {
-        handleClick(e);
-      }
-    }
-  }}
+  aria-pressed={ariaPressed}
+  on:keydown={handleKeydown}
 >
   <slot />
 </div>

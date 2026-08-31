@@ -540,7 +540,6 @@
   .material-open:hover,
   .material-open:focus-visible {
     background: rgba(212, 175, 55, 0.28);
-    outline: none;
   }
 
   .material-open.busy,

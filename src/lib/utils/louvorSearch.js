@@ -149,14 +149,39 @@ export function prepareSearchQuery(searchQuery) {
   };
 }
 
+/**
+ * Grava o valor derivado na própria linha, sem torná-lo enumerável —
+ * assim ele não entra em JSON.stringify (playlists, carrossel no localStorage).
+ * @param {any} row
+ * @param {string} key
+ * @param {any} value
+ */
+function memoizeOnRow(row, key, value) {
+  try {
+    Object.defineProperty(row, key, {
+      value,
+      enumerable: false,
+      writable: true,
+      configurable: true
+    });
+  } catch {
+    // Objeto congelado/selado: seguir sem memoizar.
+  }
+  return value;
+}
+
 function rowTitleNorm(row) {
   if (typeof row?._searchTitleNorm === 'string') return row._searchTitleNorm;
-  return normalizeForSearch(row?.nome ?? '');
+  const value = normalizeForSearch(row?.nome ?? '');
+  if (row && typeof row === 'object') memoizeOnRow(row, '_searchTitleNorm', value);
+  return value;
 }
 
 function rowContentTokens(row) {
   if (Array.isArray(row?._searchContentTokens)) return row._searchContentTokens;
-  return tokensContent(row?.nome ?? '');
+  const value = tokensContent(row?.nome ?? '');
+  if (row && typeof row === 'object') memoizeOnRow(row, '_searchContentTokens', value);
+  return value;
 }
 
 /**
