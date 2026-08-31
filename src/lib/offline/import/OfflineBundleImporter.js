@@ -110,7 +110,7 @@ export class OfflineBundleImporter {
     const stagingName =
       getConfig('PDF_IMPORT_STAGING_CACHE_NAME') || 'plpc-pdfs-import-staging';
     const mainName = getConfig('PDF_CACHE_NAME') || 'plpc-pdfs';
-    const appCacheName = getConfig('APP_CACHE_NAME') || 'plpc-v4-app';
+    const appCacheName = getConfig('APP_CACHE_NAME');
 
     this._importing = true;
     this._abortController = new AbortController();

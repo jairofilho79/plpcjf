@@ -23,6 +23,7 @@
   } from '$lib/utils/statsCache';
   import statsCalculator from '$lib/offline/stats/StatsCalculator.js';
   import offlineEvents, { EVENTS as OFFLINE_EVENTS } from '$lib/offline/core/OfflineEvents.js';
+  import { getConfig } from '$lib/offline/core/OfflineConfig.js';
   import offlineManager from '$lib/offline/core/OfflineManager.js';
   import cacheMigrationV2 from '$lib/offline/storage/CacheMigrationV2.js';
   import { browser } from '$app/environment';
@@ -1254,21 +1255,22 @@
       // Clear offline manager cache (PDFs)
       await offlineManager.clearCache();
       
-      // Clear all caches including plpc-pdfs e plpc-v4-app (ver static/sw.js CACHE_VERSION)
+      // Clear all caches including plpc-pdfs e o app cache (ver OfflineConfig.js APP_CACHE_NAME / static/sw.js CACHE_VERSION)
       if (typeof caches !== 'undefined') {
+        const appCacheName = getConfig('APP_CACHE_NAME');
         try {
           // Clear plpc-pdfs cache (PDFs)
           const pdfCache = await caches.open('plpc-pdfs');
           const pdfKeys = await pdfCache.keys();
           await Promise.all(pdfKeys.map(key => pdfCache.delete(key)));
           console.log('[Offline Page] Cleared plpc-pdfs cache');
-          
+
           // Clear app pages cache
-          const appCache = await caches.open('plpc-v4-app');
+          const appCache = await caches.open(appCacheName);
           const appKeys = await appCache.keys();
           await Promise.all(appKeys.map(key => appCache.delete(key)));
           console.log('[Offline Page] Cleared app pages cache');
-          
+
           // Also try to delete the entire caches if possible
           try {
             await caches.delete('plpc-pdfs');
@@ -1277,13 +1279,13 @@
             // Ignore if cache doesn't exist or can't be deleted
             console.debug('[Offline Page] Could not delete plpc-pdfs cache entirely:', e);
           }
-          
+
           try {
-            await caches.delete('plpc-v4-app');
-            console.log('[Offline Page] Deleted plpc-v4-app cache entirely');
+            await caches.delete(appCacheName);
+            console.log('[Offline Page] Deleted app cache entirely:', appCacheName);
           } catch (e) {
             // Ignore if cache doesn't exist or can't be deleted
-            console.debug('[Offline Page] Could not delete plpc-v4-app cache entirely:', e);
+            console.debug('[Offline Page] Could not delete app cache entirely:', appCacheName, e);
           }
         } catch (error) {
           console.warn('[Offline Page] Error clearing caches:', error);

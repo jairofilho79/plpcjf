@@ -6,6 +6,9 @@
 importScripts('/sw-utils.js', '/sw-router.js');
 
 // IMPORTANT: Cache names must match OfflineConfig.js
+// A Service Worker plain script cannot import OfflineConfig.js, so CACHE_VERSION is kept in sync
+// by hand: when bumping it, also bump APP_CACHE_NAME in src/lib/offline/core/OfflineConfig.js to
+// the same `plpc-vN-app` value.
 // All environments use the same cache name to avoid mismatches
 const CACHE_VERSION = 'plpc-v5';
 const APP_CACHE = `${CACHE_VERSION}-app`;
