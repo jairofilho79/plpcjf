@@ -111,29 +111,17 @@ npm run build && npx wrangler pages deploy .svelte-kit/cloudflare --project-name
    - Build output directory: `.svelte-kit/cloudflare`
    - Environment variables (se necessário)
 
-## 🔐 Autenticação
+## 🔐 Publicação do catálogo
 
-A API de upload utiliza JWT para autenticação:
+O catálogo é publicado pela app administrativa em **admin.plpcg.com**, que grava
+`louvores-manifest.json` e `louvores-manifest.sha256` no bucket R2. O cliente
+compara o checksum e baixa o manifest novo quando divergem.
 
-```javascript
-// Exemplo de uso da API de upload
-const response = await fetch('/api/upload-louvor', {
-  method: 'POST',
-  headers: {
-    'Content-Type': 'application/json',
-    'Authorization': `Bearer ${jwtToken}`
-  },
-  body: JSON.stringify({
-    file: 'base64EncodedPdf',
-    metadata: {
-      nome: 'Nome do Louvor',
-      classificacao: 'ColAdultos',
-      numero: '123',
-      categoria: 'Partitura'
-    }
-  })
-});
-```
+O antigo `POST /api/upload-louvor`, autenticado por JWT, foi removido em
+2026-08-31. Ele nunca chegou a funcionar — nem o Worker nem o Pages tinham um
+`JWT_SECRET` com valor, então a verificação rodava contra a string `"undefined"`
+— e reescrevia o manifest **sem atualizar o checksum**, dessincronizando o
+catálogo. A publicação pela admin substitui esse caminho por inteiro.
 
 ## 📱 PWA
 

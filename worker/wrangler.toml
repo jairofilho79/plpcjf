@@ -1,7 +1,7 @@
 # Worker `louvores-worker-production`.
 #
-# Ele atende /louvores-manifest.json, /assets/**.pdf e POST /api/upload-louvor,
-# e repassa todo o resto (`fetch(request)`) para o Cloudflare Pages.
+# Ele atende /louvores-manifest.json e /assets/**.pdf, e repassa todo o resto
+# (`fetch(request)`) para o Cloudflare Pages.
 #
 # A rota era `*plpcg.com/*` — o curinga pegava a zona inteira, inclusive o apex,
 # e rodava ANTES do Pages. Os handlers equivalentes em src/routes/ e em
@@ -29,6 +29,3 @@ routes = [{ pattern = "*.plpcg.com/*", zone_name = "plpcg.com" }]
 [[env.production.r2_buckets]]
 binding = "LOUVORES_BUCKET"
 bucket_name = "pls-louvores"
-
-# JWT_SECRET é secret, definido via `wrangler secret put JWT_SECRET --env production`.
-# Enquanto não existir, POST /api/upload-louvor responde 503 (falha fechada).
