@@ -36,8 +36,7 @@ async function servePdf(pathname, platform) {
   const corsHeaders = {
     'Access-Control-Allow-Origin': '*',
     'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type, Authorization',
-    'Content-Type': 'application/pdf'
+    'Access-Control-Allow-Headers': 'Content-Type, Authorization'
   };
 
   try {
@@ -107,6 +106,7 @@ async function servePdf(pathname, platform) {
     return new Response(object.body, {
       headers: {
         ...corsHeaders,
+        'Content-Type': 'application/pdf',
         'Cache-Control': 'public, max-age=86400, stale-while-revalidate=604800',
         ...(object.httpEtag ? { ETag: object.httpEtag } : {}),
         ...(object.uploaded ? { 'Last-Modified': new Date(object.uploaded).toUTCString() } : {})
@@ -127,9 +127,7 @@ async function serveZipPackage(pathname, platform) {
   const corsHeaders = {
     'Access-Control-Allow-Origin': '*',
     'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type, Authorization',
-    'Content-Type': 'application/zip',
-    'Cache-Control': 'public, max-age=86400'
+    'Access-Control-Allow-Headers': 'Content-Type, Authorization'
   };
 
   try {
@@ -170,6 +168,8 @@ async function serveZipPackage(pathname, platform) {
     return new Response(object.body, {
       headers: {
         ...corsHeaders,
+        'Content-Type': 'application/zip',
+        'Cache-Control': 'public, max-age=86400',
         'Content-Disposition': `attachment; filename="${r2Key.split('/').pop() || 'pacote.zip'}"`
       }
     });
