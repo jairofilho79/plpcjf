@@ -12,7 +12,13 @@ const config = {
         include: ['/*'],
         exclude: ['<build>', '<prerendered>']
       }
-    })
+    }),
+    serviceWorker: {
+      // O registro é feito por src/lib/utils/swRegistration.js, que também cuida
+      // do polling de atualização e da limpeza dos listeners. Deixar o registro
+      // embutido do SvelteKit ligado registraria o mesmo worker duas vezes.
+      register: false
+    }
   }
 };
 

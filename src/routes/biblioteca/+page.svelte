@@ -17,7 +17,7 @@
   import LouvorCard from '$lib/components/LouvorCard.svelte';
   import GestureButton from '$lib/components/GestureButton.svelte';
   import { ChevronLeft, ChevronRight } from 'lucide-svelte';
-  import { groupLouvoresByGroupId } from '$lib/utils/groupLouvores.js';
+  import { groupLouvoresByGroupId, compareLouvorNome } from '$lib/utils/groupLouvores.js';
 
   // Normalize classification by removing content in parentheses
   /**
@@ -273,13 +273,8 @@
     const sorted = [...filteredLouvores];
     if ($bibliotecaSort === 'numero') {
       return sorted.sort((a, b) => Number(a.numero || 0) - Number(b.numero || 0));
-    } else {
-      return sorted.sort((a, b) => {
-        const nomeA = (a.nome || '').toLowerCase();
-        const nomeB = (b.nome || '').toLowerCase();
-        return nomeA.localeCompare(nomeB, 'pt-BR');
-      });
     }
+    return sorted.sort(compareLouvorNome);
   })();
   
   // Pagination

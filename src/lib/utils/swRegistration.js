@@ -1,52 +1,108 @@
 // Service Worker Registration Utility
 // Handles registration and communication with the service worker
 
+import { dev } from '$app/environment';
+import { PDF_CACHE_NAME } from '$lib/offline/sw/swCaches.js';
+import { resolveDebugTargetWorker, buildSetDebugMessage } from './swDebugMessage.js';
+
 let swRegistration = null;
 
 /**
+ * Lê a flag de debug (mesma do leitor: `plpcjf_perf_debug`). Nunca lança.
+ * @returns {boolean}
+ */
+function readDebugFlag() {
+  try {
+    return localStorage.getItem('plpcjf_perf_debug') === '1';
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Manda SET_DEBUG a um worker específico. Best-effort: falha em silêncio se
+ * o worker não existir mais ou não aceitar `postMessage`.
+ * @param {ServiceWorker | null | undefined} worker
+ */
+function sendDebugFlag(worker) {
+  if (!worker) return;
+  try {
+    worker.postMessage(buildSetDebugMessage(readDebugFlag()));
+  } catch {
+    // worker terminado ou mensagem rejeitada: segue sem debug.
+  }
+}
+
+/**
  * Register the service worker
- * @returns {Promise<ServiceWorkerRegistration|null>}
+ * @returns {Promise<{ registration: ServiceWorkerRegistration | null, cleanup: () => void }>}
  */
 export async function registerServiceWorker() {
   if (!('serviceWorker' in navigator)) {
     console.warn('[SW Registration] Service workers not supported');
-    return null;
+    return { registration: null, cleanup: () => {} };
   }
 
   try {
-    // Register the service worker
-    const registration = await navigator.serviceWorker.register('/sw.js', {
-      scope: '/'
+    // Caminho padrão do SvelteKit: o worker é gerado a partir de src/service-worker.js.
+    // Em produção o bundle sai sem import/export, então registra como script clássico —
+    // `type: 'module'` só é necessário em dev (Vite serve os módulos soltos) e ainda não
+    // existe em Safari < 16.4 nem Firefox < 111. Mesma escolha que o registro embutido
+    // do SvelteKit faz, e por isso `kit.serviceWorker.register` está desligado.
+    const registration = await navigator.serviceWorker.register('/service-worker.js', {
+      scope: '/',
+      type: dev ? 'module' : 'classic'
     });
-
     swRegistration = registration;
 
-    // Check for updates periodically
-    setInterval(() => {
+    // Propaga o gate de debug ao SW (mesma flag do leitor: plpcjf_perf_debug).
+    // `controller` sozinho não cobre os três casos possíveis neste ponto:
+    // 1) primeira visita: `controller` só é setado depois de `clients.claim()`,
+    //    que roda depois daqui — manda direto para o worker endereçável agora
+    //    (installing/waiting/active), sem esperar `controller` aparecer;
+    // 2) deploy com a aba já aberta: o worker novo só assume o controle bem
+    //    depois deste registro — `controllerchange` reenvia a flag para quem
+    //    estiver no controle a cada troca de worker, presente ou futura;
+    // 3) visita repetida sem update em voo: já cai no caso 1 (active).
+    sendDebugFlag(resolveDebugTargetWorker(registration));
+
+    const onControllerChange = () => {
+      sendDebugFlag(navigator.serviceWorker.controller);
+    };
+    navigator.serviceWorker.addEventListener('controllerchange', onControllerChange);
+
+    // Verificar atualizações periodicamente (a cada hora)
+    const updateIntervalId = setInterval(() => {
       registration.update();
-    }, 60 * 60 * 1000); // Check every hour
+    }, 60 * 60 * 1000);
 
-    // Handle updates
-    registration.addEventListener('updatefound', () => {
+    const onUpdateFound = () => {
       const newWorker = registration.installing;
-      
-      if (newWorker) {
-        newWorker.addEventListener('statechange', () => {
-          if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
-            // New service worker available
-            console.log('[SW Registration] New service worker available');
-            // Notify user about update
-            dispatchUpdateEvent();
-          }
-        });
-      }
-    });
+      if (!newWorker) return;
+      newWorker.addEventListener('statechange', () => {
+        if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
+          // Novo service worker disponível
+          debugLog('[SW Registration] New service worker available');
+          dispatchUpdateEvent();
+        }
+      });
+    };
 
-    console.log('[SW Registration] Service worker registered successfully');
-    return registration;
+    registration.addEventListener('updatefound', onUpdateFound);
+
+    debugLog('[SW Registration] Service worker registered successfully');
+
+    return {
+      registration,
+      cleanup: () => {
+        clearInterval(updateIntervalId);
+        registration.removeEventListener('updatefound', onUpdateFound);
+        navigator.serviceWorker.removeEventListener('controllerchange', onControllerChange);
+      }
+    };
   } catch (error) {
     console.error('[SW Registration] Failed to register service worker:', error);
-    return null;
+    return { registration: null, cleanup: () => {} };
   }
 }
 
@@ -60,7 +116,7 @@ export async function unregisterServiceWorker() {
 
   try {
     const success = await swRegistration.unregister();
-    console.log('[SW Registration] Service worker unregistered:', success);
+    debugLog('[SW Registration] Service worker unregistered:', success);
     swRegistration = null;
     return success;
   } catch (error) {
@@ -70,29 +126,60 @@ export async function unregisterServiceWorker() {
 }
 
 /**
- * Send a message to the service worker and wait for response
- * @param {object} message - Message to send
+ * Envia mensagem ao Service Worker e aguarda resposta.
+ * Cancela o timeout e fecha as portas nos dois caminhos — o de sucesso
+ * vazava um timer de 5 min e um par de MessagePort por chamada.
+ *
+ * @param {object} message
+ * @param {{ timeoutMs?: number }} [options]
  * @returns {Promise<any>}
  */
-export function sendMessageToSW(message) {
+export function sendMessageToSW(message, options = {}) {
   return new Promise((resolve, reject) => {
     if (!navigator.serviceWorker.controller) {
       reject(new Error('No service worker controller'));
       return;
     }
 
-    const messageChannel = new MessageChannel();
+    // Padrão de 5 minutos: `clearCache`, `getCachedPDFs`, `clearPdfFromSwCache` e
+    // `clearLouvoresManifestFromSwCache` passam por aqui, e `handleClearCache` no
+    // worker pode levar bem mais que 30s para apagar centenas de MB em Android
+    // fraco. Um timeout curto rejeita a promise enquanto o worker ainda está
+    // apagando — a tela mostra falha, mas não houve perda de dado nenhuma.
+    const timeoutMs = Number.isFinite(options.timeoutMs) ? options.timeoutMs : 5 * 60 * 1000;
+    const channel = new MessageChannel();
+    /** @type {ReturnType<typeof setTimeout> | null} */
+    let timeoutId = null;
 
-    messageChannel.port1.onmessage = (event) => {
+    const cleanup = () => {
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+        timeoutId = null;
+      }
+      try { channel.port1.onmessage = null; } catch {}
+      try { channel.port1.close?.(); } catch {}
+      try { channel.port2.close?.(); } catch {}
+    };
+
+    channel.port1.onmessage = (event) => {
+      cleanup();
       resolve(event.data);
     };
 
-    navigator.serviceWorker.controller.postMessage(message, [messageChannel.port2]);
-
-    // Timeout after 5 minutes for long operations
-    setTimeout(() => {
+    timeoutId = setTimeout(() => {
+      cleanup();
       reject(new Error('Service worker message timeout'));
-    }, 5 * 60 * 1000);
+    }, timeoutMs);
+
+    try {
+      navigator.serviceWorker.controller.postMessage(message, [channel.port2]);
+    } catch (err) {
+      // Mensagem não clonável ou porta inválida: postMessage lança de forma
+      // síncrona. Sem este catch, a promise nunca resolvia por essa saída e o
+      // timer/porta só eram liberados 30s depois, no timeout.
+      cleanup();
+      reject(err);
+    }
   });
 }
 
@@ -224,7 +311,7 @@ async function isCacheStorageAvailable() {
   
   try {
     // Try to open the PDF cache to verify it exists
-    const cache = await caches.open('plpc-pdfs');
+    const cache = await caches.open(PDF_CACHE_NAME);
     // If we can open it, cache storage is available
     return true;
   } catch (err) {
@@ -245,7 +332,7 @@ export async function getCachedPDFsFast() {
   
   // Se cache storage não está disponível, invalidar cache do localStorage
   if (!cacheStorageAvailable) {
-    console.log('[SW Message] Cache storage not available, invalidating localStorage cache');
+    debugLog('[SW Message] Cache storage not available, invalidating localStorage cache');
     invalidateCachedPDFsLocal();
     return [];
   }
@@ -258,7 +345,7 @@ export async function getCachedPDFsFast() {
         const { pdfs, timestamp } = JSON.parse(cached);
         // Verificar se cache ainda é válido (TTL de 5 minutos)
         if (Date.now() - timestamp < CACHE_TTL) {
-          console.log('[SW Message] Using cached PDFs list from localStorage');
+          debugLog('[SW Message] Using cached PDFs list from localStorage');
           return pdfs;
         }
       }
@@ -275,7 +362,7 @@ export async function getCachedPDFsFast() {
   if (pdfs.length === 0 && cacheStorageAvailable) {
     // Verificar diretamente no cache storage se há PDFs
     try {
-      const cache = await caches.open('plpc-pdfs');
+      const cache = await caches.open(PDF_CACHE_NAME);
       const requests = await cache.keys();
       const pdfCount = requests.filter(req => {
         try {
@@ -290,7 +377,7 @@ export async function getCachedPDFsFast() {
       
       // Se não há PDFs no cache storage, invalidar localStorage
       if (pdfCount === 0) {
-        console.log('[SW Message] No PDFs in cache storage, invalidating localStorage cache');
+        debugLog('[SW Message] No PDFs in cache storage, invalidating localStorage cache');
         invalidateCachedPDFsLocal();
         return [];
       }
@@ -324,7 +411,7 @@ export function invalidateCachedPDFsLocal() {
   if (typeof window !== 'undefined' && typeof localStorage !== 'undefined') {
     try {
       localStorage.removeItem(CACHED_PDFS_LOCAL_KEY);
-      console.log('[SW Message] Invalidated local PDFs cache');
+      debugLog('[SW Message] Invalidated local PDFs cache');
     } catch (err) {
       console.warn('[SW Message] Failed to invalidate local cache:', err);
     }
@@ -470,7 +557,7 @@ export function setupServiceWorkerMessageListener() {
 
   const messageHandler = async (event) => {
     if (event.data && event.data.type === 'CACHE_UPDATED') {
-      console.log('[SW Registration] Cache updated notification received from Service Worker');
+      debugLog('[SW Registration] Cache updated notification received from Service Worker');
       
       // Invalidate local cache when SW cache is updated
       invalidateCachedPDFsLocal();
@@ -510,5 +597,20 @@ export function setupServiceWorkerMessageListener() {
   return () => {
     navigator.serviceWorker.removeEventListener('message', messageHandler);
   };
+}
+
+/**
+ * Log de diagnóstico, ativado por `localStorage.plpcjf_perf_debug = '1'`.
+ * Erros e avisos continuam sempre visíveis — só o ruído de fluxo normal é filtrado.
+ * @param {...unknown} args
+ */
+export function debugLog(...args) {
+  try {
+    if (typeof localStorage !== 'undefined' && localStorage.getItem('plpcjf_perf_debug') === '1') {
+      console.log(...args);
+    }
+  } catch {
+    // ignorar
+  }
 }
 

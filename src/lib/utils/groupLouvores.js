@@ -34,9 +34,7 @@ export function resolveGroupId(louvor) {
  * @param {any[]} list
  * @returns {{ groupId: string, nome: string, numero: string, classificacao: string, materials: any[] }[]}
  */
-export function groupLouvoresByGroupId(list) {
-  if (!Array.isArray(list) || list.length === 0) return [];
-
+function computeGroups(list) {
   /** @type {Map<string, any[]>} */
   const buckets = new Map();
   /** @type {string[]} */
@@ -64,6 +62,48 @@ export function groupLouvoresByGroupId(list) {
       materials
     };
   });
+}
+
+/**
+ * Colador único. Criar um Intl.Collator por comparação — que é o que
+ * String.prototype.localeCompare faz — é uma das operações mais caras em JS,
+ * e aqui roda n log n vezes.
+ */
+const nomeCollator = new Intl.Collator('pt-BR', { sensitivity: 'base', numeric: true });
+
+/**
+ * Comparador estável por nome (pt-BR), usando o colador único do módulo.
+ * @param {any} a
+ * @param {any} b
+ * @returns {number}
+ */
+export function compareLouvorNome(a, b) {
+  return nomeCollator.compare(a?.nome || '', b?.nome || '');
+}
+
+/**
+ * Memoização de um slot só: a home chama esta função três vezes por interação,
+ * sempre com a mesma referência de lista.
+ * @type {{ input: any[] | null, output: any[] }}
+ */
+let lastGrouping = { input: null, output: [] };
+
+/**
+ * Agrupa entradas do manifesto por groupId.
+ *
+ * AVISO: o array devolvido é memoizado por referência de entrada — não mute
+ * o resultado. Para uma cópia mutável, use [...groupLouvoresByGroupId(list)].
+ *
+ * @param {any[]} list
+ * @returns {{ groupId: string, nome: string, numero: string, classificacao: string, materials: any[] }[]}
+ */
+export function groupLouvoresByGroupId(list) {
+  if (!Array.isArray(list) || list.length === 0) return [];
+  if (lastGrouping.input === list) return lastGrouping.output;
+
+  const output = computeGroups(list);
+  lastGrouping = { input: list, output };
+  return output;
 }
 
 /**

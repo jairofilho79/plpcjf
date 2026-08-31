@@ -12,11 +12,21 @@ import {
   invalidateCachedPDFsLocal
 } from '$lib/utils/swRegistration';
 import { iterateZipEntriesCd } from '$lib/offline/import/zipCdReader.js';
-import { buildPdfCacheIndex } from '$lib/utils/pdfCacheIndex.js';
+import { buildPdfCacheIndex, toComparablePath } from '$lib/utils/pdfCacheIndex.js';
+import {
+  readCompletedParts,
+  markPartCompleted,
+  clearCompletedParts,
+  clearAllCompletedParts,
+  computePartsFingerprint,
+  looksLikeCaptivePortal,
+  fetchWithRetry,
+  excludeSkippedPartFromBytesTotal
+} from '$lib/offline/download/partProgress.js';
 import { louvores } from './louvores';
 import { validateManifestsIntegrity } from '$lib/utils/manifestValidation';
 import { CATEGORY_OPTIONS } from './filters';
-import { atobUTF8 } from '$lib/utils/pathUtils';
+import { atobUTF8, getPdfRelPath } from '$lib/utils/pathUtils';
 import { findMissingPdfs, findRequiredPackages } from '$lib/utils/pdfValidation';
 import { getConfig } from '$lib/offline/core/OfflineConfig.js';
 import { 
@@ -49,7 +59,7 @@ let zipDownloadCancelled = false;
 /**
  * Normalize package URL - converts absolute URLs to relative paths
  * Handles cases where manifest contains absolute URLs with old domains (e.g., plpcjf.org)
- * @param {string} url - Package URL (can be absolute, relative, or filename)
+ * @param {string | undefined} url - Package URL (can be absolute, relative, or filename); pode faltar no manifesto
  * @param {string} filename - Fallback filename if url is not available
  * @returns {string} Normalized relative URL
  */
@@ -131,7 +141,15 @@ const initialState = {
   downloadPhase: 'idle', // Current download phase: 'idle' | 'downloading' | 'storing' | 'complete'
   phaseProgress: 0, // Progress of current phase (0-100)
   currentPackage: 0, // Current package being processed (1-indexed)
-  totalPackages: 0 // Total number of packages to download
+  totalPackages: 0, // Total number of packages to download
+
+  // Progresso legível do download por partes (ver startZipDownload / startZipDownloadWithSpecificParts)
+  currentPart: 0, // Parte atual (1-indexed) entre todas as categorias deste download
+  totalParts: 0, // Total de partes deste download
+  currentPartName: '', // Nome do arquivo da parte atual (ex.: "Partitura-4.zip")
+  bytesDownloaded: 0, // Bytes já baixados neste download (soma real, via blob.size)
+  bytesTotal: /** @type {number | null} */ (0), // Estimativa de bytes do download; null quando o manifesto não permite estimar com segurança
+  phase: /** @type {'baixando' | 'extraindo' | 'gravando' | null} */ (null) // Fase da parte atual (nada em andamento/parte pulada = null)
 };
 
 const offlineState = writable(initialState);
@@ -570,10 +588,201 @@ function getPackageParts(category, manifest) {
 }
 
 /**
+ * `localStorage` quando dá para usar, `null` quando não dá.
+ *
+ * No Firefox com dados do site bloqueados o próprio getter global lança. Como as
+ * chamadas de retomada acontecem no meio do download, um throw aqui derrubaria o
+ * download inteiro com "Erro ao baixar pacotes ZIP." — as funções de
+ * `partProgress.js` toleram `null` e apenas perdem a retomada.
+ *
+ * @returns {Storage | null}
+ */
+function safeStorage() {
+  try {
+    return typeof localStorage === 'undefined' ? null : localStorage;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Grava em `localStorage` sem derrubar quem chamou se o storage estiver
+ * indisponível ou bloqueado.
+ *
+ * Existe porque um `localStorage.setItem` desprotegido, chamado logo depois do
+ * laço de download ter dado certo, faz o Firefox com dados do site bloqueados
+ * lançar ali — e esse throw cai no `catch` externo, que reporta "Erro ao baixar
+ * pacotes ZIP." mesmo com todos os PDFs já gravados no cache com sucesso.
+ *
+ * @param {string} key
+ * @param {string} value
+ */
+function safeSetItem(key, value) {
+  const storage = safeStorage();
+  if (!storage) return;
+  try {
+    storage.setItem(key, value);
+  } catch {
+    // Sem persistência: não deve derrubar um download que já terminou.
+  }
+}
+
+/**
+ * Soma o tamanho (`size`, em bytes) das partes, quando confiável.
+ *
+ * `null` quando qualquer parte não declara um tamanho válido — mostrar um total
+ * de bytes errado (ou uma barra que passa de 100%) é pior do que não mostrar
+ * total nenhum.
+ *
+ * @param {Array<{ size?: number }>} parts
+ * @returns {number | null}
+ */
+function sumKnownPartsSize(parts) {
+  let total = 0;
+  for (const part of parts) {
+    const size = Number(part?.size);
+    if (!Number.isFinite(size) || size <= 0) return null;
+    total += size;
+  }
+  return total;
+}
+
+/**
+ * Mesma soma de `sumKnownPartsSize`, para um mapa categoria -> partes.
+ * @param {Record<string, Array<{ size?: number }>>} partsByCategory
+ * @returns {number | null}
+ */
+function sumPartsSizeByCategory(partsByCategory) {
+  return sumKnownPartsSize(Object.values(partsByCategory).flat());
+}
+
+/**
+ * O laço percorreu todas as partes que a categoria tem no manifesto?
+ *
+ * Só nesse caso a retomada pode ser apagada. Um "baixar faltantes" que rodou 1
+ * de 17 partes não pode apagar o estado de um download completo interrompido na
+ * parte 12 — apagar ali custaria ao usuário os ~300 MB de novo.
+ *
+ * @param {string | number} category
+ * @param {any} manifest
+ * @param {Array<any>} processedParts
+ * @returns {boolean}
+ */
+function coversEveryPart(category, manifest, processedParts) {
+  const allParts = getPackageParts(category, manifest);
+  if (allParts.length === 0) return true;
+  const seen = new Set(processedParts.map((part) => part?.filename));
+  return allParts.every((part) => seen.has(part?.filename));
+}
+
+/**
+ * Identificação da versão do manifesto, usada na impressão digital das partes.
+ * Se o manifesto for regerado, a retomada antiga deixa de valer.
+ * @param {any} manifest
+ * @returns {string}
+ */
+function getManifestTag(manifest) {
+  if (!manifest) return '';
+  return `${manifest.version ?? ''}|${manifest.timestamp ?? ''}`;
+}
+
+/**
+ * Impressão digital do conjunto de partes de uma categoria.
+ * Prefere a lista completa do manifesto; sem ela, usa as partes pedidas.
+ * @param {string | number} category
+ * @param {any} manifest
+ * @param {Array<any>} fallbackParts
+ * @returns {string}
+ */
+function fingerprintForCategory(category, manifest, fallbackParts) {
+  const allParts = getPackageParts(category, manifest);
+  const source = allParts.length > 0 ? allParts : fallbackParts;
+  return computePartsFingerprint(source, getManifestTag(manifest));
+}
+
+/**
+ * Conjunto estrito dos caminhos que já estão no cache de PDFs.
+ *
+ * Estrito de propósito: `buildPdfCacheIndex` também casa por nome de arquivo, e
+ * como quase toda parte tem um "Coro.pdf" isso daria falso positivo justamente
+ * na hora de decidir se uma parte pode ser pulada.
+ *
+ * @param {Cache} cache
+ * @returns {Promise<Set<string> | null>} null quando não deu para ler o cache
+ */
+async function readCachedPdfPaths(cache) {
+  try {
+    const keys = await cache.keys();
+    /** @type {Set<string>} */
+    const paths = new Set();
+    for (const request of keys) {
+      const path = toComparablePath(request.url);
+      if (path) paths.add(path);
+    }
+    return paths;
+  } catch (error) {
+    console.warn('[Offline Store] Não foi possível listar o cache de PDFs:', error);
+    return null;
+  }
+}
+
+/**
+ * Caminhos relativos ("assets/…") dos PDFs declarados em uma parte do manifesto.
+ * @param {any} part
+ * @returns {string[]}
+ */
+function getPartPdfPaths(part) {
+  const ids = Array.isArray(part?.pdfs) ? part.pdfs : [];
+  /** @type {string[]} */
+  const paths = [];
+  for (const pdfId of ids) {
+    if (typeof pdfId !== 'string') continue;
+    const relPath = getPdfRelPath({ pdfId });
+    if (relPath) paths.push(relPath);
+  }
+  return paths;
+}
+
+/**
+ * Decide se uma parte marcada como concluída pode mesmo ser pulada.
+ *
+ * Só pula se todos os PDFs declarados na parte estiverem de fato no cache: a
+ * marca no localStorage sozinha não basta (o usuário pode ter limpado o cache
+ * entre as duas tentativas).
+ *
+ * @param {any} part
+ * @param {Set<string> | null} cachedPaths
+ * @returns {{ skippable: boolean, paths: string[] }}
+ */
+function verifyCompletedPart(part, cachedPaths) {
+  const paths = getPartPdfPaths(part);
+  if (!cachedPaths || paths.length === 0) {
+    return { skippable: false, paths };
+  }
+  const skippable = paths.every((path) => cachedPaths.has(path));
+  return { skippable, paths };
+}
+
+/**
+ * Erro traduzido para respostas que chegam OK mas não são um pacote —
+ * o caso clássico é o wi-fi de portal cativo devolvendo a página de login.
+ * @param {Response} response
+ * @param {string} filename
+ */
+function assertPackageResponse(response, filename) {
+  if (looksLikeCaptivePortal(response)) {
+    throw new Error(
+      `A rede devolveu uma página de login em vez do pacote ${filename}. ` +
+        'Confirme o acesso ao wi-fi e tente novamente.'
+    );
+  }
+}
+
+/**
  * Download ZIP packages with specific parts only (optimized)
  * @param {Array} categories - Categories to download
  * @param {Array} pdfUrls - All PDF URLs for validation
- * @param {Object} partsByCategory - Map of category -> array of specific parts to download
+ * @param {Record<string, Array<{ filename: string, url?: string, size?: number, pdfs?: string[] }>>} partsByCategory - Map of category -> array of specific parts to download
  * @param {Object} manifest - Offline manifest
  */
 async function startZipDownloadWithSpecificParts(categories, pdfUrls, partsByCategory, manifest) {
@@ -604,6 +813,10 @@ async function startZipDownloadWithSpecificParts(categories, pdfUrls, partsByCat
   const remaining = new Set(pdfUrls.map(prepareForComparison));
   let completed = 0;
 
+  const totalParts = Object.values(partsByCategory).reduce((n, parts) => n + parts.length, 0);
+  const bytesTotal = sumPartsSizeByCategory(partsByCategory); // number | null (null = não estimável)
+  let partIndex = 0;
+
   offlineState.update(state => ({
     ...state,
     downloading: true,
@@ -612,12 +825,20 @@ async function startZipDownloadWithSpecificParts(categories, pdfUrls, partsByCat
     completed: 0,
     failed: 0,
     total,
+    currentPart: 0,
+    totalParts,
+    currentPartName: '',
+    bytesDownloaded: 0,
+    bytesTotal,
+    phase: null,
     selectedCategories: categories,
     error: null
   }));
 
   try {
     const cache = await openPdfCache();
+    // Pode ser null (Firefox com dados do site bloqueados); partProgress tolera.
+    const partsStorage = safeStorage();
 
     // Iterar pelas categorias
     for (const category of categories) {
@@ -635,20 +856,83 @@ async function startZipDownloadWithSpecificParts(categories, pdfUrls, partsByCat
 
       console.log(`[Offline Store] Downloading ${requiredParts.length} parts for category ${category}`);
 
+      // Retomada: partes gravadas em uma tentativa anterior deste mesmo conjunto
+      // de pacotes. A impressão digital garante que não estamos emendando
+      // partes novas do servidor em partes velhas do dispositivo.
+      const partsFingerprint = fingerprintForCategory(category, manifest, requiredParts);
+      const completedParts = readCompletedParts(partsStorage, category, partsFingerprint);
+      const cachedPaths = completedParts.size > 0 ? await readCachedPdfPaths(cache) : null;
+
       // Baixar apenas as partes necessárias
       for (const part of requiredParts) {
         if (zipDownloadCancelled) {
           throw new Error('DOWNLOAD_CANCELLED');
         }
 
+        // Conta a parte no total mesmo quando ela vai ser pulada: é isso que
+        // impede a retomada de "voltar" para a parte 1 de N.
+        partIndex++;
+        offlineState.update(s => ({
+          ...s,
+          currentPart: partIndex,
+          currentPartName: part.filename
+        }));
+
+        if (completedParts.has(part.filename)) {
+          const { skippable, paths } = verifyCompletedPart(part, cachedPaths);
+
+          if (skippable) {
+            console.info(`[Offline Store] Parte já baixada, pulando: ${part.filename}`);
+
+            for (const relPath of paths) {
+              if (remaining.delete(relPath)) {
+                completed++;
+              }
+            }
+
+            offlineState.update(state => ({
+              ...state,
+              completed,
+              failed: 0,
+              // Sem fase: nada está sendo baixado/extraído/gravado agora, só
+              // reconhecido como já pronto de uma tentativa anterior.
+              phase: null,
+              // A parte pulada não passa pelo fetch que soma bytesDownloaded:
+              // encolhe o total pelo tamanho dela para o contador de bytes
+              // continuar honesto numa retomada (senão trava abaixo de 100%
+              // com a barra de progresso já cheia).
+              bytesTotal: excludeSkippedPartFromBytesTotal(state.bytesTotal, part.size),
+              progress: total === 0 ? 100 : Math.min(99, Math.floor((completed / total) * 100))
+            }));
+
+            continue;
+          }
+
+          console.warn(
+            `[Offline Store] Parte marcada como concluída mas ausente do cache, refazendo: ${part.filename}`
+          );
+        }
+
         const packageUrl = normalizePackageUrl(part.url, part.filename);
         let response;
 
+        offlineState.update(s => ({ ...s, phase: 'baixando' }));
+
         try {
-          response = await fetch(packageUrl, {
-            signal: zipDownloadController.signal,
-            cache: 'no-store'
-          });
+          response = await fetchWithRetry(
+            packageUrl,
+            { signal: zipDownloadController.signal, cache: 'no-store' },
+            {
+              attempts: 4,
+              signal: zipDownloadController.signal,
+              onRetry: (attempt, error) => {
+                console.warn(
+                  `[Offline Store] Tentativa ${attempt} de ${part.filename}:`,
+                  error.message
+                );
+              }
+            }
+          );
         } catch (err) {
           if (zipDownloadCancelled || err?.name === 'AbortError') {
             throw new Error('DOWNLOAD_CANCELLED');
@@ -660,10 +944,25 @@ async function startZipDownloadWithSpecificParts(categories, pdfUrls, partsByCat
           throw new Error(`Falha ao baixar o pacote ${part.filename} (${response.status})`);
         }
 
-        // Extrai as entradas do ZIP uma a uma (streaming via central directory),
-        // em vez de descomprimir o pacote inteiro em memória de uma só vez.
+        assertPackageResponse(response, part.filename);
+
+        // Ainda 'baixando': é em response.blob() que o corpo do pacote é de
+        // fato lido da rede — no wi-fi fraco que esta função existe para
+        // suportar, é a etapa mais lenta. Rotular 'extraindo' antes disso
+        // mostrava a fase errada com o contador de bytes parado no lugar.
         const blob = await response.blob();
 
+        // `blob.size` é o tamanho real transferido — mais confiável que o `size`
+        // declarado no manifesto, que só serve para a estimativa inicial. O
+        // download terminou aqui, então os bytes somam já nesta atualização.
+        offlineState.update(s => ({
+          ...s,
+          phase: 'extraindo',
+          bytesDownloaded: s.bytesDownloaded + blob.size
+        }));
+
+        // Extrai as entradas do ZIP uma a uma (streaming via central directory),
+        // em vez de descomprimir o pacote inteiro em memória de uma só vez.
         for await (const { name, data } of iterateZipEntriesCd(blob, zipDownloadController.signal)) {
           if (zipDownloadCancelled) {
             throw new Error('DOWNLOAD_CANCELLED');
@@ -695,18 +994,44 @@ async function startZipDownloadWithSpecificParts(categories, pdfUrls, partsByCat
             ...state,
             completed,
             failed: 0,
-            progress
+            progress,
+            // Só passa a 'gravando' na primeira escrita real: até aqui o laço
+            // ainda está lendo o índice central do ZIP e decidindo o que interessa.
+            phase: 'gravando'
           }));
         }
 
         // Remove o arquivo ZIP do cache após processar todos os PDFs
         const fullPackageUrl = createUrlUtf8(packageUrl, location.origin);
         await removeZipFromCache(fullPackageUrl);
+
+        // Parte inteira gravada: se o download cair na próxima, esta não volta.
+        markPartCompleted(partsStorage, category, part.filename, partsFingerprint);
+      }
+
+      // Categoria concluída — mas só limpa se este laço cobriu todas as partes
+      // que ela tem no manifesto. Ver `coversEveryPart`.
+      if (coversEveryPart(category, manifest, requiredParts)) {
+        clearCompletedParts(partsStorage, category);
       }
     }
 
     if (zipDownloadCancelled) {
       throw new Error('DOWNLOAD_CANCELLED');
+    }
+
+    // Concilia o que sobrou com o cache real. Sem isso, os PDFs vindos de partes
+    // puladas na retomada seriam contados como "não encontrados".
+    if (remaining.size > 0) {
+      const cachedAfterDownload = await readCachedPdfPaths(cache);
+      if (cachedAfterDownload) {
+        for (const path of [...remaining]) {
+          if (cachedAfterDownload.has(toComparablePath(path))) {
+            remaining.delete(path);
+            completed++;
+          }
+        }
+      }
     }
 
     const failed = remaining.size;
@@ -726,19 +1051,22 @@ async function startZipDownloadWithSpecificParts(categories, pdfUrls, partsByCat
       progress: finalProgress,
       completed: finalCompleted,
       failed,
-      error: errorMessage
+      error: errorMessage,
+      phase: null
     }));
 
     if (!zipDownloadCancelled) {
-      localStorage.setItem(ALLOW_OFFLINE_KEY, 'true');
+      // Grava sem derrubar um download que já terminou com sucesso: ver
+      // `safeSetItem`.
+      safeSetItem(ALLOW_OFFLINE_KEY, 'true');
       /**
        * @type {string | any[]}
        */
       const louvoresData = get(louvores);
       if (louvoresData && louvoresData.length > 0) {
         const currentHash = getManifestHash(louvoresData);
-        localStorage.setItem(LAST_MANIFEST_HASH_KEY, currentHash);
-        
+        safeSetItem(LAST_MANIFEST_HASH_KEY, currentHash);
+
         // Update PDF index after ZIP extraction (force update after download)
         if (browser) {
           const { updatePdfIndexInBackground, invalidatePdfIndexSession } = await import('$lib/utils/pdfIndex');
@@ -790,6 +1118,7 @@ async function startZipDownloadWithSpecificParts(categories, pdfUrls, partsByCat
     offlineState.update(state => ({
       ...state,
       downloading: false,
+      phase: null,
       error: error.message === 'DOWNLOAD_CANCELLED' || error?.name === 'AbortError'
         ? 'Download cancelado pelo usuário.'
         : error.message || 'Erro ao baixar pacotes ZIP.'
@@ -1503,6 +1832,17 @@ async function startZipDownload(categories, pdfUrls, alreadyDownloadedCategories
     }
   }
 
+  // Partes de todas as categorias, calculadas de uma vez para o total do
+  // cabeçalho (parte X de Y) e para a estimativa de bytes.
+  /** @type {Record<string, any[]>} */
+  const allPartsByCategory = {};
+  for (const category of categories) {
+    allPartsByCategory[category] = getPackageParts(category, manifest);
+  }
+  const totalParts = Object.values(allPartsByCategory).reduce((n, parts) => n + parts.length, 0);
+  const bytesTotal = sumPartsSizeByCategory(allPartsByCategory); // number | null
+  let partIndex = 0;
+
   offlineState.update(state => ({
     ...state,
     downloading: true,
@@ -1511,25 +1851,38 @@ async function startZipDownload(categories, pdfUrls, alreadyDownloadedCategories
     completed: 0,
     failed: 0,
     total,
+    currentPart: 0,
+    totalParts,
+    currentPartName: '',
+    bytesDownloaded: 0,
+    bytesTotal,
+    phase: null,
     selectedCategories: categories,
     error: null
   }));
 
   try {
     const cache = await openPdfCache();
+    // Pode ser null (Firefox com dados do site bloqueados); partProgress tolera.
+    const partsStorage = safeStorage();
 
     for (const category of categories) {
       if (zipDownloadCancelled) {
         throw new Error('DOWNLOAD_CANCELLED');
       }
 
-      // Get all package parts for this category from manifest
-      const packageParts = getPackageParts(category, manifest);
-      
+      // Partes desta categoria, já calculadas acima.
+      const packageParts = allPartsByCategory[category] || [];
+
       if (packageParts.length === 0) {
         console.warn(`[Offline Store] No package parts found for category ${category}`);
         continue;
       }
+
+      // Retomada: mesmas regras da versão por partes específicas.
+      const partsFingerprint = fingerprintForCategory(category, manifest, packageParts);
+      const completedParts = readCompletedParts(partsStorage, category, partsFingerprint);
+      const cachedPaths = completedParts.size > 0 ? await readCachedPdfPaths(cache) : null;
 
       // Download each part
       for (const part of packageParts) {
@@ -1537,14 +1890,70 @@ async function startZipDownload(categories, pdfUrls, alreadyDownloadedCategories
           throw new Error('DOWNLOAD_CANCELLED');
         }
 
+        // Conta a parte no total mesmo quando ela vai ser pulada: é isso que
+        // impede a retomada de "voltar" para a parte 1 de N.
+        partIndex++;
+        offlineState.update(s => ({
+          ...s,
+          currentPart: partIndex,
+          currentPartName: part.filename
+        }));
+
+        if (completedParts.has(part.filename)) {
+          const { skippable, paths } = verifyCompletedPart(part, cachedPaths);
+
+          if (skippable) {
+            console.info(`[Offline Store] Parte já baixada, pulando: ${part.filename}`);
+
+            for (const relPath of paths) {
+              if (remaining.delete(relPath)) {
+                completed++;
+              }
+            }
+
+            offlineState.update(state => ({
+              ...state,
+              completed,
+              failed: 0,
+              // Sem fase: nada está sendo baixado/extraído/gravado agora, só
+              // reconhecido como já pronto de uma tentativa anterior.
+              phase: null,
+              // A parte pulada não passa pelo fetch que soma bytesDownloaded:
+              // encolhe o total pelo tamanho dela para o contador de bytes
+              // continuar honesto numa retomada (senão trava abaixo de 100%
+              // com a barra de progresso já cheia).
+              bytesTotal: excludeSkippedPartFromBytesTotal(state.bytesTotal, part.size),
+              progress: total === 0 ? 100 : Math.min(99, Math.floor((completed / total) * 100))
+            }));
+
+            continue;
+          }
+
+          console.warn(
+            `[Offline Store] Parte marcada como concluída mas ausente do cache, refazendo: ${part.filename}`
+          );
+        }
+
         const packageUrl = normalizePackageUrl(part.url, part.filename);
         let response;
 
+        offlineState.update(s => ({ ...s, phase: 'baixando' }));
+
         try {
-          response = await fetch(packageUrl, {
-            signal: zipDownloadController.signal,
-            cache: 'no-store'
-          });
+          response = await fetchWithRetry(
+            packageUrl,
+            { signal: zipDownloadController.signal, cache: 'no-store' },
+            {
+              attempts: 4,
+              signal: zipDownloadController.signal,
+              onRetry: (attempt, error) => {
+                console.warn(
+                  `[Offline Store] Tentativa ${attempt} de ${part.filename}:`,
+                  error.message
+                );
+              }
+            }
+          );
         } catch (err) {
           if (zipDownloadCancelled || err?.name === 'AbortError') {
             throw new Error('DOWNLOAD_CANCELLED');
@@ -1556,10 +1965,25 @@ async function startZipDownload(categories, pdfUrls, alreadyDownloadedCategories
           throw new Error(`Falha ao baixar o pacote ${part.filename} (${response.status})`);
         }
 
-        // Extrai as entradas do ZIP uma a uma (streaming via central directory),
-        // em vez de descomprimir o pacote inteiro em memória de uma só vez.
+        assertPackageResponse(response, part.filename);
+
+        // Ainda 'baixando': é em response.blob() que o corpo do pacote é de
+        // fato lido da rede — no wi-fi fraco que esta função existe para
+        // suportar, é a etapa mais lenta. Rotular 'extraindo' antes disso
+        // mostrava a fase errada com o contador de bytes parado no lugar.
         const blob = await response.blob();
 
+        // `blob.size` é o tamanho real transferido — mais confiável que o `size`
+        // declarado no manifesto, que só serve para a estimativa inicial. O
+        // download terminou aqui, então os bytes somam já nesta atualização.
+        offlineState.update(s => ({
+          ...s,
+          phase: 'extraindo',
+          bytesDownloaded: s.bytesDownloaded + blob.size
+        }));
+
+        // Extrai as entradas do ZIP uma a uma (streaming via central directory),
+        // em vez de descomprimir o pacote inteiro em memória de uma só vez.
         for await (const { name, data } of iterateZipEntriesCd(blob, zipDownloadController.signal)) {
           if (zipDownloadCancelled) {
             throw new Error('DOWNLOAD_CANCELLED');
@@ -1591,18 +2015,43 @@ async function startZipDownload(categories, pdfUrls, alreadyDownloadedCategories
             ...state,
             completed,
             failed: 0,
-            progress
+            progress,
+            // Só passa a 'gravando' na primeira escrita real: até aqui o laço
+            // ainda está lendo o índice central do ZIP e decidindo o que interessa.
+            phase: 'gravando'
           }));
         }
 
         // Remove o arquivo ZIP do cache após processar todos os PDFs
         const fullPackageUrl = createUrlUtf8(packageUrl, location.origin);
         await removeZipFromCache(fullPackageUrl);
+
+        // Parte inteira gravada: se o download cair na próxima, esta não volta.
+        markPartCompleted(partsStorage, category, part.filename, partsFingerprint);
+      }
+
+      // Categoria concluída — aqui o laço é sempre o conjunto completo de partes.
+      if (coversEveryPart(category, manifest, packageParts)) {
+        clearCompletedParts(partsStorage, category);
       }
     }
 
     if (zipDownloadCancelled) {
       throw new Error('DOWNLOAD_CANCELLED');
+    }
+
+    // Concilia o que sobrou com o cache real. Sem isso, os PDFs vindos de partes
+    // puladas na retomada seriam contados como "não encontrados".
+    if (remaining.size > 0) {
+      const cachedAfterDownload = await readCachedPdfPaths(cache);
+      if (cachedAfterDownload) {
+        for (const path of [...remaining]) {
+          if (cachedAfterDownload.has(toComparablePath(path))) {
+            remaining.delete(path);
+            completed++;
+          }
+        }
+      }
     }
 
     const failed = remaining.size;
@@ -1621,19 +2070,22 @@ async function startZipDownload(categories, pdfUrls, alreadyDownloadedCategories
       progress: finalProgress,
       completed: finalCompleted,
       failed,
-      error: errorMessage
+      error: errorMessage,
+      phase: null
     }));
 
     if (!zipDownloadCancelled) {
-      localStorage.setItem(ALLOW_OFFLINE_KEY, 'true');
+      // Grava sem derrubar um download que já terminou com sucesso: ver
+      // `safeSetItem`.
+      safeSetItem(ALLOW_OFFLINE_KEY, 'true');
       /**
        * @type {string | any[]}
        */
       const louvoresData = get(louvores);
       if (louvoresData && louvoresData.length > 0) {
         const currentHash = getManifestHash(louvoresData);
-        localStorage.setItem(LAST_MANIFEST_HASH_KEY, currentHash);
-        
+        safeSetItem(LAST_MANIFEST_HASH_KEY, currentHash);
+
         // Update PDF index after ZIP extraction
         if (browser) {
           const { updatePdfIndexInBackground, invalidatePdfIndexSession } = await import('$lib/utils/pdfIndex');
@@ -1684,7 +2136,11 @@ async function startZipDownload(categories, pdfUrls, alreadyDownloadedCategories
       }
 
       // Check if IS_LEITOR_OFFLINE flag exists, if not open PDF in leitor
-      const isLeitorOffline = localStorage.getItem('IS_LEITOR_OFFLINE');
+      // Via safeStorage(): mesmo motivo do resto deste bloco de sucesso — no
+      // Firefox com dados do site bloqueados, um acesso direto a localStorage
+      // aqui lançaria e cairia no catch externo, reportando falha depois de
+      // todos os PDFs já terem sido gravados no cache com sucesso.
+      const isLeitorOffline = safeStorage()?.getItem('IS_LEITOR_OFFLINE');
       if (!isLeitorOffline || isLeitorOffline !== 'true') {
         // Open offline-setup.pdf in leitor to set the flag
         const leitorUrl = '/leitor?file=/offline-setup.pdf&titulo=Configuração Offline&subtitulo=Página de funcionamento';
@@ -1696,6 +2152,7 @@ async function startZipDownload(categories, pdfUrls, alreadyDownloadedCategories
       offlineState.update(state => ({
         ...state,
         downloading: false,
+        phase: null,
         error: 'Download cancelado'
       }));
     } else {
@@ -1703,6 +2160,7 @@ async function startZipDownload(categories, pdfUrls, alreadyDownloadedCategories
       offlineState.update(state => ({
         ...state,
         downloading: false,
+        phase: null,
         error: error?.message || 'Erro ao baixar pacotes ZIP'
       }));
     }
@@ -1863,6 +2321,7 @@ async function downloadByCategories(categories) {
   console.log(`[Offline Store] Identified ${requiredParts.length} package parts needed for ${missingPdfs.length} missing PDFs`);
 
   // Agrupar partes por categoria (normalize categories)
+  /** @type {Record<string, Array<{ filename: string, url?: string, size?: number, pdfs?: string[] }>>} */
   const partsByCategory = {};
   for (const part of requiredParts) {
     const normalizedCategory = normalizeCategory(part.category);
@@ -1936,6 +2395,8 @@ async function clearAllCache() {
     localStorage.removeItem(SELECTED_CATEGORIES_KEY);
     localStorage.removeItem(DOWNLOADED_CATEGORIES_KEY);
     localStorage.removeItem(OFFLINE_CATEGORIAS_SALVAS);
+    // Sem PDFs no cache, retomar um download interrompido não faz sentido.
+    clearAllCompletedParts(safeStorage());
     
     // Reset state
     offlineState.set(initialState);

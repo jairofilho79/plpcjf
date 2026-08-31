@@ -895,6 +895,14 @@
   $: failed = state.failed || 0;
   $: total = state.total || 0;
   $: categorySizes = state.categorySizes || {};
+  // Progresso legível por parte (ver src/lib/stores/offline.js)
+  $: currentPart = state.currentPart || 0;
+  $: totalParts = state.totalParts || 0;
+  $: currentPartName = state.currentPartName || '';
+  $: bytesDownloaded = state.bytesDownloaded || 0;
+  // null = manifesto não permite estimar o total com segurança; ver `sumKnownPartsSize`
+  $: bytesTotal = typeof state.bytesTotal === 'number' && state.bytesTotal > 0 ? state.bytesTotal : null;
+  $: partPhase = state.phase || null;
   
   // Calculate total availability stats
   $: totalStats = Object.values(categoryStats).reduce((/** @type {{total: number, available: number, missing: number}} */ acc, stats) => {
@@ -1255,12 +1263,15 @@
       // Clear offline manager cache (PDFs)
       await offlineManager.clearCache();
       
-      // Clear all caches including plpc-pdfs e o app cache (ver OfflineConfig.js APP_CACHE_NAME / static/sw.js CACHE_VERSION)
+      // Limpa plpc-pdfs, o catálogo importado (plpc-catalog) e o cache do app
+      // (OfflineConfig.APP_CACHE_NAME, derivado da version do deploy)
       if (typeof caches !== 'undefined') {
         const appCacheName = getConfig('APP_CACHE_NAME');
+        const catalogCacheName = getConfig('CATALOG_CACHE_NAME') || 'plpc-catalog';
+        const pdfCacheName = getConfig('PDF_CACHE_NAME') || 'plpc-pdfs';
         try {
           // Clear plpc-pdfs cache (PDFs)
-          const pdfCache = await caches.open('plpc-pdfs');
+          const pdfCache = await caches.open(pdfCacheName);
           const pdfKeys = await pdfCache.keys();
           await Promise.all(pdfKeys.map(key => pdfCache.delete(key)));
           console.log('[Offline Page] Cleared plpc-pdfs cache');
@@ -1273,7 +1284,7 @@
 
           // Also try to delete the entire caches if possible
           try {
-            await caches.delete('plpc-pdfs');
+            await caches.delete(pdfCacheName);
             console.log('[Offline Page] Deleted plpc-pdfs cache entirely');
           } catch (e) {
             // Ignore if cache doesn't exist or can't be deleted
@@ -1286,6 +1297,15 @@
           } catch (e) {
             // Ignore if cache doesn't exist or can't be deleted
             console.debug('[Offline Page] Could not delete app cache entirely:', appCacheName, e);
+          }
+
+          // Catálogo importado: "limpar tudo" precisa levá-lo junto, senão o app
+          // volta mostrando um acervo cujos PDFs acabaram de ser apagados.
+          try {
+            await caches.delete(catalogCacheName);
+            console.log('[Offline Page] Deleted catalog cache entirely:', catalogCacheName);
+          } catch (e) {
+            console.debug('[Offline Page] Could not delete catalog cache:', catalogCacheName, e);
           }
         } catch (error) {
           console.warn('[Offline Page] Error clearing caches:', error);
@@ -1382,18 +1402,41 @@
         <div class="progress-info">
           <p class="progress-title">{isImportingBundle ? 'A importar pacote offline…' : 'Baixando PDFs...'}</p>
           {#if !isImportingBundle}
+            {#if totalParts > 0}
+              <!-- Só a linha de parte/fase é aria-live: o contador de PDFs abaixo
+                   muda várias vezes por segundo e anunciaria demais. -->
+              <p class="progress-part" role="status" aria-live="polite">
+                <span class="download-part">Parte {currentPart} de {totalParts}</span>
+                {#if partPhase}
+                  <span class="download-phase">
+                    {#if partPhase === 'baixando'}Baixando{:else if partPhase === 'extraindo'}Extraindo{:else if partPhase === 'gravando'}Gravando{/if}
+                    {currentPartName}
+                  </span>
+                {/if}
+              </p>
+            {/if}
             <p class="progress-stats">
               {completed} de {total} PDFs baixados
               {#if failed > 0}
                 <span class="failed-count">({failed} falharam)</span>
               {/if}
             </p>
+            {#if bytesDownloaded > 0 || bytesTotal}
+              <p class="progress-bytes">
+                {formatSize(bytesDownloaded)}{#if bytesTotal} de {formatSize(bytesTotal)}{/if} baixados
+              </p>
+            {/if}
           {/if}
         </div>
         <div class="progress-bar-container">
           <div class="progress-bar" style="width: {progress}%"></div>
         </div>
         <p class="progress-percentage">{progress}%</p>
+        {#if !isImportingBundle && totalParts > 0}
+          <p class="download-warning">
+            Mantenha o app aberto até terminar. Se a conexão cair, o download retoma da parte em que parou na próxima tentativa.
+          </p>
+        {/if}
         {#if isImportingBundle && importChecklist.length}
           <ul class="import-checklist">
             {#each importChecklist as item (item.id)}
@@ -2283,6 +2326,44 @@
     font-weight: 700;
     color: var(--text-light);
     margin: 0 0 1rem 0;
+  }
+
+  .progress-part {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    align-items: baseline;
+    gap: 0.5rem;
+    margin: 0 0 0.375rem 0;
+    font-size: 0.9375rem;
+  }
+
+  .download-part {
+    font-weight: 600;
+    color: var(--text-light);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .download-phase {
+    color: var(--placeholder-color);
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .progress-bytes {
+    font-size: 0.8125rem;
+    color: var(--placeholder-color);
+    margin: 0.25rem 0 0 0;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .download-warning {
+    margin: 0.75rem 0 0 0;
+    font-size: 0.8rem;
+    line-height: 1.5;
+    color: var(--placeholder-color);
   }
 
   .import-checklist {

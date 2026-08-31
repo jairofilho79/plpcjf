@@ -547,7 +547,7 @@ export class DownloadManager {
               ? packageUrl 
               : `${packageDownloader.basePath}/${packageUrl}`;
             
-            // Remove from APP_CACHE (OfflineConfig.js APP_CACHE_NAME) where Service Worker might have cached it
+            // Remove do cache do app (OfflineConfig.APP_CACHE_NAME), onde o Service Worker pode ter gravado
             if (typeof caches !== 'undefined') {
               const cache = await caches.open(getConfig('APP_CACHE_NAME'));
               const packageRequest = new Request(fullPackageUrl);

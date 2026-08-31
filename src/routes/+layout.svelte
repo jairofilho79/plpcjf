@@ -18,7 +18,6 @@
     getPdfJsPriority,
     shouldPreload,
     preloadPdfJs,
-    warmPdfJsCache,
     requestIdleCallback
   } from '$lib/utils/pdfjsLoader';
   
@@ -69,12 +68,13 @@
       });
     } else if (priority === 'medium') {
       // Carregar após recursos críticos (requestIdleCallback)
+      // O aquecimento manual do cache do PDF.js saiu daqui: o Service Worker
+      // pré-cacheia todo o `build`, e os módulos do PDF.js vêm do Vite em
+      // /_app/immutable/ — já entram no cache na instalação.
       requestIdleCallback(() => {
-        preloadPdfJs({ priority: 'medium', loadViewer: false })
-          .then(() => warmPdfJsCache())
-          .catch(err => {
-            console.warn('[Layout] Erro ao pré-carregar PDF.js:', err);
-          });
+        preloadPdfJs({ priority: 'medium', loadViewer: false }).catch(err => {
+          console.warn('[Layout] Erro ao pré-carregar PDF.js:', err);
+        });
       }, { timeout: 2000 });
     }
     // 'low' e 'none' não carregam automaticamente
@@ -112,14 +112,21 @@
       checkAndFixUrl();
       setTimeout(checkAndFixUrl, 100);
       
-      registerServiceWorker().then(() => {
+      /** @type {(() => void) | null} */
+      let swCleanup = null;
+      /** @type {(() => void) | null} */
+      let swMessageCleanup = null;
+
+      registerServiceWorker().then(({ cleanup }) => {
+        swCleanup = cleanup;
+
         // Setup Service Worker message listener
-        setupServiceWorkerMessageListener();
-        
+        swMessageCleanup = setupServiceWorkerMessageListener();
+
         // Setup BroadcastChannel for cross-tab sync
         setupCacheSync();
       });
-      
+
       // Pré-carregamento inteligente baseado na rota atual
       smartPreloadPdfJs();
 
@@ -129,6 +136,8 @@
         removeLouvoresChecksumTriggers();
         removeStaleChunkListeners();
         cancelStaleRecoveryReset();
+        swCleanup?.();
+        swMessageCleanup?.();
       };
     }
   });

@@ -5,18 +5,7 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
-import { createContext, runInContext } from 'node:vm';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-
-const here = path.dirname(fileURLToPath(import.meta.url));
-const source = readFileSync(path.resolve(here, '../../../../static/sw-router.js'), 'utf8');
-const sandbox = { self: {} };
-runInContext(source, createContext(sandbox));
-
-/** @type {(pathname: string, ctx?: object) => string} */
-const matchSwRoute = sandbox.self.matchSwRoute;
+import { matchSwRoute } from './swRouter.js';
 
 describe('matchSwRoute', () => {
   it('trata navegação antes de qualquer outra regra', () => {
@@ -50,10 +39,16 @@ describe('matchSwRoute', () => {
   it('app shell casa por igualdade exata, nunca por prefixo', () => {
     assert.equal(matchSwRoute('/', {}), 'app-shell');
     assert.equal(matchSwRoute('/manifest.json', {}), 'app-shell');
-    assert.equal(matchSwRoute('/louvores-manifest.json', {}), 'app-shell');
     // Este é o defeito #01: com startsWith('/'), tudo abaixo virava 'app-shell'.
     assert.equal(matchSwRoute('/qualquer/coisa', {}), 'default');
     assert.equal(matchSwRoute('/manifest.json.bak', {}), 'default');
+  });
+
+  it('serve o catálogo pela rota própria, não pelo app shell', () => {
+    // Estes dois vivem no cache protegido: podem ser a única cópia do acervo.
+    assert.equal(matchSwRoute('/louvores-manifest.json', {}), 'catalog');
+    assert.equal(matchSwRoute('/offline-manifest.json', {}), 'catalog');
+    assert.equal(matchSwRoute('/louvores-manifest.json.bak', {}), 'default');
   });
 
   it('tudo que não casa cai no padrão', () => {
