@@ -12,11 +12,20 @@ import {
   invalidateCachedPDFsLocal
 } from '$lib/utils/swRegistration';
 import { iterateZipEntriesCd } from '$lib/offline/import/zipCdReader.js';
-import { buildPdfCacheIndex } from '$lib/utils/pdfCacheIndex.js';
+import { buildPdfCacheIndex, toComparablePath } from '$lib/utils/pdfCacheIndex.js';
+import {
+  readCompletedParts,
+  markPartCompleted,
+  clearCompletedParts,
+  clearAllCompletedParts,
+  computePartsFingerprint,
+  looksLikeCaptivePortal,
+  fetchWithRetry
+} from '$lib/offline/download/partProgress.js';
 import { louvores } from './louvores';
 import { validateManifestsIntegrity } from '$lib/utils/manifestValidation';
 import { CATEGORY_OPTIONS } from './filters';
-import { atobUTF8 } from '$lib/utils/pathUtils';
+import { atobUTF8, getPdfRelPath } from '$lib/utils/pathUtils';
 import { findMissingPdfs, findRequiredPackages } from '$lib/utils/pdfValidation';
 import { getConfig } from '$lib/offline/core/OfflineConfig.js';
 import { 
@@ -570,6 +579,109 @@ function getPackageParts(category, manifest) {
 }
 
 /**
+ * Identificação da versão do manifesto, usada na impressão digital das partes.
+ * Se o manifesto for regerado, a retomada antiga deixa de valer.
+ * @param {any} manifest
+ * @returns {string}
+ */
+function getManifestTag(manifest) {
+  if (!manifest) return '';
+  return `${manifest.version ?? ''}|${manifest.timestamp ?? ''}`;
+}
+
+/**
+ * Impressão digital do conjunto de partes de uma categoria.
+ * Prefere a lista completa do manifesto; sem ela, usa as partes pedidas.
+ * @param {string | number} category
+ * @param {any} manifest
+ * @param {Array<any>} fallbackParts
+ * @returns {string}
+ */
+function fingerprintForCategory(category, manifest, fallbackParts) {
+  const allParts = getPackageParts(category, manifest);
+  const source = allParts.length > 0 ? allParts : fallbackParts;
+  return computePartsFingerprint(source, getManifestTag(manifest));
+}
+
+/**
+ * Conjunto estrito dos caminhos que já estão no cache de PDFs.
+ *
+ * Estrito de propósito: `buildPdfCacheIndex` também casa por nome de arquivo, e
+ * como quase toda parte tem um "Coro.pdf" isso daria falso positivo justamente
+ * na hora de decidir se uma parte pode ser pulada.
+ *
+ * @param {Cache} cache
+ * @returns {Promise<Set<string> | null>} null quando não deu para ler o cache
+ */
+async function readCachedPdfPaths(cache) {
+  try {
+    const keys = await cache.keys();
+    /** @type {Set<string>} */
+    const paths = new Set();
+    for (const request of keys) {
+      const path = toComparablePath(request.url);
+      if (path) paths.add(path);
+    }
+    return paths;
+  } catch (error) {
+    console.warn('[Offline Store] Não foi possível listar o cache de PDFs:', error);
+    return null;
+  }
+}
+
+/**
+ * Caminhos relativos ("assets/…") dos PDFs declarados em uma parte do manifesto.
+ * @param {any} part
+ * @returns {string[]}
+ */
+function getPartPdfPaths(part) {
+  const ids = Array.isArray(part?.pdfs) ? part.pdfs : [];
+  /** @type {string[]} */
+  const paths = [];
+  for (const pdfId of ids) {
+    if (typeof pdfId !== 'string') continue;
+    const relPath = getPdfRelPath({ pdfId });
+    if (relPath) paths.push(relPath);
+  }
+  return paths;
+}
+
+/**
+ * Decide se uma parte marcada como concluída pode mesmo ser pulada.
+ *
+ * Só pula se todos os PDFs declarados na parte estiverem de fato no cache: a
+ * marca no localStorage sozinha não basta (o usuário pode ter limpado o cache
+ * entre as duas tentativas).
+ *
+ * @param {any} part
+ * @param {Set<string> | null} cachedPaths
+ * @returns {{ skippable: boolean, paths: string[] }}
+ */
+function verifyCompletedPart(part, cachedPaths) {
+  const paths = getPartPdfPaths(part);
+  if (!cachedPaths || paths.length === 0) {
+    return { skippable: false, paths };
+  }
+  const skippable = paths.every((path) => cachedPaths.has(path));
+  return { skippable, paths };
+}
+
+/**
+ * Erro traduzido para respostas que chegam OK mas não são um pacote —
+ * o caso clássico é o wi-fi de portal cativo devolvendo a página de login.
+ * @param {Response} response
+ * @param {string} filename
+ */
+function assertPackageResponse(response, filename) {
+  if (looksLikeCaptivePortal(response)) {
+    throw new Error(
+      `A rede devolveu uma página de login em vez do pacote ${filename}. ` +
+        'Confirme o acesso ao wi-fi e tente novamente.'
+    );
+  }
+}
+
+/**
  * Download ZIP packages with specific parts only (optimized)
  * @param {Array} categories - Categories to download
  * @param {Array} pdfUrls - All PDF URLs for validation
@@ -635,20 +747,64 @@ async function startZipDownloadWithSpecificParts(categories, pdfUrls, partsByCat
 
       console.log(`[Offline Store] Downloading ${requiredParts.length} parts for category ${category}`);
 
+      // Retomada: partes gravadas em uma tentativa anterior deste mesmo conjunto
+      // de pacotes. A impressão digital garante que não estamos emendando
+      // partes novas do servidor em partes velhas do dispositivo.
+      const partsFingerprint = fingerprintForCategory(category, manifest, requiredParts);
+      const completedParts = readCompletedParts(localStorage, category, partsFingerprint);
+      const cachedPaths = completedParts.size > 0 ? await readCachedPdfPaths(cache) : null;
+
       // Baixar apenas as partes necessárias
       for (const part of requiredParts) {
         if (zipDownloadCancelled) {
           throw new Error('DOWNLOAD_CANCELLED');
         }
 
+        if (completedParts.has(part.filename)) {
+          const { skippable, paths } = verifyCompletedPart(part, cachedPaths);
+
+          if (skippable) {
+            console.info(`[Offline Store] Parte já baixada, pulando: ${part.filename}`);
+
+            for (const relPath of paths) {
+              if (remaining.delete(relPath)) {
+                completed++;
+              }
+            }
+
+            offlineState.update(state => ({
+              ...state,
+              completed,
+              failed: 0,
+              progress: total === 0 ? 100 : Math.min(99, Math.floor((completed / total) * 100))
+            }));
+
+            continue;
+          }
+
+          console.warn(
+            `[Offline Store] Parte marcada como concluída mas ausente do cache, refazendo: ${part.filename}`
+          );
+        }
+
         const packageUrl = normalizePackageUrl(part.url, part.filename);
         let response;
 
         try {
-          response = await fetch(packageUrl, {
-            signal: zipDownloadController.signal,
-            cache: 'no-store'
-          });
+          response = await fetchWithRetry(
+            packageUrl,
+            { signal: zipDownloadController.signal, cache: 'no-store' },
+            {
+              attempts: 4,
+              signal: zipDownloadController.signal,
+              onRetry: (attempt, error) => {
+                console.warn(
+                  `[Offline Store] Tentativa ${attempt} de ${part.filename}:`,
+                  error.message
+                );
+              }
+            }
+          );
         } catch (err) {
           if (zipDownloadCancelled || err?.name === 'AbortError') {
             throw new Error('DOWNLOAD_CANCELLED');
@@ -659,6 +815,8 @@ async function startZipDownloadWithSpecificParts(categories, pdfUrls, partsByCat
         if (!response.ok) {
           throw new Error(`Falha ao baixar o pacote ${part.filename} (${response.status})`);
         }
+
+        assertPackageResponse(response, part.filename);
 
         // Extrai as entradas do ZIP uma a uma (streaming via central directory),
         // em vez de descomprimir o pacote inteiro em memória de uma só vez.
@@ -702,11 +860,31 @@ async function startZipDownloadWithSpecificParts(categories, pdfUrls, partsByCat
         // Remove o arquivo ZIP do cache após processar todos os PDFs
         const fullPackageUrl = createUrlUtf8(packageUrl, location.origin);
         await removeZipFromCache(fullPackageUrl);
+
+        // Parte inteira gravada: se o download cair na próxima, esta não volta.
+        markPartCompleted(localStorage, category, part.filename, partsFingerprint);
       }
+
+      // Categoria concluída: o estado de retomada perdeu a razão de existir.
+      clearCompletedParts(localStorage, category);
     }
 
     if (zipDownloadCancelled) {
       throw new Error('DOWNLOAD_CANCELLED');
+    }
+
+    // Concilia o que sobrou com o cache real. Sem isso, os PDFs vindos de partes
+    // puladas na retomada seriam contados como "não encontrados".
+    if (remaining.size > 0) {
+      const cachedAfterDownload = await readCachedPdfPaths(cache);
+      if (cachedAfterDownload) {
+        for (const path of [...remaining]) {
+          if (cachedAfterDownload.has(toComparablePath(path))) {
+            remaining.delete(path);
+            completed++;
+          }
+        }
+      }
     }
 
     const failed = remaining.size;
@@ -1531,20 +1709,62 @@ async function startZipDownload(categories, pdfUrls, alreadyDownloadedCategories
         continue;
       }
 
+      // Retomada: mesmas regras da versão por partes específicas.
+      const partsFingerprint = fingerprintForCategory(category, manifest, packageParts);
+      const completedParts = readCompletedParts(localStorage, category, partsFingerprint);
+      const cachedPaths = completedParts.size > 0 ? await readCachedPdfPaths(cache) : null;
+
       // Download each part
       for (const part of packageParts) {
         if (zipDownloadCancelled) {
           throw new Error('DOWNLOAD_CANCELLED');
         }
 
+        if (completedParts.has(part.filename)) {
+          const { skippable, paths } = verifyCompletedPart(part, cachedPaths);
+
+          if (skippable) {
+            console.info(`[Offline Store] Parte já baixada, pulando: ${part.filename}`);
+
+            for (const relPath of paths) {
+              if (remaining.delete(relPath)) {
+                completed++;
+              }
+            }
+
+            offlineState.update(state => ({
+              ...state,
+              completed,
+              failed: 0,
+              progress: total === 0 ? 100 : Math.min(99, Math.floor((completed / total) * 100))
+            }));
+
+            continue;
+          }
+
+          console.warn(
+            `[Offline Store] Parte marcada como concluída mas ausente do cache, refazendo: ${part.filename}`
+          );
+        }
+
         const packageUrl = normalizePackageUrl(part.url, part.filename);
         let response;
 
         try {
-          response = await fetch(packageUrl, {
-            signal: zipDownloadController.signal,
-            cache: 'no-store'
-          });
+          response = await fetchWithRetry(
+            packageUrl,
+            { signal: zipDownloadController.signal, cache: 'no-store' },
+            {
+              attempts: 4,
+              signal: zipDownloadController.signal,
+              onRetry: (attempt, error) => {
+                console.warn(
+                  `[Offline Store] Tentativa ${attempt} de ${part.filename}:`,
+                  error.message
+                );
+              }
+            }
+          );
         } catch (err) {
           if (zipDownloadCancelled || err?.name === 'AbortError') {
             throw new Error('DOWNLOAD_CANCELLED');
@@ -1555,6 +1775,8 @@ async function startZipDownload(categories, pdfUrls, alreadyDownloadedCategories
         if (!response.ok) {
           throw new Error(`Falha ao baixar o pacote ${part.filename} (${response.status})`);
         }
+
+        assertPackageResponse(response, part.filename);
 
         // Extrai as entradas do ZIP uma a uma (streaming via central directory),
         // em vez de descomprimir o pacote inteiro em memória de uma só vez.
@@ -1598,11 +1820,31 @@ async function startZipDownload(categories, pdfUrls, alreadyDownloadedCategories
         // Remove o arquivo ZIP do cache após processar todos os PDFs
         const fullPackageUrl = createUrlUtf8(packageUrl, location.origin);
         await removeZipFromCache(fullPackageUrl);
+
+        // Parte inteira gravada: se o download cair na próxima, esta não volta.
+        markPartCompleted(localStorage, category, part.filename, partsFingerprint);
       }
+
+      // Categoria concluída: o estado de retomada perdeu a razão de existir.
+      clearCompletedParts(localStorage, category);
     }
 
     if (zipDownloadCancelled) {
       throw new Error('DOWNLOAD_CANCELLED');
+    }
+
+    // Concilia o que sobrou com o cache real. Sem isso, os PDFs vindos de partes
+    // puladas na retomada seriam contados como "não encontrados".
+    if (remaining.size > 0) {
+      const cachedAfterDownload = await readCachedPdfPaths(cache);
+      if (cachedAfterDownload) {
+        for (const path of [...remaining]) {
+          if (cachedAfterDownload.has(toComparablePath(path))) {
+            remaining.delete(path);
+            completed++;
+          }
+        }
+      }
     }
 
     const failed = remaining.size;
@@ -1936,6 +2178,8 @@ async function clearAllCache() {
     localStorage.removeItem(SELECTED_CATEGORIES_KEY);
     localStorage.removeItem(DOWNLOADED_CATEGORIES_KEY);
     localStorage.removeItem(OFFLINE_CATEGORIAS_SALVAS);
+    // Sem PDFs no cache, retomar um download interrompido não faz sentido.
+    clearAllCompletedParts(localStorage);
     
     // Reset state
     offlineState.set(initialState);
