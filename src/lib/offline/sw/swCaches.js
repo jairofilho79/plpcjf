@@ -21,12 +21,30 @@ export const PDF_CACHE_NAME = 'plpc-pdfs';
 export const PDF_IMPORT_STAGING_CACHE_NAME = 'plpc-pdfs-import-staging';
 
 /**
+ * Catálogo (louvores-manifest.json + offline-manifest.json).
+ *
+ * Também sem versão e protegido, pelo mesmo motivo dos PDFs: quando o usuário
+ * importa o bundle offline, estes dois arquivos são a única cópia do catálogo
+ * que existe no dispositivo — não estão no precache (são rotas de servidor, não
+ * entram em `files`) e não há espelho em IndexedDB nem localStorage. Guardá-los
+ * no cache do app, que morre a cada deploy, apagaria o acervo importado.
+ */
+export const CATALOG_CACHE_NAME = 'plpc-catalog';
+
+/** Os dois caminhos que compõem o catálogo, servidos do `CATALOG_CACHE_NAME`. */
+export const CATALOG_MANIFEST_PATHS = Object.freeze([
+  '/louvores-manifest.json',
+  '/offline-manifest.json'
+]);
+
+/**
  * Caches que o `activate` nunca pode apagar, aconteça o que acontecer.
- * Lista explícita em vez de regex: é a última linha de defesa dos PDFs do usuário.
+ * Lista explícita em vez de regex: é a última linha de defesa dos dados do usuário.
  */
 export const PROTECTED_CACHE_NAMES = Object.freeze([
   PDF_CACHE_NAME,
-  PDF_IMPORT_STAGING_CACHE_NAME
+  PDF_IMPORT_STAGING_CACHE_NAME,
+  CATALOG_CACHE_NAME
 ]);
 
 /** Formato do cache do app shell: `plpc-<version>-app`. */
@@ -49,10 +67,13 @@ export function appCacheName(version) {
 /**
  * Decide se um cache é sobra de um deploy anterior e pode ser apagado.
  *
- * Regras, nesta ordem:
- * 1. só mexe em caches com o prefixo `plpc-` (nada de terceiros);
- * 2. nunca apaga um cache protegido (PDFs do usuário e staging da importação);
- * 3. nunca apaga o cache do deploy atual.
+ * **Permitir por forma conhecida, não negar por lista.** A versão anterior
+ * apagava tudo sob `plpc-` que não estivesse numa lista de exceções, o que
+ * transformava "criar um cache novo" em "perder dados no próximo deploy" por
+ * omissão — foi exatamente assim que o catálogo importado quase se perdeu.
+ * Agora só morre o que casa com uma forma reconhecidamente descartável:
+ * o cache de app de um deploy que não é o atual, ou o cache legado do PDF.js.
+ * Qualquer `plpc-*` novo sobrevive por padrão.
  *
  * @param {string} name nome do cache vindo de `caches.keys()`
  * @param {string} currentAppCache resultado de `appCacheName(version)`
@@ -60,9 +81,61 @@ export function appCacheName(version) {
  */
 export function isObsoleteCacheName(name, currentAppCache) {
   if (typeof name !== 'string' || !name.startsWith(CACHE_PREFIX)) return false;
+  // Cinto e suspensório: mesmo que um protegido passasse a casar com um padrão.
   if (PROTECTED_CACHE_NAMES.includes(name)) return false;
   if (name === currentAppCache) return false;
-  return true;
+  return APP_CACHE_NAME_PATTERN.test(name) || LEGACY_PDFJS_CACHE_NAME_PATTERN.test(name);
+}
+
+/**
+ * Copia o catálogo de qualquer cache de app sobrevivente para o cache protegido.
+ *
+ * Existe por causa da migração: até esta mudança, `OfflineBundleImporter`
+ * gravava os dois manifests no cache do app, que agora tem o nome atrelado ao
+ * deploy e é apagado pelo `activate`. Sem esta cópia, todo usuário que já tinha
+ * importado o bundle perderia o catálogo no primeiro deploy desta mudança — uma
+ * vez só, e depois invisível.
+ *
+ * Precisa rodar ANTES da poda, e é idempotente: nunca sobrescreve o que já está
+ * no cache protegido, então rodar em todo `activate` não custa nada.
+ *
+ * @param {CacheStorage} cacheStorage normalmente o `caches` global
+ * @returns {Promise<number>} quantas entradas foram migradas
+ */
+export async function migrateCatalogManifests(cacheStorage) {
+  const names = await cacheStorage.keys();
+  const appCaches = names.filter((name) => APP_CACHE_NAME_PATTERN.test(name));
+  if (appCaches.length === 0) return 0;
+
+  const target = await cacheStorage.open(CATALOG_CACHE_NAME);
+  let migrated = 0;
+
+  for (const name of appCaches) {
+    const source = await cacheStorage.open(name);
+    const requests = await source.keys();
+
+    for (const request of requests) {
+      let pathname;
+      try {
+        pathname = new URL(request.url).pathname;
+      } catch {
+        continue;
+      }
+      if (!CATALOG_MANIFEST_PATHS.includes(pathname)) continue;
+
+      // Já migrado: o cache protegido é a autoridade, não sobrescreve.
+      const existing = await target.match(request);
+      if (existing) continue;
+
+      const response = await source.match(request);
+      if (!response) continue;
+
+      await target.put(request, response);
+      migrated++;
+    }
+  }
+
+  return migrated;
 }
 
 /**

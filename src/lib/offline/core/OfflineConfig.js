@@ -6,6 +6,7 @@
 import { version } from '$app/environment';
 import {
   appCacheName,
+  CATALOG_CACHE_NAME,
   PDF_CACHE_NAME,
   PDF_IMPORT_STAGING_CACHE_NAME
 } from '../sw/swCaches.js';
@@ -22,6 +23,7 @@ import {
  * @property {string} OFFLINE_MANIFEST_URL - URL for offline manifest
  * @property {string} STATIC_LOUVORES_MANIFEST_URL - Static fallback URL for louvores manifest
  * @property {string} STATIC_OFFLINE_MANIFEST_URL - Static fallback URL for offline manifest
+ * @property {string} CATALOG_CACHE_NAME - Unversioned, protected cache for the imported catalog
  * @property {string[]} ALLOWED_CACHE_NAMES - List of allowed cache names
  */
 
@@ -35,6 +37,9 @@ const config = {
   // Fonte única de verdade dos nomes: src/lib/offline/sw/swCaches.js
   PDF_CACHE_NAME,
   PDF_IMPORT_STAGING_CACHE_NAME,
+  // Catálogo importado: sem versão e protegido, como os PDFs. Nunca guardar os
+  // manifests no cache do app — ele é apagado a cada deploy. Ver swCaches.js.
+  CATALOG_CACHE_NAME,
   // Atrelado ao deploy: `version` aqui e em `$service-worker` são o mesmo valor,
   // então cliente e Service Worker abrem sempre o mesmo cache. Ver swCaches.js.
   APP_CACHE_NAME: appCacheName(version),

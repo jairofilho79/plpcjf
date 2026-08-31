@@ -2,6 +2,7 @@
 // Handles registration and communication with the service worker
 
 import { dev } from '$app/environment';
+import { PDF_CACHE_NAME } from '$lib/offline/sw/swCaches.js';
 
 let swRegistration = null;
 
@@ -253,7 +254,7 @@ async function isCacheStorageAvailable() {
   
   try {
     // Try to open the PDF cache to verify it exists
-    const cache = await caches.open('plpc-pdfs');
+    const cache = await caches.open(PDF_CACHE_NAME);
     // If we can open it, cache storage is available
     return true;
   } catch (err) {
@@ -304,7 +305,7 @@ export async function getCachedPDFsFast() {
   if (pdfs.length === 0 && cacheStorageAvailable) {
     // Verificar diretamente no cache storage se há PDFs
     try {
-      const cache = await caches.open('plpc-pdfs');
+      const cache = await caches.open(PDF_CACHE_NAME);
       const requests = await cache.keys();
       const pdfCount = requests.filter(req => {
         try {

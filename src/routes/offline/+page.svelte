@@ -1255,9 +1255,11 @@
       // Clear offline manager cache (PDFs)
       await offlineManager.clearCache();
       
-      // Limpa plpc-pdfs e o cache do app (OfflineConfig.APP_CACHE_NAME, derivado da version do deploy)
+      // Limpa plpc-pdfs, o catálogo importado (plpc-catalog) e o cache do app
+      // (OfflineConfig.APP_CACHE_NAME, derivado da version do deploy)
       if (typeof caches !== 'undefined') {
         const appCacheName = getConfig('APP_CACHE_NAME');
+        const catalogCacheName = getConfig('CATALOG_CACHE_NAME') || 'plpc-catalog';
         try {
           // Clear plpc-pdfs cache (PDFs)
           const pdfCache = await caches.open('plpc-pdfs');
@@ -1286,6 +1288,15 @@
           } catch (e) {
             // Ignore if cache doesn't exist or can't be deleted
             console.debug('[Offline Page] Could not delete app cache entirely:', appCacheName, e);
+          }
+
+          // Catálogo importado: "limpar tudo" precisa levá-lo junto, senão o app
+          // volta mostrando um acervo cujos PDFs acabaram de ser apagados.
+          try {
+            await caches.delete(catalogCacheName);
+            console.log('[Offline Page] Deleted catalog cache entirely:', catalogCacheName);
+          } catch (e) {
+            console.debug('[Offline Page] Could not delete catalog cache:', catalogCacheName, e);
           }
         } catch (error) {
           console.warn('[Offline Page] Error clearing caches:', error);

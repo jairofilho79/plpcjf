@@ -18,6 +18,8 @@ import { matchSwRoute } from '$lib/offline/sw/swRouter.js';
 import {
   appCacheName,
   isObsoleteCacheName,
+  migrateCatalogManifests,
+  CATALOG_CACHE_NAME,
   PDF_CACHE_NAME
 } from '$lib/offline/sw/swCaches.js';
 import PdfPathManager from '$lib/offline/utils/PdfPathManager.js';
@@ -28,6 +30,12 @@ const APP_CACHE = appCacheName(version);
 
 /** Cache dos PDFs baixados pelo usuário — sem versão, sobrevive a todo deploy. */
 const PDF_CACHE = PDF_CACHE_NAME;
+
+/**
+ * Cache do catálogo (os dois manifests) — também sem versão. Quando o usuário
+ * importa o bundle offline, é a única cópia do acervo no dispositivo.
+ */
+const CATALOG_CACHE = CATALOG_CACHE_NAME;
 
 // ---------------------------------------------------------------------------
 // Log
@@ -111,17 +119,37 @@ self.addEventListener('install', (event) => {
   event.waitUntil(precache().then(() => self.skipWaiting()));
 });
 
+/**
+ * A ordem aqui é obrigatória: **migrar o catálogo e só depois podar**.
+ * A poda apaga o cache de app do deploy anterior, que é exatamente de onde o
+ * catálogo importado precisa ser copiado. Se a migração falhar, a poda é adiada
+ * para o próximo `activate` — sobra de cache é barata, catálogo perdido não.
+ */
+async function activateFlow() {
+  let canPrune = true;
+
+  try {
+    const migrated = await migrateCatalogManifests(caches);
+    if (migrated > 0) debug(`Catálogo migrado para ${CATALOG_CACHE}: ${migrated} entrada(s)`);
+  } catch (err) {
+    canPrune = false;
+    error('Falha ao migrar o catálogo; poda adiada para o próximo activate:', err);
+  }
+
+  if (canPrune) {
+    const names = await caches.keys();
+    await Promise.all(
+      names
+        .filter((name) => isObsoleteCacheName(name, APP_CACHE))
+        .map((name) => caches.delete(name))
+    );
+  }
+
+  await self.clients.claim();
+}
+
 self.addEventListener('activate', (event) => {
-  event.waitUntil(
-    caches
-      .keys()
-      .then((names) =>
-        Promise.all(
-          names.filter((name) => isObsoleteCacheName(name, APP_CACHE)).map((name) => caches.delete(name))
-        )
-      )
-      .then(() => self.clients.claim())
-  );
+  event.waitUntil(activateFlow());
 });
 
 // ---------------------------------------------------------------------------
@@ -247,6 +275,10 @@ const STRATEGIES = {
   // CSS do viewer, servido de /pdfjs/.
   pdfjs: (event) => cacheFirst(event, APP_CACHE),
 
+  // Catálogo: cache protegido, não o do app. A invalidação é por checksum
+  // (CLEAR_LOUVORES_MANIFEST_CACHE), nunca por troca de deploy.
+  catalog: (event) => cacheFirst(event, CATALOG_CACHE),
+
   // Checksum: sempre fresco, nunca em cache.
   checksum: (event) => fetch(event.request.clone(), { cache: 'no-store' }),
 
@@ -270,6 +302,7 @@ const STRATEGIES = {
 const DEV_OVERRIDES = {
   navigation: (event) => networkFirst(event),
   pdfjs: (event) => networkFirst(event),
+  catalog: (event) => networkFirst(event),
   'hashed-asset': (event) => networkFirst(event),
   'app-shell': (event) => networkFirst(event),
   default: (event) => networkFirst(event)
@@ -560,28 +593,36 @@ async function handleClearPdfCacheEntry(event, data) {
   }
 }
 
-/** Remove o louvores-manifest.json em cache para a próxima busca ir à rede. */
+/**
+ * Remove o louvores-manifest.json em cache para a próxima busca ir à rede.
+ * É a invalidação usada pela sincronização por checksum — e a única que existe,
+ * já que o catálogo vive num cache sem versão que nenhum deploy renova sozinho.
+ * Varre também o cache do app, para o caso de sobra anterior à migração.
+ */
 async function handleClearLouvoresManifestCache(event) {
   try {
-    const cache = await caches.open(APP_CACHE);
-    const requests = await cache.keys();
     let removedCount = 0;
 
-    await Promise.all(
-      requests.map(async (req) => {
-        try {
-          const u = new URL(req.url);
-          if (u.pathname === '/louvores-manifest.json') {
-            const deleted = await cache.delete(req);
-            if (deleted) removedCount++;
-          }
-        } catch {
-          // ignora
-        }
-      })
-    );
+    for (const cacheName of [CATALOG_CACHE, APP_CACHE]) {
+      const cache = await caches.open(cacheName);
+      const requests = await cache.keys();
 
-    debug('louvores-manifest removido do cache do app:', removedCount, 'entradas');
+      await Promise.all(
+        requests.map(async (req) => {
+          try {
+            const u = new URL(req.url);
+            if (u.pathname === '/louvores-manifest.json') {
+              const deleted = await cache.delete(req);
+              if (deleted) removedCount++;
+            }
+          } catch {
+            // ignora
+          }
+        })
+      );
+    }
+
+    debug('louvores-manifest removido do cache:', removedCount, 'entradas');
 
     if (event.ports && event.ports[0]) {
       event.ports[0].postMessage({
@@ -600,10 +641,11 @@ async function handleClearLouvoresManifestCache(event) {
   }
 }
 
-/** Apaga o cache de PDFs e o cache do app (ação explícita do usuário). */
+/** Apaga PDFs, catálogo e cache do app (ação explícita do usuário). */
 async function handleClearCache(event) {
   try {
     await caches.delete(PDF_CACHE);
+    await caches.delete(CATALOG_CACHE);
     await caches.delete(APP_CACHE);
     debug('Todos os caches limpos');
     notifyClientsCacheUpdated({ cleared: true });

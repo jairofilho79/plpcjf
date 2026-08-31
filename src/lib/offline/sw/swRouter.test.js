@@ -39,10 +39,16 @@ describe('matchSwRoute', () => {
   it('app shell casa por igualdade exata, nunca por prefixo', () => {
     assert.equal(matchSwRoute('/', {}), 'app-shell');
     assert.equal(matchSwRoute('/manifest.json', {}), 'app-shell');
-    assert.equal(matchSwRoute('/louvores-manifest.json', {}), 'app-shell');
     // Este é o defeito #01: com startsWith('/'), tudo abaixo virava 'app-shell'.
     assert.equal(matchSwRoute('/qualquer/coisa', {}), 'default');
     assert.equal(matchSwRoute('/manifest.json.bak', {}), 'default');
+  });
+
+  it('serve o catálogo pela rota própria, não pelo app shell', () => {
+    // Estes dois vivem no cache protegido: podem ser a única cópia do acervo.
+    assert.equal(matchSwRoute('/louvores-manifest.json', {}), 'catalog');
+    assert.equal(matchSwRoute('/offline-manifest.json', {}), 'catalog');
+    assert.equal(matchSwRoute('/louvores-manifest.json.bak', {}), 'default');
   });
 
   it('tudo que não casa cai no padrão', () => {

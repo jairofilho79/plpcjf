@@ -110,7 +110,10 @@ export class OfflineBundleImporter {
     const stagingName =
       getConfig('PDF_IMPORT_STAGING_CACHE_NAME') || 'plpc-pdfs-import-staging';
     const mainName = getConfig('PDF_CACHE_NAME') || 'plpc-pdfs';
-    const appCacheName = getConfig('APP_CACHE_NAME');
+    // Catálogo vai para o cache protegido, nunca para o do app: o do app tem o
+    // nome atrelado ao deploy e o `activate` do Service Worker o apaga, o que
+    // levaria junto a única cópia do acervo importado. Ver swCaches.js.
+    const catalogCacheName = getConfig('CATALOG_CACHE_NAME') || 'plpc-catalog';
 
     this._importing = true;
     this._abortController = new AbortController();
@@ -344,7 +347,12 @@ export class OfflineBundleImporter {
         `${LOG} ✓ Confirmar no cache — ${commitResult.ok} ok / ${commitResult.fail} falha / ${commitResult.total}`
       );
 
-      await this._applyManifests(offlineManifest, louvoresManifest, louvoresRawText, appCacheName);
+      await this._applyManifests(
+        offlineManifest,
+        louvoresManifest,
+        louvoresRawText,
+        catalogCacheName
+      );
 
       const categories = listCategoriesFromOfflineManifest(offlineManifest);
 
@@ -434,10 +442,10 @@ export class OfflineBundleImporter {
    * @param {unknown} offlineManifest
    * @param {unknown} louvoresManifest
    * @param {string} louvoresRawText
-   * @param {string} appCacheName
+   * @param {string} catalogCacheName cache protegido do catálogo (`plpc-catalog`)
    * @private
    */
-  async _applyManifests(offlineManifest, louvoresManifest, louvoresRawText, appCacheName) {
+  async _applyManifests(offlineManifest, louvoresManifest, louvoresRawText, catalogCacheName) {
     const offlineKey = getConfig('OFFLINE_MANIFEST_KEY') || 'offlineManifest';
     try {
       localStorage.setItem(offlineKey, JSON.stringify(offlineManifest));
@@ -446,12 +454,12 @@ export class OfflineBundleImporter {
     }
 
     try {
-      const appCache = await caches.open(appCacheName);
+      const catalogCache = await caches.open(catalogCacheName);
       const louvoresUrl = new URL(
         getConfig('LOUVORES_MANIFEST_URL') || '/louvores-manifest.json',
         window.location.origin
       ).href;
-      await appCache.put(
+      await catalogCache.put(
         louvoresUrl,
         new Response(louvoresRawText, {
           headers: { 'Content-Type': 'application/json' }
@@ -461,14 +469,14 @@ export class OfflineBundleImporter {
         getConfig('OFFLINE_MANIFEST_URL') || '/offline-manifest.json',
         window.location.origin
       ).href;
-      await appCache.put(
+      await catalogCache.put(
         offlineUrl,
         new Response(JSON.stringify(offlineManifest), {
           headers: { 'Content-Type': 'application/json' }
         })
       );
     } catch (e) {
-      logger.warn('Could not put manifests in app cache', e);
+      logger.warn('Could not put manifests in catalog cache', e);
     }
 
     const { hydrateLouvoresFromManifestData } = await import('$lib/stores/louvores.js');
