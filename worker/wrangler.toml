@@ -1,13 +1,20 @@
-# Worker `louvores-worker-production`, ligado à rota `*plpcg.com/*`.
+# Worker `louvores-worker-production`.
 #
-# Este Worker roda ANTES do Cloudflare Pages em toda a zona plpcg.com: ele
-# atende /louvores-manifest.json, /assets/**.pdf e POST /api/upload-louvor,
-# e repassa todo o resto (`fetch(request)`) para o Pages.
+# Ele atende /louvores-manifest.json, /assets/**.pdf e POST /api/upload-louvor,
+# e repassa todo o resto (`fetch(request)`) para o Cloudflare Pages.
 #
-# Consequência importante: os handlers equivalentes em src/routes/ e em
-# src/hooks.server.js NUNCA são alcançados em plpcg.com. Qualquer correção
-# nesses caminhos precisa ser feita aqui também — é por isso que a regra de
-# correspondência de chave é importada de src/lib/server/, e não copiada.
+# A rota era `*plpcg.com/*` — o curinga pegava a zona inteira, inclusive o apex,
+# e rodava ANTES do Pages. Os handlers equivalentes em src/routes/ e em
+# src/hooks.server.js, que são os mantidos, nunca eram alcançados em plpcg.com.
+#
+# A rota foi estreitada para `*.plpcg.com/*` (só subdomínios): o apex passou a
+# ser servido pelo Pages, acabando com a duplicação onde ela custava caro.
+# O Worker continua necessário porque v2.plpcg.com e 120826.plpcg.com servem
+# /assets/**.pdf e NÃO têm binding de R2 — só funcionam através dele.
+#
+# Enquanto esses dois existirem, a regra de correspondência de chave tem de
+# valer nos dois caminhos: por isso ela é importada de src/lib/server/, e não
+# copiada. Aposentar v2 e 120826 permite apagar este Worker de vez.
 #
 # O código deste Worker só existia na Cloudflare até 2026-08-31; foi
 # recuperado da API e trazido para cá para não se perder de novo.
@@ -17,7 +24,7 @@ main = "index.js"
 compatibility_date = "2024-01-01"
 
 [env.production]
-routes = [{ pattern = "*plpcg.com/*", zone_name = "plpcg.com" }]
+routes = [{ pattern = "*.plpcg.com/*", zone_name = "plpcg.com" }]
 
 [[env.production.r2_buckets]]
 binding = "LOUVORES_BUCKET"
