@@ -1,0 +1,67 @@
+{
+  "_comentario": "Gerado por scripts/gerar-fixture-caminhos.mjs a partir do louvores-manifest.json real. Não editar à mão.",
+  "totalNoAcervo": 4629,
+  "nomesDeArquivoRepetidos": 431,
+  "grupos": {
+    "nfd": [
+      "assets/05042026/A Obra do Senhor é Perfeita/Coro.pdf",
+      "assets/05042026/Bênção Aarônica (Bênção Apostólica)/Coro.pdf",
+      "assets/05042026/Tabernáculo/Coro.pdf",
+      "assets/30102025/A ORAÇÃO DA TUA IGREJA - Coro.pdf",
+      "assets/30102025/Preciosa graça de Jesus (T&F V) - Vocal -16 10 2025-.pdf",
+      "assets/Avulsos Diversos/Ao Único.pdf",
+      "assets/PES/Alto preço - CIFRA.pdf",
+      "assets/PES/Ó profundidade das riquezas - Vocal [20 03 2026].pdf"
+    ],
+    "colchetes": [
+      "assets/30102025/Sobe aqui [26-07-2025] - Coro.pdf",
+      "assets/PES/Perante a tua grandeza - Vocal [06 02 2025].pdf"
+    ],
+    "base64NoNome": [
+      "assets/Adicionados/QWRpY2lvbmFkb3MvQ29tIG11aXRvIGxvdXZvci9DaWZyYS5wZGY=.pdf",
+      "assets/Adicionados/QWRpY2lvbmFkb3MvQ29tIG1ldSBjb3Jhw6fDo28vQ2lmcmEucGRm.pdf",
+      "assets/Adicionados/QWRpY2lvbmFkb3MvQ29tIGEgbWluaGEgdm96IGNsYW1vIGFvIFNlbmhvci9DaWZyYS5wZGY=.pdf"
+    ],
+    "acentoECedilha": [
+      "assets/06112025/Há Esperança/Cifra.pdf",
+      "assets/06112025/Há Esperança/Partitura.pdf",
+      "assets/06112025/São tantas aflições (Creia)/Partitura.pdf",
+      "assets/30102025/Fala ao Meu Coração, Jesus - Melodia.pdf"
+    ],
+    "basenameRepetido": [
+      "assets/Coletânea CIAs/Cifra I.pdf",
+      "assets/Louvores Coletânea CIAs/001 - Meu Deus, meu pai/Cifra I.pdf",
+      "assets/Louvores Coletânea CIAs/002 - Pai, estou a te clamar/Cifra I.pdf",
+      "assets/Louvores Coletânea CIAs/003 - Clamo, ó Senhor por teu sangue/Cifra I.pdf"
+    ],
+    "zeroAEsquerda": [
+      "assets/Avulsos Diversos/098.pdf",
+      "assets/Avulsos/011.pdf",
+      "assets/Avulsos/017.pdf"
+    ],
+    "parenteses": [
+      "assets/04112025/Jesus Voltará (vou me preparar)/Cifra.pdf",
+      "assets/04112025/Jesus Voltará (vou me preparar)/Gestos CIAs.pdf",
+      "assets/04112025/Na batalha, eu oro ao Senhor (A vitória da igreja)/Cifra.pdf"
+    ],
+    "pontuacaoRara": [
+      "assets/Louvores Coletânea de Partituras/624 - A minh’alma engrandece/Cifra I.pdf",
+      "assets/Louvores Coletânea de Partituras/731 - Sequência de Louvores Nº 1/Cifra I.pdf",
+      "assets/05042026/Buscar-te-ei, Senhor!/Coro.pdf",
+      "assets/04112025/Eu clamo, eu oro/Cifra.pdf"
+    ],
+    "amostraUniforme": [
+      "assets/04112025/A luz que brilha mais que o sol/Cifra.pdf",
+      "assets/Adicionados/QWRpY2lvbmFkb3MvSmVzdXMgaXLDoSB2b2x0YXIvQ2lmcmEucGRm.pdf",
+      "assets/Avulsos/103.pdf",
+      "assets/Avulsos/A092 - No ceu nao entra pecado - Coro.pdf",
+      "assets/ColAdultos/265.pdf",
+      "assets/ColAdultos/650.pdf",
+      "assets/Louvores Coletânea CIAs/129 - Ontem, hoje e para sempre/Gestos CIAs.pdf",
+      "assets/Louvores Coletânea de Partituras/026 - Seja só o Senhor louvado aqui/Cifra I.pdf",
+      "assets/Louvores Coletânea de Partituras/218 - Por Amor Jesus Morreu/Cifra II.pdf",
+      "assets/Louvores Coletânea de Partituras/412 - Sou Forasteiro/Cifra II.pdf",
+      "assets/Louvores Coletânea de Partituras/605 - Nosso Deus é soberano/Cifra II.pdf"
+    ]
+  }
+}
