@@ -4,21 +4,9 @@
  */
 
 import { browser } from '$app/environment';
+import { isRecoverableShellCacheName } from '$lib/offline/sw/swCaches.js';
 
 const STORAGE_KEY = 'plpcjf:staleChunkRecovery';
-/** Igual a `PDF_CACHE` em `static/sw.js` / OfflineConfig — nunca apagar na recuperação de chunk. */
-const PDF_CACHE_NAME = 'plpc-pdfs';
-
-/**
- * Só remove caches criados pelo SW para shell/immutable e PDF.js embutido.
- * Não mexe em `plpc-pdfs`, nem em caches `plpc-*` que não sigam esse padrão.
- *
- * @param {string} name
- */
-function isSwShellOrPdfJsCache(name) {
-  if (name === PDF_CACHE_NAME) return false;
-  return /^plpc-v[\w-]+-app$/.test(name) || /^plpc-v[\w-]+-pdfjs$/.test(name);
-}
 
 function readState() {
   try {
@@ -51,7 +39,7 @@ async function hardResetSwAndAppCaches() {
     }
     if (typeof caches !== 'undefined') {
       const keys = await caches.keys();
-      await Promise.all(keys.filter(isSwShellOrPdfJsCache).map((k) => caches.delete(k)));
+      await Promise.all(keys.filter(isRecoverableShellCacheName).map((k) => caches.delete(k)));
     }
   } catch (e) {
     console.warn('[staleChunkRecovery] cleanup failed', e);

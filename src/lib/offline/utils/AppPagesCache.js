@@ -9,9 +9,9 @@ import { getConfig } from '../core/OfflineConfig.js';
 
 const logger = createLogger('AppPagesCache');
 
-// Cache name must match the one used in service worker
-// From sw.js: const APP_CACHE = `${CACHE_VERSION}-app`;
-// Single source of truth: OfflineConfig.js APP_CACHE_NAME (currently 'plpc-v5-app')
+// Precisa ser o mesmo nome que o Service Worker usa.
+// Fonte única: OfflineConfig.APP_CACHE_NAME, derivado de `appCacheName(version)`
+// em src/lib/offline/sw/swCaches.js — o worker deriva do mesmo `version`.
 const APP_CACHE_NAME = getConfig('APP_CACHE_NAME');
 
 // All application routes that should be cached

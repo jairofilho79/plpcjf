@@ -1255,7 +1255,7 @@
       // Clear offline manager cache (PDFs)
       await offlineManager.clearCache();
       
-      // Clear all caches including plpc-pdfs e o app cache (ver OfflineConfig.js APP_CACHE_NAME / static/sw.js CACHE_VERSION)
+      // Limpa plpc-pdfs e o cache do app (OfflineConfig.APP_CACHE_NAME, derivado da version do deploy)
       if (typeof caches !== 'undefined') {
         const appCacheName = getConfig('APP_CACHE_NAME');
         try {

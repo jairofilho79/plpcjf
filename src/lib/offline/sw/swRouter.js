@@ -1,12 +1,12 @@
 /**
  * Roteamento do fetch handler do Service Worker.
  *
- * Script simples, sem ES modules — carregado por importScripts, igual a sw-utils.js.
- * A ordem das regras é significativa e é a única definição dela no projeto:
- * a primeira que casar vence.
+ * ES module puro, sem imports: é carregado pelo worker (via Vite) e roda direto
+ * no `node --test`. A ordem das regras é significativa e é a única definição
+ * dela no projeto: a primeira que casar vence.
  */
 
-const SW_APP_SHELL_PATHS = [
+export const SW_APP_SHELL_PATHS = [
   '/',
   '/manifest.json',
   '/louvores-manifest.json',
@@ -21,7 +21,7 @@ const SW_APP_SHELL_PATHS = [
  * @param {{ isNavigation?: boolean }} [ctx]
  * @returns {'navigation'|'pdfjs'|'pdf'|'checksum'|'package-zip'|'hashed-asset'|'app-shell'|'default'}
  */
-function matchSwRoute(pathname, ctx) {
+export function matchSwRoute(pathname, ctx) {
   if (ctx && ctx.isNavigation) return 'navigation';
 
   if (pathname.indexOf('/pdfjs/') !== -1) return 'pdfjs';
@@ -50,10 +50,4 @@ function matchSwRoute(pathname, ctx) {
   if (SW_APP_SHELL_PATHS.indexOf(pathname) !== -1) return 'app-shell';
 
   return 'default';
-}
-
-// Exporta no escopo global do Service Worker (mesmo padrão de sw-utils.js).
-if (typeof self !== 'undefined') {
-  self.matchSwRoute = matchSwRoute;
-  self.SW_APP_SHELL_PATHS = SW_APP_SHELL_PATHS;
 }

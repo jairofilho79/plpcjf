@@ -1,6 +1,8 @@
 // Service Worker Registration Utility
 // Handles registration and communication with the service worker
 
+import { dev } from '$app/environment';
+
 let swRegistration = null;
 
 /**
@@ -14,7 +16,15 @@ export async function registerServiceWorker() {
   }
 
   try {
-    const registration = await navigator.serviceWorker.register('/sw.js', { scope: '/' });
+    // Caminho padrão do SvelteKit: o worker é gerado a partir de src/service-worker.js.
+    // Em produção o bundle sai sem import/export, então registra como script clássico —
+    // `type: 'module'` só é necessário em dev (Vite serve os módulos soltos) e ainda não
+    // existe em Safari < 16.4 nem Firefox < 111. Mesma escolha que o registro embutido
+    // do SvelteKit faz, e por isso `kit.serviceWorker.register` está desligado.
+    const registration = await navigator.serviceWorker.register('/service-worker.js', {
+      scope: '/',
+      type: dev ? 'module' : 'classic'
+    });
     swRegistration = registration;
 
     // Verificar atualizações periodicamente (a cada hora)
