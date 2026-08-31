@@ -20,7 +20,8 @@ import {
   clearAllCompletedParts,
   computePartsFingerprint,
   looksLikeCaptivePortal,
-  fetchWithRetry
+  fetchWithRetry,
+  excludeSkippedPartFromBytesTotal
 } from '$lib/offline/download/partProgress.js';
 import { louvores } from './louvores';
 import { validateManifestsIntegrity } from '$lib/utils/manifestValidation';
@@ -896,6 +897,11 @@ async function startZipDownloadWithSpecificParts(categories, pdfUrls, partsByCat
               // Sem fase: nada está sendo baixado/extraído/gravado agora, só
               // reconhecido como já pronto de uma tentativa anterior.
               phase: null,
+              // A parte pulada não passa pelo fetch que soma bytesDownloaded:
+              // encolhe o total pelo tamanho dela para o contador de bytes
+              // continuar honesto numa retomada (senão trava abaixo de 100%
+              // com a barra de progresso já cheia).
+              bytesTotal: excludeSkippedPartFromBytesTotal(state.bytesTotal, part.size),
               progress: total === 0 ? 100 : Math.min(99, Math.floor((completed / total) * 100))
             }));
 
@@ -1912,6 +1918,11 @@ async function startZipDownload(categories, pdfUrls, alreadyDownloadedCategories
               // Sem fase: nada está sendo baixado/extraído/gravado agora, só
               // reconhecido como já pronto de uma tentativa anterior.
               phase: null,
+              // A parte pulada não passa pelo fetch que soma bytesDownloaded:
+              // encolhe o total pelo tamanho dela para o contador de bytes
+              // continuar honesto numa retomada (senão trava abaixo de 100%
+              // com a barra de progresso já cheia).
+              bytesTotal: excludeSkippedPartFromBytesTotal(state.bytesTotal, part.size),
               progress: total === 0 ? 100 : Math.min(99, Math.floor((completed / total) * 100))
             }));
 
@@ -2125,7 +2136,11 @@ async function startZipDownload(categories, pdfUrls, alreadyDownloadedCategories
       }
 
       // Check if IS_LEITOR_OFFLINE flag exists, if not open PDF in leitor
-      const isLeitorOffline = localStorage.getItem('IS_LEITOR_OFFLINE');
+      // Via safeStorage(): mesmo motivo do resto deste bloco de sucesso — no
+      // Firefox com dados do site bloqueados, um acesso direto a localStorage
+      // aqui lançaria e cairia no catch externo, reportando falha depois de
+      // todos os PDFs já terem sido gravados no cache com sucesso.
+      const isLeitorOffline = safeStorage()?.getItem('IS_LEITOR_OFFLINE');
       if (!isLeitorOffline || isLeitorOffline !== 'true') {
         // Open offline-setup.pdf in leitor to set the flag
         const leitorUrl = '/leitor?file=/offline-setup.pdf&titulo=Configuração Offline&subtitulo=Página de funcionamento';

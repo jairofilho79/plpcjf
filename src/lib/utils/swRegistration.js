@@ -141,7 +141,12 @@ export function sendMessageToSW(message, options = {}) {
       return;
     }
 
-    const timeoutMs = Number.isFinite(options.timeoutMs) ? options.timeoutMs : 30000;
+    // Padrão de 5 minutos: `clearCache`, `getCachedPDFs`, `clearPdfFromSwCache` e
+    // `clearLouvoresManifestFromSwCache` passam por aqui, e `handleClearCache` no
+    // worker pode levar bem mais que 30s para apagar centenas de MB em Android
+    // fraco. Um timeout curto rejeita a promise enquanto o worker ainda está
+    // apagando — a tela mostra falha, mas não houve perda de dado nenhuma.
+    const timeoutMs = Number.isFinite(options.timeoutMs) ? options.timeoutMs : 5 * 60 * 1000;
     const channel = new MessageChannel();
     /** @type {ReturnType<typeof setTimeout> | null} */
     let timeoutId = null;

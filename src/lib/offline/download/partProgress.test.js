@@ -12,7 +12,8 @@ import {
   computePartsFingerprint,
   isRetryableStatus,
   looksLikeCaptivePortal,
-  fetchWithRetry
+  fetchWithRetry,
+  excludeSkippedPartFromBytesTotal
 } from './partProgress.js';
 
 function createStorage() {
@@ -350,5 +351,40 @@ describe('fetchWithRetry', () => {
     );
     assert.ok(calls < 50, `esperava desistir antes das 50 tentativas, foram ${calls}`);
     assert.ok(Date.now() - started < 2000);
+  });
+});
+
+describe('excludeSkippedPartFromBytesTotal', () => {
+  it('encolhe o total pelo tamanho da parte pulada', () => {
+    assert.equal(excludeSkippedPartFromBytesTotal(300_000_000, 90_000_000), 210_000_000);
+  });
+
+  it('acumula ao longo de várias partes puladas, simulando uma retomada', () => {
+    // 17 partes de ~17.6 MB cada (~300 MB); retomando na parte 13, as 12
+    // primeiras são puladas.
+    const partSize = 17_647_058;
+    let bytesTotal = 300_000_000;
+    for (let i = 0; i < 12; i++) {
+      bytesTotal = excludeSkippedPartFromBytesTotal(bytesTotal, partSize);
+    }
+    // Sobra o suficiente para as 5 partes restantes, não os 300 MB originais:
+    // sem o ajuste, o download terminaria com bytesDownloaded (~90 MB) bem
+    // abaixo de bytesTotal (300 MB) mesmo com sucesso e barra em 100%.
+    assert.ok(bytesTotal < 100_000_000, `esperava bem menos que 100 MB restantes, ficou ${bytesTotal}`);
+    assert.ok(bytesTotal > 0);
+  });
+
+  it('preserva null quando o manifesto não permite estimar (size ausente/ inválido em alguma parte)', () => {
+    assert.equal(excludeSkippedPartFromBytesTotal(null, 90_000_000), null);
+  });
+
+  it('ignora tamanho de parte inválido e mantém o total como estava', () => {
+    assert.equal(excludeSkippedPartFromBytesTotal(300_000_000, undefined), 300_000_000);
+    assert.equal(excludeSkippedPartFromBytesTotal(300_000_000, 0), 300_000_000);
+    assert.equal(excludeSkippedPartFromBytesTotal(300_000_000, -5), 300_000_000);
+  });
+
+  it('nunca fica negativo mesmo se a soma das partes puladas exceder o total', () => {
+    assert.equal(excludeSkippedPartFromBytesTotal(10, 90_000_000), 0);
   });
 });

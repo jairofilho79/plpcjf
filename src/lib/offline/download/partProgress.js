@@ -257,7 +257,7 @@ function sleep(ms, signal) {
  * O encaminhamento do abort do usuário, esse, continua ativo depois do retorno —
  * é o que permite cancelar durante a leitura do corpo.
  *
- * @param {AbortSignal} [signal] sinal do usuário
+ * @param {AbortSignal | undefined} signal sinal do usuário (pode ser `undefined`, mas o parâmetro em si é obrigatório: `timeoutMs` vem depois e não pode ficar sem ele)
  * @param {number} timeoutMs 0 desliga o prazo
  */
 function createAttemptSignal(signal, timeoutMs) {
@@ -294,6 +294,27 @@ function createAttemptSignal(signal, timeoutMs) {
       signal?.removeEventListener?.('abort', onAbort);
     }
   };
+}
+
+/**
+ * Bytes que ainda faltam baixar depois de pular uma parte já concluída (retomada).
+ *
+ * `bytesTotal` é a soma de todas as partes, calculada antes do laço de download.
+ * `bytesDownloaded`, porém, só cresce no caminho de `fetch` — a retomada pula o
+ * `fetch` das partes já gravadas. Sem este ajuste, retomar um download de 17
+ * partes (300 MB) na parte 13 abre em "0 B de 300 MB baixados", sobe só com as
+ * 4 partes restantes (~90 MB) e trava aí, com a barra de progresso (que é por
+ * contagem de PDF, não por byte) já em 100%.
+ *
+ * @param {number | null} bytesTotal
+ * @param {number | null | undefined} partSize tamanho declarado da parte pulada
+ * @returns {number | null}
+ */
+export function excludeSkippedPartFromBytesTotal(bytesTotal, partSize) {
+  if (bytesTotal === null) return null;
+  const size = Number(partSize);
+  if (!Number.isFinite(size) || size <= 0) return bytesTotal;
+  return Math.max(0, bytesTotal - size);
 }
 
 /**
