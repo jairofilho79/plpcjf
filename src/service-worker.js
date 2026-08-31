@@ -20,6 +20,7 @@ import {
   isObsoleteCacheName,
   migrateCatalogManifests,
   CATALOG_CACHE_NAME,
+  CATALOG_MANIFEST_PATHS,
   PDF_CACHE_NAME
 } from '$lib/offline/sw/swCaches.js';
 import PdfPathManager from '$lib/offline/utils/PdfPathManager.js';
@@ -594,9 +595,12 @@ async function handleClearPdfCacheEntry(event, data) {
 }
 
 /**
- * Remove o louvores-manifest.json em cache para a próxima busca ir à rede.
+ * Remove os dois manifests do catálogo (louvores-manifest.json e
+ * offline-manifest.json) em cache para a próxima busca ir à rede.
  * É a invalidação usada pela sincronização por checksum — e a única que existe,
  * já que o catálogo vive num cache sem versão que nenhum deploy renova sozinho.
+ * Limpar só o primeiro deixava o segundo servido cache-first e os dois
+ * manifests divergiam até o usuário limpar tudo.
  * Varre também o cache do app, para o caso de sobra anterior à migração.
  */
 async function handleClearLouvoresManifestCache(event) {
@@ -611,7 +615,7 @@ async function handleClearLouvoresManifestCache(event) {
         requests.map(async (req) => {
           try {
             const u = new URL(req.url);
-            if (u.pathname === '/louvores-manifest.json') {
+            if (CATALOG_MANIFEST_PATHS.includes(u.pathname)) {
               const deleted = await cache.delete(req);
               if (deleted) removedCount++;
             }
@@ -622,7 +626,7 @@ async function handleClearLouvoresManifestCache(event) {
       );
     }
 
-    debug('louvores-manifest removido do cache:', removedCount, 'entradas');
+    debug('manifests do catálogo removidos do cache:', removedCount, 'entradas');
 
     if (event.ports && event.ports[0]) {
       event.ports[0].postMessage({

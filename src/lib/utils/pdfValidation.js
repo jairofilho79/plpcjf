@@ -1,7 +1,7 @@
 // PDF Validation Utility
 // Validates PDF availability and identifies missing PDFs
 
-import { getCachedPDFsFast, waitForServiceWorker, downloadPDFsViaSW, invalidateCachedPDFsLocal, getCachedPDFs } from '$lib/utils/swRegistration';
+import { getCachedPDFsFast, waitForServiceWorker, downloadPDFsViaSW, invalidateCachedPDFsLocal, getCachedPDFs, debugLog } from '$lib/utils/swRegistration';
 import { getPdfRelPath } from '$lib/utils/pathUtils';
 import { isPdfAvailableInIndex } from '$lib/utils/pdfIndex';
 import compositeValidator from '$lib/offline/validation/CompositeValidator.js';
@@ -238,10 +238,10 @@ export async function ensurePdfAvailable(pdfPath) {
   if (validation.needsDownload && effectiveOnline) {
     // Try to download automatically
     try {
-      console.log('[PDF Validation] Attempting auto-download:', validation.url);
+      debugLog('[PDF Validation] Attempting auto-download:', validation.url);
       await downloadPDFsViaSW([validation.url], 1, (progress) => {
         if (progress.completed > 0) {
-          console.log('[PDF Validation] Auto-download completed');
+          debugLog('[PDF Validation] Auto-download completed');
         }
       });
       

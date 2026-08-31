@@ -28,6 +28,19 @@ export async function registerServiceWorker() {
     });
     swRegistration = registration;
 
+    // Propaga o gate de debug ao SW (mesma flag do leitor: plpcjf_perf_debug).
+    try {
+      const debugOn = localStorage.getItem('plpcjf_perf_debug') === '1';
+      navigator.serviceWorker.ready.then(() => {
+        navigator.serviceWorker.controller?.postMessage({
+          type: 'SET_DEBUG',
+          data: { enabled: debugOn }
+        });
+      });
+    } catch {
+      // localStorage indisponível: segue sem debug.
+    }
+
     // Verificar atualizações periodicamente (a cada hora)
     const updateIntervalId = setInterval(() => {
       registration.update();
@@ -39,7 +52,7 @@ export async function registerServiceWorker() {
       newWorker.addEventListener('statechange', () => {
         if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
           // Novo service worker disponível
-          console.log('[SW Registration] New service worker available');
+          debugLog('[SW Registration] New service worker available');
           dispatchUpdateEvent();
         }
       });
@@ -47,7 +60,7 @@ export async function registerServiceWorker() {
 
     registration.addEventListener('updatefound', onUpdateFound);
 
-    console.log('[SW Registration] Service worker registered successfully');
+    debugLog('[SW Registration] Service worker registered successfully');
 
     return {
       registration,
@@ -72,7 +85,7 @@ export async function unregisterServiceWorker() {
 
   try {
     const success = await swRegistration.unregister();
-    console.log('[SW Registration] Service worker unregistered:', success);
+    debugLog('[SW Registration] Service worker unregistered:', success);
     swRegistration = null;
     return success;
   } catch (error) {
@@ -122,7 +135,15 @@ export function sendMessageToSW(message, options = {}) {
       reject(new Error('Service worker message timeout'));
     }, timeoutMs);
 
-    navigator.serviceWorker.controller.postMessage(message, [channel.port2]);
+    try {
+      navigator.serviceWorker.controller.postMessage(message, [channel.port2]);
+    } catch (err) {
+      // Mensagem não clonável ou porta inválida: postMessage lança de forma
+      // síncrona. Sem este catch, a promise nunca resolvia por essa saída e o
+      // timer/porta só eram liberados 30s depois, no timeout.
+      cleanup();
+      reject(err);
+    }
   });
 }
 
@@ -275,7 +296,7 @@ export async function getCachedPDFsFast() {
   
   // Se cache storage não está disponível, invalidar cache do localStorage
   if (!cacheStorageAvailable) {
-    console.log('[SW Message] Cache storage not available, invalidating localStorage cache');
+    debugLog('[SW Message] Cache storage not available, invalidating localStorage cache');
     invalidateCachedPDFsLocal();
     return [];
   }
@@ -288,7 +309,7 @@ export async function getCachedPDFsFast() {
         const { pdfs, timestamp } = JSON.parse(cached);
         // Verificar se cache ainda é válido (TTL de 5 minutos)
         if (Date.now() - timestamp < CACHE_TTL) {
-          console.log('[SW Message] Using cached PDFs list from localStorage');
+          debugLog('[SW Message] Using cached PDFs list from localStorage');
           return pdfs;
         }
       }
@@ -320,7 +341,7 @@ export async function getCachedPDFsFast() {
       
       // Se não há PDFs no cache storage, invalidar localStorage
       if (pdfCount === 0) {
-        console.log('[SW Message] No PDFs in cache storage, invalidating localStorage cache');
+        debugLog('[SW Message] No PDFs in cache storage, invalidating localStorage cache');
         invalidateCachedPDFsLocal();
         return [];
       }
@@ -354,7 +375,7 @@ export function invalidateCachedPDFsLocal() {
   if (typeof window !== 'undefined' && typeof localStorage !== 'undefined') {
     try {
       localStorage.removeItem(CACHED_PDFS_LOCAL_KEY);
-      console.log('[SW Message] Invalidated local PDFs cache');
+      debugLog('[SW Message] Invalidated local PDFs cache');
     } catch (err) {
       console.warn('[SW Message] Failed to invalidate local cache:', err);
     }
@@ -500,7 +521,7 @@ export function setupServiceWorkerMessageListener() {
 
   const messageHandler = async (event) => {
     if (event.data && event.data.type === 'CACHE_UPDATED') {
-      console.log('[SW Registration] Cache updated notification received from Service Worker');
+      debugLog('[SW Registration] Cache updated notification received from Service Worker');
       
       // Invalidate local cache when SW cache is updated
       invalidateCachedPDFsLocal();
@@ -540,5 +561,20 @@ export function setupServiceWorkerMessageListener() {
   return () => {
     navigator.serviceWorker.removeEventListener('message', messageHandler);
   };
+}
+
+/**
+ * Log de diagnóstico, ativado por `localStorage.plpcjf_perf_debug = '1'`.
+ * Erros e avisos continuam sempre visíveis — só o ruído de fluxo normal é filtrado.
+ * @param {...unknown} args
+ */
+export function debugLog(...args) {
+  try {
+    if (typeof localStorage !== 'undefined' && localStorage.getItem('plpcjf_perf_debug') === '1') {
+      console.log(...args);
+    }
+  } catch {
+    // ignorar
+  }
 }
 

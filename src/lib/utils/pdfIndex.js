@@ -1,7 +1,7 @@
 // PDF Index Utility
 // Manages availability index for PDFs to enable fast validation
 
-import { getCachedPDFsFast, waitForServiceWorker } from '$lib/utils/swRegistration';
+import { getCachedPDFsFast, waitForServiceWorker, debugLog } from '$lib/utils/swRegistration';
 import { getPdfRelPath } from '$lib/utils/pathUtils';
 import urlNormalizer from '$lib/offline/normalization/UrlNormalizer.js';
 import { buildPdfCacheIndex } from './pdfCacheIndex.js';
@@ -93,7 +93,7 @@ export async function generatePdfIndex(louvores) {
       }
     }
 
-    console.log(`[PDF Index] Generated index for ${index.size} PDFs`);
+    debugLog(`[PDF Index] Generated index for ${index.size} PDFs`);
     return index;
   } catch (error) {
     console.error('[PDF Index] Error generating index:', error);
@@ -116,7 +116,7 @@ export function savePdfIndex(index) {
 
   try {
     localStorage.setItem(PDF_INDEX_KEY, JSON.stringify(indexData));
-    console.log(`[PDF Index] Saved index with ${index.size} entries`);
+    debugLog(`[PDF Index] Saved index with ${index.size} entries`);
   } catch (err) {
     console.error('[PDF Index] Failed to save index:', err);
     // If quota exceeded, try to clear old data
@@ -146,14 +146,14 @@ export function loadPdfIndex() {
 
     // Validate version
     if (indexData.version !== INDEX_VERSION) {
-      console.log('[PDF Index] Index version mismatch, clearing old index');
+      debugLog('[PDF Index] Index version mismatch, clearing old index');
       localStorage.removeItem(PDF_INDEX_KEY);
       return null;
     }
 
     // Validate TTL
     if (Date.now() - indexData.timestamp > INDEX_TTL) {
-      console.log('[PDF Index] Index expired, clearing old index');
+      debugLog('[PDF Index] Index expired, clearing old index');
       localStorage.removeItem(PDF_INDEX_KEY);
       return null;
     }
@@ -199,7 +199,7 @@ function shouldSkipVerification() {
 
     // Skip if verified recently (within minimum interval)
     if (timeSinceLastVerification < MIN_VERIFICATION_INTERVAL) {
-      console.log(`[PDF Index] Skipping verification - last verified ${Math.round(timeSinceLastVerification / 1000)}s ago`);
+      debugLog(`[PDF Index] Skipping verification - last verified ${Math.round(timeSinceLastVerification / 1000)}s ago`);
       return true;
     }
 
@@ -235,7 +235,7 @@ export function invalidatePdfIndexSession() {
 
   try {
     sessionStorage.removeItem(SESSION_VERIFICATION_KEY);
-    console.log('[PDF Index] Session cache invalidated - next verification will run');
+    debugLog('[PDF Index] Session cache invalidated - next verification will run');
   } catch (err) {
     console.warn('[PDF Index] Error invalidating session cache:', err);
   }
@@ -261,7 +261,7 @@ export async function updatePdfIndexInBackground(louvores, immediate = false, fo
     // Verificar se o index existe e está válido
     const existingIndex = loadPdfIndex();
     if (existingIndex && existingIndex.size > 0) {
-      console.log('[PDF Index] Using cached index from session');
+      debugLog('[PDF Index] Using cached index from session');
       return; // Usar index existente
     }
     // Se não há index válido, continuar com verificação
@@ -270,7 +270,7 @@ export async function updatePdfIndexInBackground(louvores, immediate = false, fo
   // SOLUÇÃO 2: Se já há verificação em andamento, aguardar ou retornar
   if (isVerificationInProgress && !force) {
     if (verificationPromise) {
-      console.log('[PDF Index] Verification already in progress, waiting for completion...');
+      debugLog('[PDF Index] Verification already in progress, waiting for completion...');
       return verificationPromise;
     }
   }
@@ -315,14 +315,14 @@ async function executeVerification(louvores, immediate) {
 
   const startUpdate = async () => {
     try {
-      console.log('[PDF Index] Updating index in background...');
+      debugLog('[PDF Index] Updating index in background...');
       const index = await generatePdfIndex(louvores);
       savePdfIndex(index);
       
       // Marcar verificação como completa no cache de sessão
       markVerificationComplete();
       
-      console.log('[PDF Index] Index updated successfully');
+      debugLog('[PDF Index] Index updated successfully');
     } catch (err) {
       console.error('[PDF Index] Failed to update index:', err);
     } finally {
@@ -368,7 +368,7 @@ export function clearPdfIndex() {
   try {
     localStorage.removeItem(PDF_INDEX_KEY);
     invalidatePdfIndexSession();
-    console.log('[PDF Index] Index cleared');
+    debugLog('[PDF Index] Index cleared');
   } catch (err) {
     console.error('[PDF Index] Failed to clear index:', err);
   }

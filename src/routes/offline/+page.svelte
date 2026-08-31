@@ -1260,9 +1260,10 @@
       if (typeof caches !== 'undefined') {
         const appCacheName = getConfig('APP_CACHE_NAME');
         const catalogCacheName = getConfig('CATALOG_CACHE_NAME') || 'plpc-catalog';
+        const pdfCacheName = getConfig('PDF_CACHE_NAME') || 'plpc-pdfs';
         try {
           // Clear plpc-pdfs cache (PDFs)
-          const pdfCache = await caches.open('plpc-pdfs');
+          const pdfCache = await caches.open(pdfCacheName);
           const pdfKeys = await pdfCache.keys();
           await Promise.all(pdfKeys.map(key => pdfCache.delete(key)));
           console.log('[Offline Page] Cleared plpc-pdfs cache');
@@ -1275,7 +1276,7 @@
 
           // Also try to delete the entire caches if possible
           try {
-            await caches.delete('plpc-pdfs');
+            await caches.delete(pdfCacheName);
             console.log('[Offline Page] Deleted plpc-pdfs cache entirely');
           } catch (e) {
             // Ignore if cache doesn't exist or can't be deleted
