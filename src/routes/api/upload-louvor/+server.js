@@ -10,6 +10,17 @@ export async function POST({ request, platform }) {
       'Access-Control-Allow-Headers': 'Content-Type, Authorization',
     };
 
+    // Falha fechada: sem segredo, `verifyJWT(token, undefined)` validaria
+    // assinaturas HMAC contra a string literal "undefined" e qualquer um
+    // poderia escrever no bucket. Era exatamente o estado do Worker legado.
+    if (!platform?.env?.JWT_SECRET) {
+      console.error('JWT_SECRET ausente — upload indisponivel.');
+      return new Response('Upload indisponivel: JWT_SECRET nao configurado', {
+        status: 503,
+        headers: corsHeaders
+      });
+    }
+
     // Verify JWT token
     const authHeader = request.headers.get('Authorization');
     if (!authHeader || !authHeader.startsWith('Bearer ')) {

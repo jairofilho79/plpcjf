@@ -4,7 +4,21 @@ import { findExactKeyMatch } from '$lib/server/r2KeyMatch.js';
 /** @type {import('@sveltejs/kit').Handle} */
 export async function handle({ event, resolve }) {
   const url = event.url;
-  
+
+  // Preflight CORS de origem cruzada. O Worker `louvores-worker-production`
+  // respondia a isto para a zona plpcg.com inteira; ao tirá-lo da frente do
+  // apex, a resposta passa a sair daqui. Clientes cross-origin que mandam
+  // Authorization (o app Flutter, por exemplo) dependem dela.
+  if (event.request.method === 'OPTIONS') {
+    return new Response(null, {
+      headers: {
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+        'Access-Control-Allow-Headers': 'Content-Type, Authorization'
+      }
+    });
+  }
+
   // Serve PDFs from R2 if they match /assets/**/*.pdf pattern
   if (url.pathname.startsWith('/assets/') && url.pathname.endsWith('.pdf')) {
     return await servePdf(url.pathname, event.platform);
