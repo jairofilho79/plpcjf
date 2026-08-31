@@ -113,15 +113,13 @@
       longPressDuration={500}
       preventDefault={true}
       disabled={isDisabled}
+      ariaLabel={`Categoria ${category}`}
+      ariaPressed={isCategoryActive}
     >
-      <button
-        type="button"
+      <span
         class="filter-chip"
         class:active={isCategoryActive}
         class:disabled={isDisabled}
-        disabled={isDisabled}
-        aria-pressed={isCategoryActive}
-        aria-label={`Categoria ${category}`}
       >
         {#if isDisabled}
           <WifiOff class="w-4 h-4 offline-icon" />
@@ -131,7 +129,7 @@
           </svg>
         {/if}
         <span>{category}</span>
-      </button>
+      </span>
     </GestureButton>
   {/each}
 </div>

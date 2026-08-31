@@ -239,7 +239,9 @@
     background-color: rgba(244, 208, 63, 0.1);
   }
 
-  .items-per-page-button:focus {
+  /* :not(:focus-visible) só cobre o clique/toque — o anel de teclado vem
+     do :focus-visible global em app.css, que não é sobrescrito aqui. */
+  .items-per-page-button:focus:not(:focus-visible) {
     outline: none;
     border-color: var(--gold-light);
     box-shadow: 0 0 0 3px rgba(244, 208, 63, 0.25);
@@ -340,7 +342,9 @@
     transition: all 0.2s ease;
   }
 
-  .pagination-input:focus {
+  /* :not(:focus-visible) só cobre o clique/toque — o anel de teclado vem
+     do :focus-visible global em app.css, que não é sobrescrito aqui. */
+  .pagination-input:focus:not(:focus-visible) {
     outline: none;
     border-color: var(--gold-light);
     box-shadow: 0 0 0 3px rgba(244, 208, 63, 0.25);

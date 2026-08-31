@@ -76,16 +76,15 @@
         on:longpress={() => handleClassificationLongPress(classification)}
         longPressDuration={500}
         preventDefault={true}
+        ariaLabel={`Arranjo ${classification}`}
+        ariaPressed={isClassificationActive}
       >
-        <button
-          type="button"
+        <span
           class="filter-chip"
           class:active={isClassificationActive}
-          aria-pressed={isClassificationActive}
-          aria-label={`Arranjo ${classification}`}
         >
           <span>{classification}</span>
-        </button>
+        </span>
       </GestureButton>
     {/each}
   </div>

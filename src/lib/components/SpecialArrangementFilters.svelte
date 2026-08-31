@@ -63,16 +63,15 @@
         on:longpress={() => handleSpecialArrangementLongPress(specialArrangement)}
         longPressDuration={500}
         preventDefault={true}
+        ariaLabel={`Arranjo especial ${specialArrangement}`}
+        ariaPressed={isSpecialArrangementActive}
       >
-        <button
-          type="button"
+        <span
           class="filter-chip"
           class:active={isSpecialArrangementActive}
-          aria-pressed={isSpecialArrangementActive}
-          aria-label={`Arranjo especial ${specialArrangement}`}
         >
           <span>{specialArrangement}</span>
-        </button>
+        </span>
       </GestureButton>
     {/each}
   </div>

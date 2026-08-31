@@ -20,6 +20,15 @@
   export let usePointerCaptureWhilePressed = false;
   /** @type {string | undefined} */
   export let ariaLabel = undefined;
+  /**
+   * Estado pressionado/selecionado (para botões que funcionam como toggle,
+   * ex.: chips de filtro). Deixe undefined nos demais usos — omitir o
+   * atributo por completo é o que garante que o leitor de tela não anuncie
+   * um alternador (toggle) onde não existe um; `aria-pressed="false"` teria
+   * esse efeito indesejado.
+   * @type {boolean | undefined}
+   */
+  export let ariaPressed = undefined;
 
   const dispatch = createEventDispatcher();
 
@@ -398,6 +407,7 @@
   tabindex={disabled ? -1 : 0}
   aria-disabled={disabled}
   aria-label={ariaLabel}
+  aria-pressed={ariaPressed}
   on:keydown={handleKeydown}
 >
   <slot />

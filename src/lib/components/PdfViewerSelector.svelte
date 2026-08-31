@@ -132,7 +132,6 @@
   }
 
   .pdf-viewer-select:focus-visible {
-    outline: none;
     border-color: var(--gold-color);
     box-shadow: 0 0 0 3px rgba(212, 175, 55, 0.3);
   }
