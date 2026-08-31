@@ -38,7 +38,7 @@ export function atobUTF8(base64) {
 // Retorna caminho relativo sem barra inicial, ex: "assets/ColAdultos/arquivo.pdf"
 // CRÍTICO: Esta função NÃO normaliza o caminho (não converte para minúsculas, não remove acentos)
 // O caminho é usado exatamente como está no pdfId decodificado em base64 UTF-8
-export function getPdfRelPath(louvor) {
+function computePdfRelPath(louvor) {
   if (!louvor || !louvor.pdfId) {
     return null;
   }
@@ -77,6 +77,38 @@ export function getPdfRelPath(louvor) {
   } catch (_) {
     return null;
   }
+}
+
+/**
+ * Cache de caminho por pdfId. O pdfId é imutável para um louvor, então o
+ * resultado nunca fica obsoleto. Guarda também o null, para não repetir o atob
+ * de entradas quebradas.
+ * @type {Map<string, string | null>}
+ */
+const pdfRelPathCache = new Map();
+
+/** Só para teste. */
+export function __resetPdfRelPathCache() {
+  pdfRelPathCache.clear();
+}
+
+/**
+ * Caminho relativo do PDF, sem barra inicial. Ex.: "assets/ColAdultos/001.pdf".
+ * Memoizado por pdfId — era chamado centenas de vezes por render de página.
+ * @param {any} louvor
+ * @returns {string | null}
+ */
+export function getPdfRelPath(louvor) {
+  const pdfId = louvor?.pdfId;
+  if (!pdfId || typeof pdfId !== 'string') return null;
+
+  if (pdfRelPathCache.has(pdfId)) {
+    return pdfRelPathCache.get(pdfId) ?? null;
+  }
+
+  const resolved = computePdfRelPath(louvor);
+  pdfRelPathCache.set(pdfId, resolved);
+  return resolved;
 }
 
 /**
