@@ -15,7 +15,7 @@
     "generate-icons": "node scripts/generate-icons.mjs",
     "generate-offline-packages": "node scripts/generate-offline-packages.mjs",
     "build-offline-bundle": "node scripts/build-offline-bundle.mjs",
-    "test": "node --test src/lib/utils/groupLouvores.test.js src/lib/offline/import/zipCdReader.test.js src/lib/offline/import/OfflineBundleImporter.rollback.test.js src/lib/offline/import/bundleValidation.test.js src/lib/offline/sw/swRouter.test.js src/lib/utils/pdfCacheIndex.test.js src/lib/utils/louvorSearch.memo.test.js src/lib/utils/validationCacheStore.test.js",
+    "test": "node --test src/lib/utils/groupLouvores.test.js src/lib/offline/import/zipCdReader.test.js src/lib/offline/import/OfflineBundleImporter.rollback.test.js src/lib/offline/import/bundleValidation.test.js src/lib/offline/sw/swRouter.test.js src/lib/utils/pdfCacheIndex.test.js src/lib/utils/louvorSearch.memo.test.js src/lib/utils/validationCacheStore.test.js src/lib/server/r2KeyMatch.test.js",
     "test:offline-bundle": "node --test src/lib/offline/import/bundleValidation.test.js src/lib/offline/import/OfflineBundleImporter.rollback.test.js src/lib/offline/import/zipCdReader.test.js"
   },
   "dependencies": {

@@ -1,4 +1,5 @@
 import { error } from '@sveltejs/kit';
+import { findExactKeyMatch } from '$lib/server/r2KeyMatch.js';
 
 /** @type {import('@sveltejs/kit').Handle} */
 export async function handle({ event, resolve }) {
@@ -22,8 +23,7 @@ async function servePdf(pathname, platform) {
     'Access-Control-Allow-Origin': '*',
     'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
     'Access-Control-Allow-Headers': 'Content-Type, Authorization',
-    'Content-Type': 'application/pdf',
-    'Cache-Control': 'public, max-age=31536000' // Cache for 1 year
+    'Content-Type': 'application/pdf'
   };
 
   try {
@@ -61,38 +61,28 @@ async function servePdf(pathname, platform) {
       }
     }
     
-    // If still not found, try to find a similar filename in the R2 bucket
-    // This handles cases where the filename has encoding issues
+    // Último recurso: a chave real pode diferir só em acento/caixa.
+    // Correspondência exata após normalização — nunca por prefixo (achado #09).
     if (!object) {
       const pathParts = r2Key.split('/');
-      const prefix = pathParts.slice(0, -1).join('/'); // Get directory part
-      const expectedFilename = pathParts.pop(); // Get filename part
-      
-      // Normalize function: remove all non-alphanumeric characters for comparison
-      const normalize = (str) => str.toLowerCase().replace(/[^a-z0-9]/g, '');
-      const normalizedExpected = normalize(expectedFilename);
-      
-      // List objects in the same directory
+      const expectedFilename = pathParts.pop();
+      const prefix = pathParts.join('/');
+
       const list = await platform.env.LOUVORES_BUCKET.list({ prefix });
-      
-      // Find a matching file by comparing normalized filenames
-      for (const item of list.objects) {
-        const itemFilename = item.key.split('/').pop();
-        const normalizedItem = normalize(itemFilename);
-        
-        // Match if normalized names are identical or contain each other
-        if (normalizedExpected === normalizedItem || 
-            (normalizedExpected.length > 8 && normalizedExpected.includes(normalizedItem.substring(0, 10))) ||
-            (normalizedItem.length > 8 && normalizedItem.includes(normalizedExpected.substring(0, 10)))) {
-          object = await platform.env.LOUVORES_BUCKET.get(item.key);
-          if (object) {
-            console.log(`Matched file with encoding difference: ${expectedFilename} -> ${itemFilename}`);
-            break;
-          }
+      const matched = findExactKeyMatch(
+        list.objects.map((item) => item.key),
+        `${prefix}/${expectedFilename}`
+      );
+
+      if (matched) {
+        object = await platform.env.LOUVORES_BUCKET.get(matched);
+        if (object) {
+          console.log(`[R2] Chave equivalente encontrada: ${r2Key} -> ${matched}`);
+          r2Key = matched;
         }
       }
     }
-    
+
     if (!object) {
       return new Response('PDF not found', { 
         status: 404, 
@@ -100,7 +90,14 @@ async function servePdf(pathname, platform) {
       });
     }
     
-    return new Response(object.body, { headers: corsHeaders });
+    return new Response(object.body, {
+      headers: {
+        ...corsHeaders,
+        'Cache-Control': 'public, max-age=86400, stale-while-revalidate=604800',
+        ...(object.httpEtag ? { ETag: object.httpEtag } : {}),
+        ...(object.uploaded ? { 'Last-Modified': new Date(object.uploaded).toUTCString() } : {})
+      }
+    });
   } catch (err) {
     console.error('Error serving PDF:', err);
     return new Response('Internal server error', { 
