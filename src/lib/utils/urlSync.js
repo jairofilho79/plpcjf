@@ -20,10 +20,6 @@ import { podeEscreverNaUrl } from './urlParams.js';
 
 export { lerEstadoDaUrl };
 
-// #21: só `biblioteca/+page.svelte`, `bibliotecaSort.js` e
-// `bibliotecaItemsPerPage.js` ainda usam isto. A Tarefa 12 apaga o re-export.
-export { serializeArrayParam, deserializeArrayParam, parseUrlParams } from './urlParams.js';
-
 /**
  * Query acumulada até o próximo flush, e a rota em que foi acumulada. Sem
  * isto, duas chamadas de `updateUrlParams` no mesmo tick partiriam ambas de

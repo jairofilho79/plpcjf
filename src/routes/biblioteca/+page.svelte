@@ -1,5 +1,6 @@
 <script>
-  import { onMount, onDestroy } from 'svelte';
+  import { onDestroy, onMount } from 'svelte';
+  import { get } from 'svelte/store';
   import { browser } from '$app/environment';
   import { page } from '$app/stores';
   import { louvores, loadLouvores, louvoresLoaded } from '$lib/stores/louvores';
@@ -8,7 +9,7 @@
   import { bibliotecaSort } from '$lib/stores/bibliotecaSort';
   import { bibliotecaItemsPerPage, VALID_OPTIONS } from '$lib/stores/bibliotecaItemsPerPage';
   import { pdfViewer } from '$lib/stores/pdfViewer';
-  import { parseUrlParams, updateUrlParams } from '$lib/utils/urlSync';
+  import { lerEstadoDaUrl, updateUrlParams } from '$lib/utils/urlSync';
   import ClassificationFilters from '$lib/components/ClassificationFilters.svelte';
   import SpecialArrangementFilters from '$lib/components/SpecialArrangementFilters.svelte';
   import CategoryFilters from '$lib/components/CategoryFilters.svelte';
@@ -159,92 +160,37 @@
     });
   })();
 
-  // State for selected special arrangements - inicializar da URL
+  // A URL é a fonte de verdade. Nada aqui é sincronizado nos dois sentidos.
+  $: estadoUrl = lerEstadoDaUrl(browser && $page && $page.url ? $page.url : { search: '' });
+  $: naBiblioteca = browser && $page?.url?.pathname === '/biblioteca';
+
   /**
+   * Arranjo especial, inteiramente derivado — não é mais estado escrito.
+   *
+   * Antes eram cinco blocos reativos num anel: um deles gravava a URL, a URL
+   * reescrevia a seleção, a seleção recalculava a lista filtrada, a lista
+   * recalculava os arranjos disponíveis, e o primeiro bloco disparava de novo.
+   * A flag que deveria conter isso era ligada e desligada no mesmo tick
+   * síncrono, então nunca protegeu nada contra o `$page`, que é assíncrono.
+   *
+   * Aqui não há escrita nenhuma: quando a URL traz o param, ele manda (filtrado
+   * pelo que existe); quando não traz, o padrão "todos" é **calculado**, e não
+   * gravado na barra de endereços (mesma decisão D-2 da home).
+   *
+   * A detecção antiga de "a URL já tem arranjoEspecial?" era um
+   * `$page.url.search.includes('arranjoEspecial=')` — frágil por natureza,
+   * porque compara substring de uma query string crua em vez de perguntar ao
+   * parser. Aqui vira `estadoUrl.temArranjoEspecial`, que é
+   * `URLSearchParams.has('arranjoEspecial')` (via `lerEstadoDaUrl`): a mesma
+   * pergunta, respondida pelo parser, não por busca de texto.
    * @type {string[]}
    */
-  let selectedSpecialArrangements = browser && $page && $page.url ? (parseUrlParams($page.url).arranjoEspecial || []) : [];
-  let isUpdatingArranjoEspecialFromUrl = false;
-
-  // Reset special arrangements when selected classifications change significantly
-  let previousSelectedClassifications = [];
-  $: {
-    // Reset if classifications changed significantly (different set of items)
-    const currentSet = new Set(selectedClassifications);
-    const previousSet = new Set(previousSelectedClassifications);
-    
-    // Check if sets are different (not just reordered)
-    if (currentSet.size !== previousSet.size || 
-        !Array.from(currentSet).every(c => previousSet.has(c))) {
-      // Keep only valid selections
-      selectedSpecialArrangements = selectedSpecialArrangements.filter(sa => 
-        availableSpecialArrangements.includes(sa)
-      );
-      previousSelectedClassifications = [...selectedClassifications];
-    }
-  }
-
-  // Track previous available arrangements length to detect appearance/disappearance
-  let previousAvailableLength = 0;
-  let specialArrangementsInitialized = false;
-
-  // Reagir a mudanças na URL para atualizar selectedSpecialArrangements
-  $: if (browser && !isUpdatingArranjoEspecialFromUrl && $page && $page.url) {
-    const urlParams = parseUrlParams($page.url);
-    const urlArranjoEspecial = urlParams.arranjoEspecial || [];
-    // Só atualizar se for diferente e se os valores da URL são válidos (existem em availableSpecialArrangements)
-    if (urlArranjoEspecial.length > 0 && availableSpecialArrangements.length > 0) {
-      const validFromUrl = urlArranjoEspecial.filter(sa => availableSpecialArrangements.includes(sa));
-      if (JSON.stringify(validFromUrl.sort()) !== JSON.stringify(selectedSpecialArrangements.sort())) {
-        isUpdatingArranjoEspecialFromUrl = true;
-        selectedSpecialArrangements = validFromUrl;
-        specialArrangementsInitialized = true; // Se veio da URL, marcar como inicializado
-        isUpdatingArranjoEspecialFromUrl = false;
-      }
-    } else if (urlArranjoEspecial.length === 0 && selectedSpecialArrangements.length > 0 && $page.pathname === '/biblioteca') {
-      // Se URL não tem arranjoEspecial, manter seleção atual (não limpar automaticamente)
-      // A lógica abaixo vai lidar com auto-seleção quando disponível
-    }
-  }
-
-  // Clear special arrangements when they become unavailable
-  // Auto-select all when they become available (só se não vier da URL e não foi inicializado ainda)
-  $: {
-    const currentLength = availableSpecialArrangements.length;
-    
-    if (currentLength === 0) {
-      // Clear selections when component disappears
-      if (!isUpdatingArranjoEspecialFromUrl && selectedSpecialArrangements.length > 0) {
-        isUpdatingArranjoEspecialFromUrl = true;
-        selectedSpecialArrangements = [];
-        specialArrangementsInitialized = false; // Reset flag quando desaparece
-        isUpdatingArranjoEspecialFromUrl = false;
-        if (browser) {
-          updateUrlParams({ arranjoEspecial: [] });
-        }
-      }
-    } else if (currentLength > 0 && previousAvailableLength === 0) {
-      // Auto-select all when arrangements appear for the first time (só se não vier da URL e não foi inicializado)
-      if (browser && !isUpdatingArranjoEspecialFromUrl && !specialArrangementsInitialized && $page && $page.url) {
-        const urlParams = parseUrlParams($page.url);
-        const urlHasArranjoEspecial = $page.url.search && $page.url.search.includes('arranjoEspecial=');
-        
-        // Se URL não tem arranjoEspecial e não há seleção, selecionar todos (só na primeira vez)
-        if (!urlHasArranjoEspecial && selectedSpecialArrangements.length === 0 && availableSpecialArrangements.length > 0) {
-          isUpdatingArranjoEspecialFromUrl = true;
-          selectedSpecialArrangements = [...availableSpecialArrangements];
-          specialArrangementsInitialized = true;
-          isUpdatingArranjoEspecialFromUrl = false;
-          updateUrlParams({ arranjoEspecial: selectedSpecialArrangements });
-        } else if (urlHasArranjoEspecial) {
-          // Se URL tem parâmetro, marcar como inicializado
-          specialArrangementsInitialized = true;
-        }
-      }
-    }
-    
-    previousAvailableLength = currentLength;
-  }
+  $: selectedSpecialArrangements =
+    availableSpecialArrangements.length === 0
+      ? []
+      : estadoUrl.temArranjoEspecial
+        ? estadoUrl.arranjoEspecial.filter((sa) => availableSpecialArrangements.includes(sa))
+        : availableSpecialArrangements;
 
   // Final filtered list (refined by Arranjo Especial if applicable)
   $: filteredLouvores = (() => {
@@ -277,27 +223,14 @@
     return sorted.sort(compareLouvorNome);
   })();
   
-  // Pagination
-  let currentPage = 1;
+  // Paginação
   let pageInput = '1';
   let itemsPerPageMenuOpen = false;
-  /**
-   * @type {HTMLElement | null}
-   */
+  /** @type {HTMLElement | null} */
   let louvoresContainer = null;
-  
-  // Flags para evitar loops infinitos na sincronização URL
-  let urlSyncInitialized = false;
-  let isUpdatingSortFromUrl = false;
-  let isUpdatingItemsPerPageFromUrl = false;
-  let isUpdatingPageFromUrl = false;
-  
-  // Rastrear último estado conhecido da URL para evitar loops
-  let lastKnownUrlState = {
-    ordenar: null,
-    itensPorPagina: null,
-    pagina: null
-  };
+  /** Critério de filtro da última execução; mudar de verdade zera a paginação. */
+  /** @type {string | null} */
+  let criterioAnterior = null;
 
   function scrollToLouvores() {
     if (!browser) return;
@@ -315,169 +248,128 @@
     });
   }
 
-  /**
-   * @param {number} page
-   * @param {{ scroll?: boolean, skipUrlUpdate?: boolean }} [options]
-   */
-  function setPage(page, { scroll = true, skipUrlUpdate = false } = {}) {
-    const maxPage = totalPages > 0 ? totalPages : 1;
-    const pageNum = Math.max(1, Math.min(maxPage, page));
-    currentPage = pageNum;
-    pageInput = pageNum.toString();
-
-    // Atualizar URL quando a página mudar (se não estiver vindo da URL e sincronização inicializada)
-    if (browser && !skipUrlUpdate && !isUpdatingPageFromUrl && urlSyncInitialized) {
-      updateUrlParams({ pagina: pageNum });
-    }
-
-    if (scroll && totalPages > 0) {
-      scrollToLouvores();
-    }
-  }
-
   $: itemsPerPage = $bibliotecaItemsPerPage;
   $: groupedLouvores = groupLouvoresByGroupId(sortedLouvores);
-  $: totalPages = Math.ceil(groupedLouvores.length / itemsPerPage);
+  $: totalPages =
+    groupedLouvores.length === 0 ? 1 : Math.max(1, Math.ceil(groupedLouvores.length / itemsPerPage));
+
+  /** Página efetiva: a que está na URL, limitada ao que existe de verdade. */
+  $: currentPage = Math.min(Math.max(1, estadoUrl.pagina), totalPages);
   $: paginatedLouvores = groupedLouvores.slice(
     (currentPage - 1) * itemsPerPage,
     currentPage * itemsPerPage
   );
-  
-  // Reset to page 1 when items per page changes
-  $: {
-    if (itemsPerPage && urlSyncInitialized && !pageInitializedFromUrl) {
-      const newTotalPages = Math.ceil(groupedLouvores.length / itemsPerPage);
-      if (currentPage > newTotalPages && newTotalPages > 0) {
-        setPage(1, { scroll: false });
+  /** Espelha a página efetiva no input, sem atropelar quem está digitando nele. */
+  let ultimaPaginaPublicada = null;
+  $: if (currentPage !== ultimaPaginaPublicada) {
+    ultimaPaginaPublicada = currentPage;
+    pageInput = String(currentPage);
+  }
+
+  /**
+   * Única porta de escrita da paginação.
+   * @param {number} numeroPagina
+   * @param {{ scroll?: boolean }} [options]
+   */
+  function setPage(numeroPagina, { scroll = true } = {}) {
+    const alvo = Math.max(1, Math.min(totalPages, numeroPagina));
+    updateUrlParams({ pagina: alvo });
+    if (scroll) {
+      scrollToLouvores();
+    }
+  }
+
+  /** Só depois disso faz sentido corrigir a paginação (preserva `?pagina=N`). */
+  $: resultadosProntos = $louvoresLoaded && $louvores.length > 0 && $classificationFilters.length > 0;
+
+  // Corrige a URL quando a página pedida não existe mais. Idempotente: depois
+  // da escrita a condição é falsa, então não há laço e não há flag.
+  $: if (browser && naBiblioteca && resultadosProntos && estadoUrl.pagina !== currentPage) {
+    updateUrlParams({ pagina: currentPage });
+  }
+
+  // Chave de identidade do filtro. Separadores fora do alfabeto dos valores.
+  // `[...]` antes de `.sort()`: o código antigo ordenava o array no lugar.
+  $: criterioAtual = [
+    [...$filters].sort().join('\u0001'),
+    [...$classificationFilters].sort().join('\u0001'),
+    [...selectedSpecialArrangements].sort().join('\u0001')
+  ].join('\u0000');
+
+  // Trocar de filtro volta para a página 1. A **primeira** chave é só
+  // registrada: é o que preserva `/biblioteca?pagina=5` de um deep link.
+  $: if (browser && naBiblioteca && resultadosProntos) {
+    if (criterioAnterior === null) {
+      criterioAnterior = criterioAtual;
+    } else if (criterioAtual !== criterioAnterior) {
+      criterioAnterior = criterioAtual;
+      if (estadoUrl.pagina !== 1) {
+        updateUrlParams({ pagina: 1 });
       }
     }
   }
-  
-  // Reset to page 1 when filters change or when current page exceeds total pages
-  let previousFilteredCount = 0;
-  let pageInitializedFromUrl = false;
-  $: {
-    if (urlSyncInitialized && totalPages > 0) {
-      const currentFilteredCount = filteredLouvores.length;
-      // Se ainda não inicializamos previousFilteredCount, fazer isso agora (primeira execução)
-      if (previousFilteredCount === 0 && currentFilteredCount > 0) {
-        previousFilteredCount = currentFilteredCount;
-        // Se a página foi inicializada da URL, verificar se é válida antes de resetar
-        if (pageInitializedFromUrl) {
-          // Se a página da URL é válida, manter; caso contrário, ajustar
-          if (currentPage > totalPages) {
-            setPage(totalPages, { scroll: false });
-          }
-        } else {
-          // Se não foi inicializado da URL, pode resetar normalmente
-          if (currentPage > totalPages) {
-            setPage(totalPages, { scroll: false });
-          }
-        }
-      } else {
-        // Reset to page 1 if filtered results count changed significantly or current page is invalid
-        // Mas não resetar se a página foi inicializada da URL e ainda é válida
-        if (currentPage > totalPages) {
-          setPage(totalPages, { scroll: false });
-        } else if (previousFilteredCount !== 0 && previousFilteredCount !== currentFilteredCount && !pageInitializedFromUrl) {
-          // Só resetar se não foi inicializado da URL e a contagem mudou significativamente
-          setPage(1, { scroll: false });
-        }
-        previousFilteredCount = currentFilteredCount;
+
+  /**
+   * ordenar/itensPorPagina: sincronização com a URL feita por um
+   * `page.subscribe` MANUAL — de propósito, não um `$:`.
+   *
+   * Uma primeira versão usava `$: if (browser && naBiblioteca && $page?.url) {
+   * ...lendo $bibliotecaSort/$bibliotecaItemsPerPage... }`, o mesmo desenho
+   * que a home já usa para `itensPorPagina`. Provou em navegador (achado
+   * desta tarefa, não pego pela revisão de código) que esse desenho quebra:
+   * um `$:` que LÊ `$bibliotecaSort` dentro do corpo também o tem como
+   * dependência, então um `bibliotecaSort.set(...)` de um clique (evento de
+   * usuário, não navegação) já dispara esse bloco de novo, com `$page.url`
+   * ainda desatualizado (o `goto` do clique nem começou). O bloco lê a URL
+   * velha como se fosse a verdade e desfaz o clique. Quando o valor clicado É
+   * o default — `construirQueryAtualizada` apaga o param —, não sobra
+   * nenhuma passada seguinte para corrigir: o valor errado fica preso para
+   * sempre ("Por número" nunca pegava depois de já existir `?ordenar=nome`).
+   *
+   * Um `page.subscribe` puro só reage quando `$page` de fato muda (uma
+   * navegação real terminando) — nunca por causa do `.set()` de outra store,
+   * porque essa store não é dependência dele. Sem `$:` na frente do valor
+   * lido por `get()`, o laço não existe. Mesmo princípio de
+   * `filters.js`/`classificationFilters.js` (Tarefa 11); aqui fica na página,
+   * e não dentro de `bibliotecaItemsPerPage.js`, porque esse store é
+   * compartilhado com a home (D-10) e sua sincronização própria não é desta
+   * tarefa para reabrir.
+   * @param {import('@sveltejs/kit').Page | null} $p
+   */
+  function sincronizarOrdenarEItensPorPaginaComUrl($p) {
+    if (!$p || !$p.url || $p.url.pathname !== '/biblioteca') return;
+
+    const params = $p.url.searchParams;
+    const estado = lerEstadoDaUrl($p.url);
+
+    if (params.has('ordenar')) {
+      if (estado.ordenar !== get(bibliotecaSort)) {
+        bibliotecaSort.set(estado.ordenar);
       }
+    } else if (get(bibliotecaSort) !== 'numero') {
+      updateUrlParams({ ordenar: get(bibliotecaSort) });
     }
-  }
-  
-  // Sincronizar URL -> Stores (apenas quando URL mudar externamente, não quando atualizamos nós mesmos)
-  $: if (browser && urlSyncInitialized && !isUpdatingSortFromUrl && !isUpdatingItemsPerPageFromUrl && !isUpdatingPageFromUrl && $page && $page.url) {
-    const urlParams = parseUrlParams($page.url);
-    const urlOrdenar = urlParams.ordenar || 'numero';
-    const urlItensPorPagina = urlParams.itensPorPagina || 10;
-    const urlPagina = urlParams.pagina;
-    const urlPageNum = urlPagina !== null && urlPagina > 0 ? urlPagina : 1;
-    
-    // Verificar se a URL realmente mudou (navegação back/forward ou mudança externa)
-    // Comparar com o último estado conhecido para evitar loops
-    const urlChanged = 
-      lastKnownUrlState.ordenar !== urlOrdenar ||
-      lastKnownUrlState.itensPorPagina !== urlItensPorPagina ||
-      lastKnownUrlState.pagina !== urlPageNum;
-    
-    if (urlChanged) {
-      // Verificar se os stores já estão com os valores corretos (evita sincronização desnecessária)
-      const currentSort = $bibliotecaSort;
-      const currentItemsPerPage = $bibliotecaItemsPerPage;
-      const storesMatchUrl = 
-        (urlOrdenar === currentSort || (!urlOrdenar && currentSort === 'numero')) &&
-        (urlItensPorPagina === currentItemsPerPage || (!urlItensPorPagina && currentItemsPerPage === 10)) &&
-        (urlPageNum === currentPage);
-      
-      // Se os stores já estão corretos, apenas atualizar último estado conhecido
-      if (storesMatchUrl) {
-        lastKnownUrlState = {
-          ordenar: urlOrdenar,
-          itensPorPagina: urlItensPorPagina,
-          pagina: urlPageNum
-        };
-      } else {
-        // Atualizar último estado conhecido ANTES de fazer qualquer mudança
-        lastKnownUrlState = {
-          ordenar: urlOrdenar,
-          itensPorPagina: urlItensPorPagina,
-          pagina: urlPageNum
-        };
-        
-        // Sincronizar ordenar
-        if (urlOrdenar !== currentSort && (urlOrdenar === 'numero' || urlOrdenar === 'nome')) {
-          isUpdatingSortFromUrl = true;
-          bibliotecaSort.set(urlOrdenar);
-          setTimeout(() => {
-            isUpdatingSortFromUrl = false;
-          }, 100);
-        }
-        
-        // Sincronizar itensPorPagina
-        if (urlItensPorPagina !== currentItemsPerPage && VALID_OPTIONS.includes(urlItensPorPagina)) {
-          isUpdatingItemsPerPageFromUrl = true;
-          bibliotecaItemsPerPage.set(urlItensPorPagina);
-          setTimeout(() => {
-            isUpdatingItemsPerPageFromUrl = false;
-          }, 100);
-        }
-        
-        // Sincronizar pagina
-        if (urlPageNum !== currentPage) {
-          isUpdatingPageFromUrl = true;
-          // Atualizar diretamente sem usar setPage para evitar limitação por totalPages
-          // O setPage limita ao maxPage, mas quando sincronizando da URL, queremos o valor exato
-          currentPage = urlPageNum;
-          pageInput = urlPageNum.toString();
-          setTimeout(() => {
-            isUpdatingPageFromUrl = false;
-          }, 100);
-        }
+
+    if (params.has('itensPorPagina')) {
+      if (estado.itensPorPagina !== get(bibliotecaItemsPerPage)) {
+        bibliotecaItemsPerPage.set(estado.itensPorPagina);
       }
+    } else if (get(bibliotecaItemsPerPage) !== 10) {
+      updateUrlParams({ itensPorPagina: get(bibliotecaItemsPerPage) });
+    }
+
+    // D-9: param conhecido com valor inválido é normalizado uma vez.
+    if (estado.paramsInvalidos.length > 0) {
+      updateUrlParams({});
     }
   }
-  
-  // Atualizar URL quando bibliotecaSort mudar (apenas se não estiver vindo da URL)
-  $: if (browser && urlSyncInitialized && !isUpdatingSortFromUrl && $bibliotecaSort && $page && $page.url) {
-    const urlParams = parseUrlParams($page.url);
-    const urlOrdenar = urlParams.ordenar || 'numero';
-    if (urlOrdenar !== $bibliotecaSort) {
-      updateUrlParams({ ordenar: $bibliotecaSort });
-    }
+
+  /** @type {(() => void) | null} */
+  let pararDeSincronizarComUrl = null;
+  if (browser) {
+    pararDeSincronizarComUrl = page.subscribe(sincronizarOrdenarEItensPorPaginaComUrl);
   }
-  
-  // Atualizar URL quando bibliotecaItemsPerPage mudar (apenas se não estiver vindo da URL)
-  $: if (browser && urlSyncInitialized && !isUpdatingItemsPerPageFromUrl && $bibliotecaItemsPerPage && $page && $page.url) {
-    const urlParams = parseUrlParams($page.url);
-    const urlItensPorPagina = urlParams.itensPorPagina || 10;
-    if (urlItensPorPagina !== $bibliotecaItemsPerPage) {
-      updateUrlParams({ itensPorPagina: $bibliotecaItemsPerPage });
-    }
-  }
-  
+
   /**
      * @param {number} page
      */
@@ -552,165 +444,62 @@
   }
   
   let filtersInitialized = false;
-  let initTimeout = null;
-  
-  // Função para inicializar os filtros
-  function initializeFiltersIfNeeded() {
-    if (filtersInitialized || !browser || !$page || !$page.url) return;
-    if (!$louvores.length || !$louvoresLoaded) return;
-    
-    const urlParams = parseUrlParams($page.url);
-    const urlHasArranjo = $page.url.search && $page.url.search.includes('arranjo=');
-    
-    // Calcular classificações únicas
-    const classifications = $louvores
-      .map(louvor => normalizeClassification(louvor.classificacao))
-      .filter(c => c)
-      .filter((c, index, arr) => arr.indexOf(c) === index)
-      .sort();
-    
-    if (classifications.length === 0) return; // Ainda não há classificações disponíveis
-    
-    // Se URL não tem arranjo e não há filtros selecionados, selecionar todos
-    if (!urlHasArranjo && $classificationFilters.length === 0) {
-      filtersInitialized = true;
-      // Usar setTimeout para garantir que não haja conflito com outras atualizações
-      setTimeout(() => {
-        if ($classificationFilters.length === 0 && classifications.length > 0) {
-          classificationFilters.selectAll(classifications);
-        }
-      }, 0);
-    } else if (urlHasArranjo || $classificationFilters.length > 0) {
-      // Já tem parâmetro na URL ou já há filtros selecionados
-      filtersInitialized = true;
-    }
-  }
-  
+
+  /**
+   * Não é chamada de dentro de um `$:` — de propósito.
+   *
+   * Uma primeira versão disparava isto de um bloco reativo (`$: if (browser
+   * && $louvoresLoaded && $louvores.length > 0 && !filtersInitialized) {...}`),
+   * o mesmo padrão que a home usa para o próprio backup de filtros. Provou em
+   * navegador (achado desta tarefa) que trava a biblioteca inteira: o
+   * `classificationFilters.aplicarPadrao(...)` daqui muda `$classificationFilters`
+   * NO MEIO da mesma passada reativa que `classificationFilteredLouvores` (e
+   * tudo que vem depois dela — `filteredLouvores`, `sortedLouvores`,
+   * `groupedLouvores`, `paginatedLouvores`) também pertence. Sem nenhum
+   * gatilho externo depois, essa cadeia nunca mais recalcula e fica lendo o
+   * `[]` de antes do padrão ser aplicado — para sempre: a biblioteca abre com
+   * "Nenhum louvor encontrado" mesmo com os cinco chips de Arranjo marcados.
+   * A home nunca bateu nisso porque a lista dela é montada por
+   * `filterLouvores()`, chamada de um `setTimeout` (o debounce de busca) —
+   * sempre uma passada nova. Aqui a chamada direta depois do `await
+   * loadLouvores()` cumpre o mesmo papel: por essa altura o fetch (ou o
+   * cache em memória) já resolveu há vários microtasks, o flush reativo do
+   * catálogo já sedimentou, e chamar isto fora de qualquer `$:` garante uma
+   * passada só dela quando de fato aplica o padrão.
+   */
   onMount(async () => {
     await loadLouvores();
-    
+    initializeFiltersIfNeeded();
     if (browser) {
       document.addEventListener('click', handleClickOutside);
-
-      // Inicializar valores da URL uma única vez
-      if ($page && $page.url) {
-        const urlParams = parseUrlParams($page.url);
-        
-        // Inicializar ordenar da URL
-        const urlOrdenar = urlParams.ordenar;
-        if (urlOrdenar && (urlOrdenar === 'numero' || urlOrdenar === 'nome')) {
-          isUpdatingSortFromUrl = true;
-          bibliotecaSort.set(urlOrdenar);
-        }
-        
-        // Inicializar itensPorPagina da URL
-        const urlItensPorPagina = urlParams.itensPorPagina;
-        if (urlItensPorPagina !== null && VALID_OPTIONS.includes(urlItensPorPagina)) {
-          isUpdatingItemsPerPageFromUrl = true;
-          bibliotecaItemsPerPage.set(urlItensPorPagina);
-        }
-        
-        // Inicializar pagina da URL
-        const urlPagina = urlParams.pagina;
-        const urlPageNum = urlPagina !== null && urlPagina > 0 ? urlPagina : 1;
-        // Sempre inicializar da URL, mesmo se for página 1, para garantir consistência
-        isUpdatingPageFromUrl = true;
-        if (urlPageNum !== 1) {
-          pageInitializedFromUrl = true;
-        }
-        // Atualizar diretamente sem usar setPage para evitar limitação por totalPages ainda não calculado
-        currentPage = urlPageNum;
-        pageInput = urlPageNum.toString();
-        
-        // Inicializar último estado conhecido
-        lastKnownUrlState = {
-          ordenar: urlOrdenar || 'numero',
-          itensPorPagina: urlItensPorPagina !== null ? urlItensPorPagina : 10,
-          pagina: urlPageNum
-        };
-        
-        // Aguardar um pouco antes de habilitar sincronização bidirecional
-        setTimeout(() => {
-          isUpdatingSortFromUrl = false;
-          isUpdatingItemsPerPageFromUrl = false;
-          isUpdatingPageFromUrl = false;
-          urlSyncInitialized = true;
-          // Após um tempo, permitir que a lógica de reset funcione normalmente
-          setTimeout(() => {
-            pageInitializedFromUrl = false;
-          }, 500);
-        }, 100);
-      } else {
-        urlSyncInitialized = true;
-      }
-      
-      // Aguardar até que os louvores estejam realmente carregados e processados
-      const initFilters = () => {
-        if (filtersInitialized) return;
-        
-        const urlParams = parseUrlParams($page.url);
-        const urlHasArranjo = $page.url.search && $page.url.search.includes('arranjo=');
-        
-        // Calcular classificações únicas
-        const classifications = $louvores
-          .map(louvor => normalizeClassification(louvor.classificacao))
-          .filter(c => c)
-          .filter((c, index, arr) => arr.indexOf(c) === index)
-          .sort();
-        
-        if (classifications.length === 0) return; // Ainda não há classificações
-        
-        // Se URL não tem arranjo e não há filtros selecionados, selecionar todos
-        if (!urlHasArranjo && $classificationFilters.length === 0) {
-          filtersInitialized = true;
-          classificationFilters.selectAll(classifications);
-        } else {
-          filtersInitialized = true;
-        }
-      };
-      
-      // Aguardar até que os louvores estejam carregados
-      const checkAndInit = () => {
-        if ($louvoresLoaded && $louvores.length > 0 && !filtersInitialized) {
-          // Aguardar um pouco para garantir que os dados reativos estejam processados
-          initTimeout = setTimeout(() => {
-            initFilters();
-          }, 200);
-        }
-      };
-      
-      // Verificar imediatamente se já está pronto
-      checkAndInit();
-      
-      // Também escutar mudanças
-      const unsubscribeLouvores = louvoresLoaded.subscribe(() => {
-        checkAndInit();
-      });
-      
-      // Cleanup
-      return () => {
-        unsubscribeLouvores();
-        if (initTimeout) clearTimeout(initTimeout);
-        document.removeEventListener('click', handleClickOutside);
-      };
     }
   });
-  
+
+  // O retorno de um `onMount` async é uma Promise e o Svelte o ignora: o
+  // cleanup antigo nunca rodava. Fica só este.
   onDestroy(() => {
     if (browser) {
-      if (initTimeout) clearTimeout(initTimeout);
       document.removeEventListener('click', handleClickOutside);
     }
+    if (pararDeSincronizarComUrl) {
+      pararDeSincronizarComUrl();
+    }
   });
-  
-  // Initialize filters with all classifications on first load if URL doesn't have arranjo param
-  // Esta lógica funciona como backup caso o onMount não execute ou os dados estejam prontos antes
-  // Usa flag para garantir que só inicialize uma vez, permitindo que usuário desselecione depois
-  $: if ($louvores.length > 0 && $louvoresLoaded && !filtersInitialized && browser && $page && $page.url) {
-    // Usar a mesma função de inicialização para garantir consistência
-    initializeFiltersIfNeeded();
+
+  function initializeFiltersIfNeeded() {
+    if (filtersInitialized || !browser || !$louvoresLoaded || !$louvores.length) return;
+
+    const classifications = uniqueNormalizedClassifications;
+    if (classifications.length === 0) return;
+
+    filtersInitialized = true;
+    // D-2: o padrão "todos os arranjos" é calculado, não gravado na URL. Links
+    // no formato `?arranjo=<5 valores>` continuam sendo lidos normalmente.
+    if (!estadoUrl.temArranjo && $classificationFilters.length === 0) {
+      classificationFilters.aplicarPadrao(classifications);
+    }
   }
-  
+
   /**
    * @param {{ groupId?: string, materials?: { pdfId?: string }[] }} group
    */
@@ -718,50 +507,64 @@
     return group.groupId || group.materials?.[0]?.pdfId || '';
   }
 
-  // Handlers for Special Arrangement Filters
+  // Handlers do filtro de arranjo especial: a única coisa que fazem é gravar a
+  // URL. A seleção exibida volta pela derivação, no mesmo ciclo.
   /**
    * @param {CustomEvent<{ item: string }>} event
    */
   function handleSpecialArrangementToggle(event) {
-    if (isUpdatingArranjoEspecialFromUrl) return;
     const item = event.detail.item;
-    selectedSpecialArrangements = selectedSpecialArrangements.includes(item)
-      ? selectedSpecialArrangements.filter(sa => sa !== item)
+    const novo = selectedSpecialArrangements.includes(item)
+      ? selectedSpecialArrangements.filter((sa) => sa !== item)
       : [...selectedSpecialArrangements, item];
-    // Atualizar URL após mudança
-    if (browser) {
-      updateUrlParams({ arranjoEspecial: selectedSpecialArrangements });
-    }
+    updateUrlParams({ arranjoEspecial: novo });
   }
 
   /**
    * @param {CustomEvent<{ item: string }>} event
    */
   function handleSpecialArrangementSelectOnly(event) {
-    if (isUpdatingArranjoEspecialFromUrl) return;
-    selectedSpecialArrangements = [event.detail.item];
-    if (browser) {
-      updateUrlParams({ arranjoEspecial: selectedSpecialArrangements });
-    }
+    updateUrlParams({ arranjoEspecial: [event.detail.item] });
   }
 
   /**
    * @param {CustomEvent<{ items: string[] }>} event
    */
   function handleSpecialArrangementSelectAll(event) {
-    if (isUpdatingArranjoEspecialFromUrl) return;
-    selectedSpecialArrangements = [...event.detail.items];
-    if (browser) {
-      updateUrlParams({ arranjoEspecial: selectedSpecialArrangements });
-    }
+    updateUrlParams({ arranjoEspecial: [...event.detail.items] });
   }
 
   function handleSpecialArrangementDeselectAll() {
-    if (isUpdatingArranjoEspecialFromUrl) return;
-    selectedSpecialArrangements = [];
-    if (browser) {
-      updateUrlParams({ arranjoEspecial: [] });
-    }
+    // Vazio é gravado como `arranjoEspecial=` para sobreviver a um F5.
+    updateUrlParams({ arranjoEspecial: [] });
+  }
+
+  /**
+   * Ordenar: grava o store E a URL juntos. O `page.subscribe` manual (acima)
+   * só reage a navegação de verdade, então nada mais vai publicar essa
+   * escolha na URL — se este handler só desse `.set()`, o clique mudaria o
+   * chip ativo mas a URL nunca chegaria a saber.
+   * @param {CustomEvent<{ value: string }>} event
+   */
+  function handleSortSelect(event) {
+    const valor = event.detail.value;
+    bibliotecaSort.set(valor);
+    updateUrlParams({ ordenar: valor });
+  }
+
+  /**
+   * Mesma razão do `handleSortSelect`: grava os dois juntos. Não força
+   * `pagina: 1` aqui — comportamento de sempre na biblioteca é só corrigir a
+   * página se ela ficar inválida com o novo total, e isso já é coberto pelo
+   * bloco genérico de correção de página, acima, que deriva `currentPage` de
+   * `estadoUrl.pagina` limitado a `totalPages`.
+   * @param {number} option
+   */
+  function handleItemsPerPageSelect(option) {
+    bibliotecaItemsPerPage.set(option);
+    updateUrlParams({ itensPorPagina: option });
+    itemsPerPageMenuOpen = false;
+    scrollToLouvores();
   }
 </script>
 
@@ -786,7 +589,7 @@
       />
     {/if}
     
-    <SortSelector />
+    <SortSelector on:select={handleSortSelect} />
     
     <PdfViewerSelector />
   </div>
@@ -826,9 +629,7 @@
                         class:active={$bibliotecaItemsPerPage === option}
                         on:click={(e) => {
                           e.stopPropagation();
-                          bibliotecaItemsPerPage.set(option);
-                          itemsPerPageMenuOpen = false;
-                          scrollToLouvores();
+                          handleItemsPerPageSelect(option);
                         }}
                       >
                         {option}
@@ -930,9 +731,7 @@
                         class:active={$bibliotecaItemsPerPage === option}
                         on:click={(e) => {
                           e.stopPropagation();
-                          bibliotecaItemsPerPage.set(option);
-                          itemsPerPageMenuOpen = false;
-                          scrollToLouvores();
+                          handleItemsPerPageSelect(option);
                         }}
                       >
                         {option}

@@ -2,7 +2,7 @@ import { writable } from 'svelte/store';
 import { browser } from '$app/environment';
 import { page } from '$app/stores';
 import { get } from 'svelte/store';
-import { parseUrlParams } from '$lib/utils/urlSync';
+import { lerEstadoDaUrl } from '$lib/utils/urlSync';
 
 const DEFAULT_SORT = 'numero';
 
@@ -13,7 +13,7 @@ function loadSortFromUrl() {
     const currentPage = get(page);
     if (!currentPage || !currentPage.url) return DEFAULT_SORT;
     
-    const urlParams = parseUrlParams(currentPage.url);
+    const urlParams = lerEstadoDaUrl(currentPage.url);
     const ordenar = urlParams.ordenar;
     
     if (ordenar === 'numero' || ordenar === 'nome') {
