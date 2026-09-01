@@ -252,83 +252,99 @@
     // O PDF deve ser carregado e validado usando o caminho original (preserva case e acentos)
     const urlObj = new URL(fileUrl, window.location.origin);
     const pdfPath = urlObj.pathname.startsWith('/') ? urlObj.pathname.substring(1) : urlObj.pathname;
+    // Achado I3: dois caminhos que o leitor abre não são do acervo — o
+    // exemplo padrão (`/pdfs/exemplo.pdf`, quando não há `?file=`) e a página
+    // de configuração offline (`/offline-setup.pdf`, aberta por
+    // `stores/offline.js`). Ambos vivem em `static/`, fora de `assets/`.
+    // `PdfPathManager.normalizeForStorage` prefixa `assets/` em qualquer
+    // caminho que não comece assim — é o comportamento certo para o acervo
+    // (carregado por todo o sistema offline, não dá para mudar aqui) mas
+    // quebra a URL desses dois arquivos estáticos. Em vez de tocar em
+    // `PdfPathManager`, o desvio fica aqui: para um caminho fora de
+    // `assets/`, usa-o como está — sem normalizar e sem validar contra o
+    // cache de PDFs do acervo, do qual esses arquivos nunca fizeram parte.
+    const isCatalogAsset = pdfPath.toLowerCase().startsWith('assets/');
     // #22.1: um só codificador. O parser WHATWG deixa `[` e `]` literais e o
     // escritor do cache os escapa — para os 3 PDFs do acervo com colchetes no
     // nome, a URL pedida aqui nunca era a chave gravada.
-    const originalFullUrl = PdfPathManager.createRequestUrl(pdfPath, window.location.origin);
+    const originalFullUrl = isCatalogAsset
+      ? PdfPathManager.createRequestUrl(pdfPath, window.location.origin)
+      : new URL(`/${pdfPath}`, window.location.origin).toString();
     lastPdfPathForRecovery = pdfPath;
     lastOriginalFullUrlForRecovery = originalFullUrl;
-    
+
     try {
-      
-      // VALIDAÇÃO: Check if PDF is available in cache using original path (no normalization)
-      const { validatePdfAvailability } = await import('$lib/utils/pdfValidation');
-      const { downloadPDFsViaSW } = await import('$lib/utils/swRegistration');
-      
-      const validation = await validatePdfAvailability(pdfPath);
-      
-      if (!validation.available) {
-        // Try to download automatically if online
-        const effectiveOnline = await checkEffectiveConnectivity({ timeoutMs: 1500 });
-        if (validation.needsDownload && effectiveOnline && retryCount < MAX_RETRIES) {
-          retryCount++;
-          console.log('[Leitor] auto-download-start', { pdfPath, attempt: retryCount });
-          
-          // Show feedback
-          setPdfUi('autoDownloading', 'Baixando PDF...');
-          
-          try {
-            // Download via Service Worker
-            const result = await downloadPDFsViaSW(
-              [validation.url],
-              1,
-              undefined,
-              { timeoutMs: 30000 }
-            );
 
-            if (!result.success) {
-              const msg = result.partialSuccess
-                ? 'Download parcial do PDF. Tente novamente ou use “Buscar online”.'
-                : 'Não foi possível baixar o PDF automaticamente. Tente novamente ou use “Buscar online”.';
-              console.log('[Leitor] auto-download-partial', { pdfPath, ...result });
-              setPdfUi('retryableError', msg);
-              return;
-            }
+      if (isCatalogAsset) {
+        // VALIDAÇÃO: Check if PDF is available in cache using original path (no normalization)
+        const { validatePdfAvailability } = await import('$lib/utils/pdfValidation');
+        const { downloadPDFsViaSW } = await import('$lib/utils/swRegistration');
 
-            // Revalidar antes de carregar para evitar falso-sucesso
-            const recheck = await validatePdfAvailability(pdfPath);
-            if (!recheck.available) {
-              setPdfUi('retryableError', 'O PDF ainda não está disponível após o download. Tente “Buscar online”.');
-              return;
-            }
+        const validation = await validatePdfAvailability(pdfPath);
 
-            // Voltar para estado normal e seguir carregamento
-            setPdfUi('loading', null);
-          } catch (downloadErr) {
-            const isTimeout = String((downloadErr as any)?.message || '').includes('timeout');
-            if (isTimeout) {
-              console.log('[Leitor] auto-download-timeout', { pdfPath });
-            }
-            console.error('[Leitor] Download automático falhou:', downloadErr);
-            setPdfUi('retryableError', 'Erro ao baixar PDF. Verifique sua conexão ou use “Buscar online”.');
-            
-            // FASE 2: Invalidar cache de validação quando download falha
+        if (!validation.available) {
+          // Try to download automatically if online
+          const effectiveOnline = await checkEffectiveConnectivity({ timeoutMs: 1500 });
+          if (validation.needsDownload && effectiveOnline && retryCount < MAX_RETRIES) {
+            retryCount++;
+            console.log('[Leitor] auto-download-start', { pdfPath, attempt: retryCount });
+
+            // Show feedback
+            setPdfUi('autoDownloading', 'Baixando PDF...');
+
             try {
-              const { clearAllValidationCache } = await import('$lib/utils/pdfValidation');
-              clearAllValidationCache();
-            } catch (err) {
-              console.warn('[Leitor] Erro ao invalidar cache de validação:', err);
+              // Download via Service Worker
+              const result = await downloadPDFsViaSW(
+                [validation.url],
+                1,
+                undefined,
+                { timeoutMs: 30000 }
+              );
+
+              if (!result.success) {
+                const msg = result.partialSuccess
+                  ? 'Download parcial do PDF. Tente novamente ou use “Buscar online”.'
+                  : 'Não foi possível baixar o PDF automaticamente. Tente novamente ou use “Buscar online”.';
+                console.log('[Leitor] auto-download-partial', { pdfPath, ...result });
+                setPdfUi('retryableError', msg);
+                return;
+              }
+
+              // Revalidar antes de carregar para evitar falso-sucesso
+              const recheck = await validatePdfAvailability(pdfPath);
+              if (!recheck.available) {
+                setPdfUi('retryableError', 'O PDF ainda não está disponível após o download. Tente “Buscar online”.');
+                return;
+              }
+
+              // Voltar para estado normal e seguir carregamento
+              setPdfUi('loading', null);
+            } catch (downloadErr) {
+              const isTimeout = String((downloadErr as any)?.message || '').includes('timeout');
+              if (isTimeout) {
+                console.log('[Leitor] auto-download-timeout', { pdfPath });
+              }
+              console.error('[Leitor] Download automático falhou:', downloadErr);
+              setPdfUi('retryableError', 'Erro ao baixar PDF. Verifique sua conexão ou use “Buscar online”.');
+
+              // FASE 2: Invalidar cache de validação quando download falha
+              try {
+                const { clearAllValidationCache } = await import('$lib/utils/pdfValidation');
+                clearAllValidationCache();
+              } catch (err) {
+                console.warn('[Leitor] Erro ao invalidar cache de validação:', err);
+              }
+
+              return;
             }
-            
+          } else {
+            // PDF not available and cannot be downloaded
+            setPdfUi('fatalError', 'PDF não está disponível offline. Por favor, baixe primeiro na página de configuração offline.');
             return;
           }
-        } else {
-          // PDF not available and cannot be downloaded
-          setPdfUi('fatalError', 'PDF não está disponível offline. Por favor, baixe primeiro na página de configuração offline.');
-          return;
         }
       }
-      
+
       // PDF is available, load using ORIGINAL URL (not normalized) to preserve exact path from pdfId
       const loadingTask = getDocument({ url: originalFullUrl, withCredentials: false });
       const pdfDocument = await loadingTask.promise;
