@@ -682,7 +682,25 @@
     z-index: 10;
     line-height: 1;
   }
-  
+
+  /* #16: content-visibility avaliado e descartado em 2026-09-01. Medido em
+     /biblioteca (mesmo componente LouvorCard, mesma paginação de até 50
+     itens), build de produção (`npm run build` + `npm run preview`), custo
+     de layout de 10→50 cards via reflow forçado (40 amostras/medição,
+     mediana): 3 repetições completas —
+       rep 1: 50 itens = 1.9ms (min 1.5/max 7.1) · 10 itens = 2.5ms (min 1.2/
+         max 3.4) · delta = -0.6ms · ruído = 5.6ms
+       rep 2: 50 itens = 10.8ms (min 6.3/max 14.4) · 10 itens = 3.2ms (min
+         1.2/max 3.7) · delta = 7.6ms · ruído = 8.1ms
+       rep 3: 50 itens = 12.0ms (min 6.3/max 15.3) · 10 itens = 3.4ms (min
+         1.3/max 4.1) · delta = 8.6ms · ruído = 9.0ms
+     Nas 3 repetições, delta < ruído (nunca claramente maior) — o custo
+     marginal de ir de 10 para 50 cards não se distingue com confiança do
+     ruído da própria medição (que varia mais entre repetições, 1.9–12.0ms,
+     do que o delta varia dentro de cada uma). As listas já paginam em no
+     máximo 50 itens (bibliotecaItemsPerPage.js); não há lista longa de
+     verdade para otimizar hoje. Reabrir só se o limite de paginação subir ou
+     o card ficar bem mais pesado. */
   .louvores-list {
     display: flex;
     flex-direction: column;
