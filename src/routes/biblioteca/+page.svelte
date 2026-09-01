@@ -64,12 +64,27 @@
     return expanded;
   }
   
+  /**
+   * Extraída para fora do `$:` para poder ser chamada também de dentro do
+   * `.subscribe()` de `louvoresLoaded` (ver `initializeFiltersIfNeeded`
+   * abaixo). Um `.subscribe()` roda de forma síncrona dentro de `instance()`
+   * — antes de o Svelte rodar `$$.update()` pela primeira vez — então a
+   * variável reativa `uniqueNormalizedClassifications` ainda não teria sido
+   * atribuída nessa janela. `$louvores`, por ser uma auto-assinatura
+   * (`$store`), já está disponível nesse ponto, então recalcular aqui é
+   * seguro independente da ordem de inicialização do Svelte.
+   * @param {typeof $louvores} louvoresList
+   */
+  function computeUniqueNormalizedClassifications(louvoresList) {
+    return louvoresList
+      .map(louvor => normalizeClassification(louvor.classificacao))
+      .filter(c => c)
+      .filter((c, index, arr) => arr.indexOf(c) === index)
+      .sort();
+  }
+
   // Get unique normalized classifications from louvores
-  $: uniqueNormalizedClassifications = $louvores
-    .map(louvor => normalizeClassification(louvor.classificacao))
-    .filter(c => c)
-    .filter((c, index, arr) => arr.indexOf(c) === index)
-    .sort();
+  $: uniqueNormalizedClassifications = computeUniqueNormalizedClassifications($louvores);
 
   // Selected classifications (Arranjo)
   $: selectedClassifications = $classificationFilters;
@@ -160,8 +175,22 @@
     });
   })();
 
+  /**
+   * Mesmo motivo de `computeUniqueNormalizedClassifications` acima: extraída
+   * do `$:` para poder ser chamada do `.subscribe()` de `louvoresLoaded`
+   * (dentro de `initializeFiltersIfNeeded`), que roda antes do primeiro
+   * `$$.update()` — a variável reativa `estadoUrl` ainda seria `undefined`
+   * nesse ponto. Quem chama passa o valor de `page` que tem à mão: `$page`
+   * no `$:` abaixo, `get(page)` (sempre atual, não depende de `$$.update`)
+   * dentro de `initializeFiltersIfNeeded`.
+   * @param {typeof $page} pageValue
+   */
+  function computeEstadoUrl(pageValue) {
+    return lerEstadoDaUrl(browser && pageValue && pageValue.url ? pageValue.url : { search: '' });
+  }
+
   // A URL é a fonte de verdade. Nada aqui é sincronizado nos dois sentidos.
-  $: estadoUrl = lerEstadoDaUrl(browser && $page && $page.url ? $page.url : { search: '' });
+  $: estadoUrl = computeEstadoUrl($page);
   $: naBiblioteca = browser && $page?.url?.pathname === '/biblioteca';
 
   /**
@@ -494,13 +523,20 @@
   function initializeFiltersIfNeeded() {
     if (filtersInitialized || !browser || !$louvoresLoaded || !$louvores.length) return;
 
-    const classifications = uniqueNormalizedClassifications;
+    // Não usa a variável reativa `uniqueNormalizedClassifications` aqui:
+    // quando esta função é chamada pelo `.subscribe()` (ver acima) dentro de
+    // `instance()`, o Svelte ainda não rodou `$$.update()` e ela estaria
+    // `undefined`. Recalcula a partir de `$louvores`, que já está atualizado.
+    const classifications = computeUniqueNormalizedClassifications($louvores);
     if (classifications.length === 0) return;
 
     filtersInitialized = true;
+    // Não usa a variável reativa `estadoUrl` pelo mesmo motivo de
+    // `uniqueNormalizedClassifications`: recalcula a partir de `get(page)`.
+    const estadoAtual = computeEstadoUrl(get(page));
     // D-2: o padrão "todos os arranjos" é calculado, não gravado na URL. Links
     // no formato `?arranjo=<5 valores>` continuam sendo lidos normalmente.
-    if (!estadoUrl.temArranjo && $classificationFilters.length === 0) {
+    if (!estadoAtual.temArranjo && $classificationFilters.length === 0) {
       classificationFilters.aplicarPadrao(classifications);
     }
   }
