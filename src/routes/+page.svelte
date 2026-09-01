@@ -79,6 +79,40 @@
     // quem chegava primeiro, o auto-select-all dos arranjos ou o debounce (D-3).
     if ($louvoresLoaded && $louvores.length > 0 && $classificationFilters.length > 0) {
       resultadosProntos = true;
+
+      // Calculado AQUI, dentro da função, e não numa `$: criterioAtual = ...`
+      // separada — achado da verificação em navegador do Step 12 (#21).
+      // `classificationFilters.aplicarPadrao(...)` é chamado de dentro de OUTRO
+      // bloco reativo (o de inicialização), que o Svelte processa numa posição
+      // diferente do gráfico de dependências desta mesma passada; uma `$:`
+      // derivada que lê `$classificationFilters` podia ficar UMA passada
+      // atrás do valor que várias linhas abaixo, na mesma função, já a
+      // classifica corretamente. O efeito: o "primeiro valor" registrado como
+      // linha de base vinha com `arranjo=[]` (o estado transitório de antes do
+      // aplicarPadrao rodar), e a passada seguinte — só o Svelte
+      // "alcançando" o valor real — parecia uma mudança de filtro de verdade,
+      // resetando a página 1 sem nenhuma ação do usuário. Ler `$filters` e
+      // `$classificationFilters` diretamente aqui, na mesma chamada síncrona
+      // que classificou `results`, elimina esse atraso: são os MESMOS valores
+      // que já produziram `results`.
+      const criterioAtual = JSON.stringify([
+        estadoUrl.pesquisa,
+        [...$filters].sort(),
+        [...$classificationFilters].sort()
+      ]);
+      // Trocar de filtro de verdade volta para a página 1. A PRIMEIRA chave (a
+      // chegada dos arranjos no load inicial) só é registrada, nunca tratada
+      // como mudança — é o que preserva a página de um deep link (D-3).
+      if (browser && naHome) {
+        if (criterioAnterior === null) {
+          criterioAnterior = criterioAtual;
+        } else if (criterioAtual !== criterioAnterior) {
+          criterioAnterior = criterioAtual;
+          if (estadoUrl.pagina !== 1) {
+            updateUrlParams({ pagina: 1 });
+          }
+        }
+      }
     }
   }
 
@@ -378,28 +412,9 @@
     updateUrlParams({});
   }
 
-  // Chave de identidade do filtro atual. JSON.stringify evita qualquer
-  // colisão de separador com um valor real de arranjo/material (o `::`/`|`
-  // manual colidiria com um arranjo chamado, por exemplo, "A::B").
-  $: criterioAtual = JSON.stringify([
-    estadoUrl.pesquisa,
-    [...$filters].sort(),
-    [...$classificationFilters].sort()
-  ]);
-
-  // Trocar de filtro de verdade volta para a página 1. A PRIMEIRA chave (a
-  // chegada dos arranjos no load inicial) só é registrada, nunca tratada como
-  // mudança — é o que preserva a página de um deep link (D-3).
-  $: if (browser && naHome && resultadosProntos) {
-    if (criterioAnterior === null) {
-      criterioAnterior = criterioAtual;
-    } else if (criterioAtual !== criterioAnterior) {
-      criterioAnterior = criterioAtual;
-      if (estadoUrl.pagina !== 1) {
-        updateUrlParams({ pagina: 1 });
-      }
-    }
-  }
+  // O reset de página por troca de filtro mora em `finalizeFilteredResults`,
+  // não numa `$: criterioAtual = ...` separada — ver o comentário lá para o
+  // porquê (achado da verificação em navegador do Step 12, #21).
 
   // Debounce: Aguarda 300ms após o usuário parar de digitar antes de pesquisar
   // Isso evita que a pesquisa bloqueie a digitação
