@@ -3,7 +3,14 @@
  *
  * O link é AUTOCONTIDO: carrega os pdfId inteiros na query. Não há servidor, não
  * há id curto. Se a leitura mudar, todo link já enviado no WhatsApp morre em
- * silêncio. Isto é caracterização — grava o que acontece hoje, bugs incluídos.
+ * silêncio. Isto é caracterização — grava o que acontece hoje.
+ *
+ * A Tarefa 10 corrigiu quatro bugs vivos aqui (ver playlistShare.js): o `+` que
+ * corrompia um pdfId em silêncio, o duplo decode que lançava URIError num nome
+ * com `%`, a URL suja que sobrevivia a `sharepdfs` vazio, e a limpeza que
+ * derrubava `utm_source`/`pesquisa` junto com os params do compartilhamento.
+ * Os casos abaixo marcados com "Tarefa 10" documentam a expectativa NOVA; os
+ * demais continuam de rede — nenhum outro comportamento deveria ter mudado.
  *
  * Run: node --test src/lib/utils/playlistShare.contrato.test.js
  */
@@ -11,20 +18,27 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { generatePlaylistShareUrl } from './playlistUtils.js';
+import { parseSharePdfIds, resolveKnownPdfIds, stripShareParams } from './playlistShare.js';
 
 /** Dois pdfId reais do acervo (Base64 padrão do caminho em UTF-8). */
 const ID_A = 'MDQxMTIwMjUvQ29uaGXDp2Ftb3MgZSBwcm9zc2lnYW1vcy9DaWZyYS5wZGY=';
 const ID_B = 'MDQxMTIwMjUvQ29uaGXDp2Ftb3MgZSBwcm9zc2lnYW1vcy9HZXN0b3MgQ0lBcy5wZGY=';
 
-/** Reproduz a leitura de src/routes/+page.svelte:259-267, tal como está hoje. */
+/**
+ * Reproduz a leitura de src/routes/+page.svelte.
+ *
+ * Tarefa 10: antes duplicava aqui a lógica de `split(',')` e um segundo
+ * `decodeURIComponent(sharename)` — o próprio bug do URIError vivia nessa
+ * duplicação. Agora chama a função de produção extraída (`parseSharePdfIds`)
+ * e não decodifica `sharename` de novo, então este helper exercita o mesmo
+ * código que roda no navegador, não uma cópia dele.
+ */
 function lerLinkDeLista(href) {
   const u = new URL(href, 'https://plpcg.com');
   const params = new URLSearchParams(u.search);
-  const sharepdfs = params.get('sharepdfs');
-  const sharename = params.get('sharename');
-  const pdfIds = sharepdfs ? sharepdfs.split(',').filter((id) => id.trim()) : [];
-  // +page.svelte:277 decodifica DE NOVO um valor que .get() já decodificou.
-  const nome = sharename ? decodeURIComponent(sharename) : undefined;
+  const pdfIds = parseSharePdfIds(params.get('sharepdfs'));
+  // URLSearchParams.get() já decodificou uma vez — sem decode extra (D-6).
+  const nome = params.get('sharename') || undefined;
   return { pdfIds, nome };
 }
 
@@ -44,8 +58,8 @@ describe('§5.1 escrita do link', () => {
   });
 
   it('C5: o = de padding do Base64 vai cru na URL e volta inteiro', () => {
-    // 2198 dos 4629 pdfId terminam em '='. O = só é significativo na primeira
-    // ocorrência de cada par, então isto funciona — por sorte, não por design.
+    // 2198 dos 4629 pdfId terminam em '='. Continua cru: só o '+' precisa de
+    // proteção (D-5) — encodar tudo mudaria a aparência de todo link à toa.
     const { pdfIds } = lerLinkDeLista(generatePlaylistShareUrl([ID_A, ID_B], 'x'));
     assert.deepEqual(pdfIds, [ID_A, ID_B]);
   });
@@ -55,13 +69,19 @@ describe('§5.1 escrita do link', () => {
     assert.deepEqual(lerLinkDeLista(`/?sharepdfs=${comBarra}`).pdfIds, [comBarra]);
   });
 
-  it('C7: um + num pdfId quebraria a lista em silêncio', () => {
-    // ⚠︎ Hoje zero ids do acervo têm '+', mas o pdfId é Base64 de um caminho
-    // arbitrário: um arquivo novo arma a bomba. URLSearchParams lê '+' como
-    // espaço, o id corrompido não casa no Map do carrossel e é DESCARTADO SEM
-    // AVISO. D-5 manda corrigir na escrita e continuar aceitando o formato cru
-    // na leitura — quando isso acontecer, este teste inverte.
-    assert.deepEqual(lerLinkDeLista('/?sharepdfs=YWJj+ZGVm').pdfIds, ['YWJj ZGVm']);
+  it('C7 [Tarefa 10]: um + num pdfId sobrevive à escrita e à leitura', () => {
+    // Era: nada protegia o '+' na escrita, então um pdfId com '+' virava uma
+    // URL com '+' cru; URLSearchParams lê '+' cru como espaço e o id
+    // corrompido era descartado sem aviso do carrossel (D-5, defeito §2.4b).
+    // Um '+' cru já digitado numa URL sempre foi (e continua sendo) lido como
+    // espaço — isso é semântica de query string, não um bug consertável na
+    // leitura. Mas hoje nenhum link já circulou com pdfId contendo '+' ("zero
+    // ids do acervo têm +" — só um arquivo futuro armaria essa bomba), então
+    // não há link antigo para preservar aqui: a correção é só na escrita.
+    // Passa a ser: encodeSharePdfIds escapa o '+' (%2B) antes de ir para a
+    // URL, e a leitura devolve o id intacto.
+    const comMais = 'YWJj+ZGVm';
+    assert.deepEqual(lerLinkDeLista(generatePlaylistShareUrl([comMais], 'x')).pdfIds, [comMais]);
   });
 });
 
@@ -70,23 +90,29 @@ describe('§5.1 leitura do link', () => {
     assert.deepEqual(lerLinkDeLista(`/?sharepdfs=${ID_A},${ID_B}`).pdfIds, [ID_A, ID_B]);
   });
 
-  it('C4: um id inexistente não atrapalha a leitura da lista', () => {
-    // O descarte do id desconhecido acontece em carousel.loadPlaylist, não aqui.
-    // Ver M-C4 na lista de verificação manual.
-    assert.deepEqual(lerLinkDeLista(`/?sharepdfs=${ID_A},naoexiste,${ID_B}`).pdfIds, [
-      ID_A,
-      'naoexiste',
-      ID_B
-    ]);
+  it('C4 [Tarefa 10]: um id fantasma some da lista resolvida, não só do carrossel', () => {
+    // Era: o id desconhecido sobrevivia até a lista salva (só o carrossel
+    // filtrava), o que divergia savedPlaylists do carrossel para sempre
+    // (§2.4c). Passa a ser: resolveKnownPdfIds aplica o mesmo critério do
+    // carrossel (`carousel.js:118-130`) antes de salvar — as duas listas nunca
+    // mais divergem.
+    const { pdfIds } = lerLinkDeLista(`/?sharepdfs=${ID_A},naoexiste,${ID_B}`);
+    assert.deepEqual(pdfIds, [ID_A, 'naoexiste', ID_B]);
+    const catalogo = [{ pdfId: ID_A }, { pdfId: ID_B }];
+    assert.deepEqual(resolveKnownPdfIds(pdfIds, catalogo), [ID_A, ID_B]);
   });
 
-  it('C8: um nome de lista com % lança URIError (bug real)', () => {
-    // ⚠︎ O erro sobe de dentro de um bloco reativo, DEPOIS de o carrossel já ter
-    // sido carregado e ANTES de a lista ser salva: o usuário vê a lista aberta,
-    // ela não é salva, e a URL fica suja. D-6 manda corrigir na Fase 3.
-    const link = generatePlaylistShareUrl([ID_A], 'Louvor 100%');
-    assert.throws(() => lerLinkDeLista(link), URIError);
-    assert.throws(() => lerLinkDeLista(generatePlaylistShareUrl([ID_A], 'Culto 50%off')), URIError);
+  it('C8 [Tarefa 10]: um nome de lista com % não lança mais URIError', () => {
+    // Era: +page.svelte:277 decodificava DE NOVO um valor que .get() já havia
+    // decodificado — qualquer '%' no nome lançava URIError DEPOIS de o
+    // carrossel já ter carregado e ANTES de savedPlaylists.savePlaylist: a
+    // lista abria mas não era salva, e a URL ficava suja (D-6). Passa a ser:
+    // sem o segundo decode, o nome chega legível e a lista é salva.
+    assert.equal(lerLinkDeLista(generatePlaylistShareUrl([ID_A], 'Louvor 100%')).nome, 'Louvor 100%');
+    assert.equal(
+      lerLinkDeLista(generatePlaylistShareUrl([ID_A], 'Culto 50%off')).nome,
+      'Culto 50%off'
+    );
   });
 
   it('C8: nomes sem % passam ilesos', () => {
@@ -97,13 +123,26 @@ describe('§5.1 leitura do link', () => {
     );
   });
 
-  it('C8: um %20 literal no nome é corrompido pelo decode duplo', () => {
-    assert.equal(lerLinkDeLista(generatePlaylistShareUrl([ID_A], 'Ensaio %20 teste')).nome, 'Ensaio   teste');
+  it('C8 [Tarefa 10]: um %20 literal no nome sobrevive ao único decode', () => {
+    // Era: o decode duplo transformava o '%20' literal (dentro do nome) numa
+    // segunda decodificação, corrompendo-o num espaço. Passa a ser: só o
+    // decode do URLSearchParams.get() roda, e o '%20' literal volta intacto.
+    assert.equal(
+      lerLinkDeLista(generatePlaylistShareUrl([ID_A], 'Ensaio %20 teste')).nome,
+      'Ensaio %20 teste'
+    );
   });
 
-  it('C9/C10: sharepdfs vazio ou só vírgulas não produz id nenhum', () => {
+  it('C9/C10 [Tarefa 10]: sharepdfs vazio ou só vírgulas não produz id nenhum, e a URL é limpa mesmo assim', () => {
     assert.deepEqual(lerLinkDeLista('/?sharepdfs=&sharename=x').pdfIds, []);
     assert.deepEqual(lerLinkDeLista('/?sharepdfs=,,,').pdfIds, []);
+    // Era: o bloco reativo só chamava a limpeza quando pelo menos um id
+    // sobrevivia ao split — sharepdfs vazio ficava para sempre na URL e o
+    // bloco reativo reavaliava a cada render (D-6/D-7, §2.4e). Passa a ser: a
+    // guarda de handleSharedPlaylistLink é `has('sharepdfs')`, então a limpeza
+    // roda mesmo sem nenhum id sobrevivendo.
+    assert.equal(stripShareParams('?sharepdfs=&sharename=x'), '');
+    assert.equal(stripShareParams('?sharepdfs=,,,'), '');
   });
 
   it('C12: uma lista de 50 louvores cabe num link de ~3450 caracteres', () => {
@@ -113,10 +152,17 @@ describe('§5.1 leitura do link', () => {
     assert.equal(lerLinkDeLista(link).pdfIds.length, 50);
   });
 
-  it('C13/D2: um param de terceiros convive com o link de lista na leitura', () => {
+  it('C13/D2 [Tarefa 10]: um param de terceiros sobrevive à leitura E à limpeza da URL', () => {
     const { pdfIds } = lerLinkDeLista(`/?utm_source=whatsapp&sharepdfs=${ID_A}&pesquisa=amor`);
     assert.deepEqual(pdfIds, [ID_A]);
-    // ⚠︎ A LIMPEZA da URL é que descarta utm_source e pesquisa junto
-    // (+page.svelte:281). Ver M-C13 na lista manual; D-7 manda corrigir.
+    // Era: a limpeza fazia goto(pathname) sem query nenhuma, descartando
+    // utm_source e pesquisa junto com sharepdfs/sharename (D-7, §2.4f/g).
+    // Passa a ser: stripShareParams remove só os dois params do
+    // compartilhamento; todo o resto sobrevive.
+    const resto = stripShareParams(`?utm_source=whatsapp&sharepdfs=${ID_A}&pesquisa=amor`);
+    const restoParams = new URLSearchParams(resto);
+    assert.equal(restoParams.get('utm_source'), 'whatsapp');
+    assert.equal(restoParams.get('pesquisa'), 'amor');
+    assert.equal(restoParams.has('sharepdfs'), false);
   });
 });

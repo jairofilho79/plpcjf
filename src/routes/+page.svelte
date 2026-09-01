@@ -12,6 +12,11 @@
   import { savedPlaylists } from '$lib/stores/savedPlaylists';
   import { bibliotecaItemsPerPage, VALID_OPTIONS } from '$lib/stores/bibliotecaItemsPerPage';
   import { parseUrlParams, updateUrlParams } from '$lib/utils/urlSync';
+  import {
+    parseSharePdfIds,
+    resolveKnownPdfIds,
+    stripShareParams
+  } from '$lib/utils/playlistShare';
   import { prepareSearchQuery, louvorRowMatchesPreparedSearch } from '$lib/utils/louvorSearch';
   import SearchBar from '$lib/components/SearchBar.svelte';
   import CategoryFilters from '$lib/components/CategoryFilters.svelte';
@@ -251,48 +256,50 @@
   });
 
   /**
-   * Handle shared playlist link from query parameters
+   * Importa a lista compartilhada que veio na query (`?sharepdfs=...&sharename=...`).
+   * A URL é limpa sempre que o param existe, mesmo quando nada é importado.
    */
   function handleSharedPlaylistLink() {
     if (sharedLinkProcessed) return;
-    
+
     const urlParams = new URLSearchParams($page.url.search);
-    const sharepdfs = urlParams.get('sharepdfs');
-    const sharename = urlParams.get('sharename');
+    if (!urlParams.has('sharepdfs')) return;
+    // Sem catálogo não dá para resolver os ids: espera o manifesto (caso C2).
+    if ($louvores.length === 0) return;
 
-    if (sharepdfs && $louvores.length > 0) {
-      sharedLinkProcessed = true;
-      
-      // Parse PDF IDs from comma-separated string
-      const pdfIds = sharepdfs.split(',').filter(id => id.trim());
-      
-      if (pdfIds.length > 0) {
-        // Clear current playlist
-        carousel.clearCarousel();
-        
-        // Load playlist with the shared PDF IDs
-        carousel.loadPlaylist(pdfIds, $louvores);
-        
-        // Save playlist automatically with the shared name or default name
-        const playlistName = sharename ? decodeURIComponent(sharename) : undefined;
-        savedPlaylists.savePlaylist(pdfIds, playlistName);
-        
-        // Clean URL by removing query parameters
-        goto($page.url.pathname, { replaceState: true, noScroll: true });
+    sharedLinkProcessed = true;
+
+    const pdfIds = parseSharePdfIds(urlParams.get('sharepdfs'));
+    // A lista salva guarda os mesmos ids que o carrossel mostra: ids fantasmas
+    // envenenariam findPlaylistByPdfIds para sempre.
+    const idsResolvidos = resolveKnownPdfIds(pdfIds, $louvores);
+
+    if (idsResolvidos.length > 0) {
+      carousel.clearCarousel();
+      carousel.loadPlaylist(idsResolvidos, $louvores);
+
+      // URLSearchParams.get já decodificou uma vez; decodificar de novo lançava
+      // URIError em qualquer nome com `%` e abortava o save.
+      const sharename = urlParams.get('sharename');
+      const playlistName = sharename || undefined;
+
+      // Abrir o mesmo link várias vezes não cria listas duplicadas.
+      if (!savedPlaylists.findPlaylistByPdfIds(idsResolvidos)) {
+        savedPlaylists.savePlaylist(idsResolvidos, playlistName);
       }
     }
+
+    // Limpa só os params do compartilhamento; utm_source/fbclid seguem vivos.
+    // replaceState: voltar não pode reimportar a lista.
+    const destino = $page.url.pathname + stripShareParams($page.url.search);
+    goto(destino, { replaceState: true, noScroll: true });
   }
 
-  // Watch for louvores to be loaded and handle shared link
-  $: {
-    if (browser && $louvores.length > 0 && $page.url.search && !sharedLinkProcessed) {
-      const urlParams = new URLSearchParams($page.url.search);
-      if (urlParams.has('sharepdfs')) {
-        handleSharedPlaylistLink();
-      }
-    }
+  // Importa assim que o catálogo existir; o link nunca se perde por chegar cedo.
+  $: if (browser && $louvores.length > 0 && !sharedLinkProcessed && $page && $page.url) {
+    handleSharedPlaylistLink();
   }
-  
+
   // Normalize classification by removing content in parentheses
   /**
    * @param {string} classification

@@ -1,3 +1,5 @@
+import { encodeSharePdfIds } from './playlistShare.js';
+
 /**
  * Share playlist link using Web Share API or clipboard fallback
  * @param {string} url - The playlist share URL
@@ -55,7 +57,9 @@ export async function sharePlaylistLink(url, title) {
  */
 export function generatePlaylistShareUrl(pdfIds, nome) {
   const baseUrl = typeof window !== 'undefined' ? window.location.origin : '';
-  const pdfIdsParam = pdfIds.join(',');
+  // Cada id é codificado à parte para proteger o `+` do base64 (§2.4b da
+  // investigação). A leitura continua aceitando o formato cru dos links antigos.
+  const pdfIdsParam = encodeSharePdfIds(pdfIds);
   const nameParam = encodeURIComponent(nome);
   return `${baseUrl}/?sharepdfs=${pdfIdsParam}&sharename=${nameParam}`;
 }
