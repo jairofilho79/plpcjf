@@ -963,7 +963,10 @@ async function startZipDownloadWithSpecificParts(categories, pdfUrls, partsByCat
           if (!remaining.has(pathForComparison)) continue;
 
           const pdfBlob = new Blob([data], { type: 'application/pdf' });
-          const requestUrl = createUrlUtf8(preparedPath, location.origin);
+          // #22.2: colapsa para o construtor único de URL de PDF (Tarefa 5) —
+          // preparedPath já passou por normalizeForStorage em normalizeZipEntryName,
+          // então isto é idempotente e byte a byte igual ao createUrlUtf8 direto.
+          const requestUrl = PdfPathManager.createRequestUrl(preparedPath, location.origin);
           const pdfResponse = new Response(pdfBlob, {
             headers: { 'Content-Type': 'application/pdf' }
           });
@@ -1987,7 +1990,10 @@ async function startZipDownload(categories, pdfUrls, alreadyDownloadedCategories
           if (!remaining.has(pathForComparison)) continue;
 
           const pdfBlob = new Blob([data], { type: 'application/pdf' });
-          const requestUrl = createUrlUtf8(preparedPath, location.origin);
+          // #22.2: colapsa para o construtor único de URL de PDF (Tarefa 5) —
+          // preparedPath já passou por normalizeForStorage em normalizeZipEntryName,
+          // então isto é idempotente e byte a byte igual ao createUrlUtf8 direto.
+          const requestUrl = PdfPathManager.createRequestUrl(preparedPath, location.origin);
           const pdfResponse = new Response(pdfBlob, {
             headers: { 'Content-Type': 'application/pdf' }
           });

@@ -85,12 +85,13 @@ class PdfPathManager {
    * URL de outro jeito: uma segunda forma de codificar é exatamente o defeito
    * que esta função fecha.
    *
-   * Verdade de hoje, não aspiração: a extração de pacote ZIP em
-   * `src/lib/stores/offline.js` (`:981`, `:2002`) ainda escreve no cache PDF
-   * chamando `createUrlUtf8` direto, sobre um caminho normalizado por
-   * `normalizeZipEntryName` — uma duplicata de `normalizeForStorage` que hoje
-   * concorda com ela byte a byte, mas não é a mesma função. Unificar esse
-   * quarto caminho de escrita é trabalho da Tarefa 6, não desta.
+   * #22.2 (Tarefa 6) fechou o quarto caminho de escrita que este parágrafo
+   * descrevia como pendente: a extração de pacote ZIP em
+   * `src/lib/stores/offline.js` agora chama `createRequestUrl` (não mais
+   * `createUrlUtf8` direto) sobre um `preparedPath` que já passou por
+   * `normalizeForStorage` via `normalizeZipEntryName` — que também deixou de
+   * ser uma cópia e passou a delegar para `normalizeForStorage`. `createRequestUrl`
+   * é, de fato, o único construtor de URL de PDF do cliente.
    *
    * @param {string} pdfPath - PDF path (will be normalized)
    * @param {string} origin - Base origin URL (defaults to window.location.origin)

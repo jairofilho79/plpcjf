@@ -276,9 +276,11 @@ export function findMissingPdfs(louvores, cachedPdfs) {
     return louvores.filter(l => l.pdfId);
   }
 
-  // Índice O(1) dos PDFs em cache (caminhos decodificados, sem normalização —
-  // preserva maiúsculas/minúsculas e acentos, como antes).
-  const cacheIndex = buildPdfCacheIndex(cachedPdfs);
+  // #22.2: a chave real do cache está em NFC (normalizeForStorage/migração de
+  // chaves); getPdfRelPath(louvor) devolve o pdfPath cru, NFD para 8 caminhos
+  // do acervo. Sem normalizar aqui, esses 8 apareceriam como "faltando" para
+  // sempre depois da migração — a comparação, não a leitura, é que quebraria.
+  const cacheIndex = buildPdfCacheIndex(cachedPdfs, { normalize: PdfPathManager.normalizeForStorage });
 
   const missing = [];
 
