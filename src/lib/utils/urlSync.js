@@ -57,11 +57,18 @@ function agendarFlush() {
       return;
     }
 
-    await goto(rota + (query ? `?${query}` : ''), {
-      replaceState: true,
-      noScroll: true,
-      keepFocus: true
-    });
+    try {
+      await goto(rota + (query ? `?${query}` : ''), {
+        replaceState: true,
+        noScroll: true,
+        keepFocus: true
+      });
+    } catch (err) {
+      // Uma navegação superada por outra mais nova rejeita a Promise do
+      // `goto` — comportamento normal do SvelteKit, não um erro real. Sem
+      // isto virava rejeição não tratada no console.
+      console.debug('[urlSync] goto interrompido por navegação superada:', err);
+    }
 
     // Só limpa o acumulado se ninguém escreveu por cima durante o goto.
     if (minhaVersao === versaoFlush) {
