@@ -27,6 +27,13 @@ const logger = createLogger('PackageDownloader');
  */
 
 /**
+ * Retorno de `downloadPackage` — antes de qualquer extração, só o ZIP baixado.
+ * @typedef {Object} PackageBlobResult
+ * @property {Blob} blob - ZIP baixado, ainda não extraído
+ * @property {number} bytesDownloaded - Bytes baixados
+ */
+
+/**
  * Package Downloader
  * Downloads and extracts ZIP packages with automatic normalization
  */
@@ -42,8 +49,8 @@ export class PackageDownloader {
   /**
    * Download package
    * @param {string} packageUrl - Package URL or filename
-   * @param {AbortSignal} [abortSignal] - Abort signal for cancellation
-   * @returns {Promise<PackageDownloadResult>} Download result
+   * @param {AbortSignal | null} [abortSignal] - Abort signal for cancellation
+   * @returns {Promise<PackageBlobResult>} Download result
    */
   async downloadPackage(packageUrl, abortSignal = null) {
     // Normalize URL: if it's an absolute URL (http:// or https://), extract the pathname
@@ -86,6 +93,7 @@ export class PackageDownloader {
 
       // For same-origin requests, don't set mode: 'cors' as it can cause issues
       // The browser will automatically use the correct mode
+      /** @type {RequestInit} */
       const fetchOptions = {
         signal: abortSignal,
         cache: 'no-store'
@@ -121,7 +129,8 @@ export class PackageDownloader {
         bytesDownloaded
       };
     } catch (error) {
-      if (error.name === 'AbortError' || abortSignal?.aborted) {
+      const isAbort = error instanceof DOMException && error.name === 'AbortError';
+      if (isAbort || abortSignal?.aborted) {
         throw new Error('DOWNLOAD_CANCELLED');
       }
       logger.error('PackageDownloader', `Error downloading package: ${fullUrl}`, error);
@@ -180,7 +189,10 @@ export class PackageDownloader {
           continue;
         }
 
-        const pdfBlob = new Blob([fileData], { type: 'application/pdf' });
+        // Uint8Array é sempre um BlobPart válido em runtime; o cast só
+        // contorna a exigência de TS 5.9 de `buffer: ArrayBuffer` (não
+        // `ArrayBufferLike`), que o typing de fflate/lib.dom não garante.
+        const pdfBlob = new Blob([/** @type {BlobPart} */ (fileData)], { type: 'application/pdf' });
 
         extractedPdfs.push({
           normalizedPath,
@@ -204,7 +216,7 @@ export class PackageDownloader {
    * Download and extract package
    * @param {string} packageUrl - Package URL
    * @param {string[]} expectedPdfs - Expected PDF paths
-   * @param {AbortSignal} [abortSignal] - Abort signal
+   * @param {AbortSignal | null} [abortSignal] - Abort signal
    * @returns {Promise<PackageDownloadResult>} Download and extraction result
    */
   async downloadAndExtract(packageUrl, expectedPdfs = [], abortSignal = null) {
@@ -404,7 +416,7 @@ export class PackageDownloader {
   /**
    * Unzip entries from buffer
    * @param {Uint8Array} buffer - ZIP file buffer
-   * @returns {Promise<Object>} Entries object
+   * @returns {Promise<Record<string, Uint8Array>>} Entries object
    * @private
    */
   _unzipEntries(buffer) {

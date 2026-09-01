@@ -19,7 +19,8 @@ class PdfPathManager {
    * Normalize PDF path for storage
    * Preserves case and accents, only cleans format
    * 
-   * @param {string} pdfPath - PDF path to normalize
+   * @param {string | null | undefined} pdfPath - PDF path to normalize (aceita
+   *   null/undefined: a função já se defende disso em runtime, devolvendo '')
    * @returns {string} Normalized path in format 'assets/...' (without leading slash)
    */
   static normalizeForStorage(pdfPath) {
@@ -94,7 +95,7 @@ class PdfPathManager {
    * fato, o único construtor de URL de PDF do cliente.
    *
    * @param {string} pdfPath - PDF path (will be normalized)
-   * @param {string} origin - Base origin URL (defaults to window.location.origin)
+   * @param {string | null} [origin] - Base origin URL (defaults to window.location.origin)
    * @returns {string} Full URL string with UTF-8 encoding
    */
   static createRequestUrl(pdfPath, origin = null) {

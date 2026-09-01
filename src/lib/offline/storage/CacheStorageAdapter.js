@@ -19,7 +19,7 @@ const logger = createLogger('CacheStorageAdapter');
  */
 export class CacheStorageAdapter extends CacheRepository {
   /**
-   * @param {string} [cacheName] - Cache name (defaults to config)
+   * @param {string | null} [cacheName] - Cache name (defaults to config)
    */
   constructor(cacheName = null) {
     super();
@@ -249,7 +249,11 @@ export class CacheStorageAdapter extends CacheRepository {
    * @param {boolean} [options.emitEvents=true] - Whether to emit events
    * @param {boolean} [options.notifyServiceWorker=true] - Whether to notify service worker
    * @returns {Promise<{normalizedPath: string, requestUrl: string}>} Storage result
-   * @private
+   *
+   * Não é privado de fato: `PackageDownloader.storePdfsInCache` chama isto
+   * entre módulos de propósito (armazenamento em lote, sem eventos/SW por
+   * item). O `_` já sinaliza "uso interno com cuidado"; `@private` aqui
+   * seria uma anotação que não bate com o uso real.
    */
   async _putPdfInternal(pdfPath, pdfData, options = {}) {
     const { emitEvents = true, notifyServiceWorker = true } = options;

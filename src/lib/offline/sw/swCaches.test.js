@@ -107,6 +107,7 @@ describe('isRecoverableShellCacheName', () => {
 
 const ORIGIN = 'https://plpcg.com';
 
+/** @param {string} path */
 function fakeRequest(path) {
   return { url: `${ORIGIN}${path}` };
 }
@@ -119,19 +120,23 @@ class FakeCache {
   async keys() {
     return [...this.entries.values()].map((e) => e.request);
   }
+  /** @param {{ url: string }} request */
   async match(request) {
     const entry = this.entries.get(request.url);
     return entry ? entry.response : undefined;
   }
+  /** @param {{ url: string }} request @param {any} response */
   async put(request, response) {
     this.entries.set(request.url, { request, response });
   }
+  /** @param {{ url: string }} request */
   async delete(request) {
     return this.entries.delete(request.url);
   }
 }
 
 class FakeCacheStorage {
+  /** @param {Record<string, Record<string, unknown>>} [seed] */
   constructor(seed = {}) {
     /** @type {Map<string, FakeCache>} */
     this.caches = new Map();
@@ -149,13 +154,17 @@ class FakeCacheStorage {
   async keys() {
     return [...this.caches.keys()];
   }
+  /** @param {string} name @returns {Promise<FakeCache>} */
   async open(name) {
     if (!this.caches.has(name)) this.caches.set(name, new FakeCache());
-    return this.caches.get(name);
+    // set() acima garante a entrada: sempre um FakeCache, nunca undefined.
+    return /** @type {FakeCache} */ (this.caches.get(name));
   }
+  /** @param {string} name */
   async delete(name) {
     return this.caches.delete(name);
   }
+  /** @param {string} cacheName @param {string} path */
   bodyAt(cacheName, path) {
     const cache = this.caches.get(cacheName);
     if (!cache) return undefined;
@@ -178,7 +187,7 @@ describe('migrateCatalogManifests', () => {
       'plpc-1735689600000-app': { '/': 'shell novo' }
     });
 
-    const migrated = await migrateCatalogManifests(storage);
+    const migrated = await migrateCatalogManifests(/** @type {any} */ (storage));
     assert.equal(migrated, 2);
 
     assert.equal(storage.bodyAt(CATALOG_CACHE_NAME, LOUVORES_PATH), 'catálogo importado');
@@ -200,7 +209,7 @@ describe('migrateCatalogManifests', () => {
     const current = appCacheName('1735689600000');
 
     // Exatamente a ordem do handler `activate`: migrar, e só então podar.
-    await migrateCatalogManifests(storage);
+    await migrateCatalogManifests(/** @type {any} */ (storage));
     const names = await storage.keys();
     await Promise.all(
       names.filter((n) => isObsoleteCacheName(n, current)).map((n) => storage.delete(n))
@@ -229,11 +238,11 @@ describe('migrateCatalogManifests', () => {
       [CATALOG_CACHE_NAME]: { [LOUVORES_PATH]: 'versão boa já migrada' }
     });
 
-    assert.equal(await migrateCatalogManifests(storage), 0);
+    assert.equal(await migrateCatalogManifests(/** @type {any} */ (storage)), 0);
     assert.equal(storage.bodyAt(CATALOG_CACHE_NAME, LOUVORES_PATH), 'versão boa já migrada');
 
     // Uma segunda passada continua sem efeito.
-    assert.equal(await migrateCatalogManifests(storage), 0);
+    assert.equal(await migrateCatalogManifests(/** @type {any} */ (storage)), 0);
     assert.equal(storage.bodyAt(CATALOG_CACHE_NAME, LOUVORES_PATH), 'versão boa já migrada');
   });
 
@@ -246,7 +255,7 @@ describe('migrateCatalogManifests', () => {
       }
     });
 
-    assert.equal(await migrateCatalogManifests(storage), 0);
+    assert.equal(await migrateCatalogManifests(/** @type {any} */ (storage)), 0);
     const catalog = await storage.open(CATALOG_CACHE_NAME);
     assert.equal((await catalog.keys()).length, 0);
   });
@@ -256,7 +265,7 @@ describe('migrateCatalogManifests', () => {
       'plpc-pdfs': { '/assets/ColAdultos/001.pdf': 'PDF do usuário' }
     });
 
-    assert.equal(await migrateCatalogManifests(storage), 0);
+    assert.equal(await migrateCatalogManifests(/** @type {any} */ (storage)), 0);
     assert.deepEqual(await storage.keys(), ['plpc-pdfs']);
   });
 });

@@ -75,8 +75,9 @@ export function appCacheName(version) {
  * o cache de app de um deploy que não é o atual, ou o cache legado do PDF.js.
  * Qualquer `plpc-*` novo sobrevive por padrão.
  *
- * @param {string} name nome do cache vindo de `caches.keys()`
- * @param {string} currentAppCache resultado de `appCacheName(version)`
+ * @param {unknown} name nome do cache vindo de `caches.keys()` — aceita não-string
+ *   porque a função já se defende disso em runtime (ver o `typeof` abaixo)
+ * @param {string | undefined} currentAppCache resultado de `appCacheName(version)`
  * @returns {boolean}
  */
 export function isObsoleteCacheName(name, currentAppCache) {

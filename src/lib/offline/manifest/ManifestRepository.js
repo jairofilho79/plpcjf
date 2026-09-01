@@ -19,10 +19,10 @@ class ManifestRepository {
   /**
    * Get louvores manifest
    * @param {boolean} [useCache=true] - Use cache if available
-   * @returns {Promise<Array>} Louvores manifest array
+   * @returns {Promise<Array<Object>>} Louvores manifest array
    */
   async getLouvoresManifest(useCache = true) {
-    return this._getManifest('louvores', useCache);
+    return /** @type {Array<Object>} */ (await this._getManifest('louvores', useCache));
   }
 
   /**
@@ -38,7 +38,7 @@ class ManifestRepository {
    * Get manifest with fallback strategy
    * @param {string} type - Manifest type ('louvores' or 'offline')
    * @param {boolean} useCache - Use cache if available
-   * @returns {Promise<Object|Array>} Manifest data
+   * @returns {Promise<Object|Array<Object>>} Manifest data
    * @private
    */
   async _getManifest(type, useCache) {
@@ -103,7 +103,7 @@ class ManifestRepository {
   /**
    * Get cached manifest (if available and not expired)
    * @param {string} type - Manifest type ('louvores' or 'offline')
-   * @returns {Promise<Object|Array|null>} Cached manifest or null
+   * @returns {Promise<Object|Array<Object>|null>} Cached manifest or null
    */
   async getCachedManifest(type) {
     if (!type || (type !== 'louvores' && type !== 'offline')) {
@@ -115,7 +115,7 @@ class ManifestRepository {
 
   /**
    * Invalidate manifest cache
-   * @param {string} [type] - Manifest type to invalidate (optional, invalidates all)
+   * @param {string | null} [type] - Manifest type to invalidate (optional, invalidates all)
    */
   async invalidateCache(type = null) {
     if (type) {
@@ -124,7 +124,7 @@ class ManifestRepository {
       }
       
       // Remove specific manifest
-      manifestCache.remove(type);
+      manifestCache._remove(type);
       logger.info('ManifestRepository', `Cache invalidated for ${type} manifest`);
     } else {
       // Clear all
@@ -136,7 +136,7 @@ class ManifestRepository {
   /**
    * Validate manifest integrity
    * @param {string} type - Manifest type
-   * @param {Object|Array} data - Manifest data
+   * @param {Object|Array<Object>} data - Manifest data
    * @returns {boolean} True if valid
    */
   validateIntegrity(type, data) {

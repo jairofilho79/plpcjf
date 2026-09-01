@@ -17,7 +17,10 @@ const COM_COLCHETES = [
   'assets/PES/Perante a tua grandeza - Vocal [06 02 2025].pdf'
 ];
 
-/** Reproduz o que o leitor faz hoje: parser WHATWG sobre o caminho já decodificado. */
+/**
+ * Reproduz o que o leitor faz hoje: parser WHATWG sobre o caminho já decodificado.
+ * @param {string} caminho
+ */
 function urlPeloParser(caminho) {
   return new URL(`/${caminho}`, ORIGEM).href;
 }

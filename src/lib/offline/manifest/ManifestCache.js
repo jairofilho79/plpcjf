@@ -15,7 +15,7 @@ const logger = createLogger('ManifestCache');
  */
 class ManifestCache {
   /**
-   * @param {number} [ttl] - Time to live in milliseconds
+   * @param {number | null} [ttl] - Time to live in milliseconds
    */
   constructor(ttl = null) {
     this.ttl = ttl || getConfig('MANIFEST_CACHE_TTL') || 5 * 60 * 1000;
@@ -45,7 +45,7 @@ class ManifestCache {
       // Check if expired
       if (this.isExpired(type)) {
         logger.debug('ManifestCache', `Cache expired for ${type}, removing`);
-        this.remove(type);
+        this._remove(type);
         return null;
       }
 
@@ -78,9 +78,9 @@ class ManifestCache {
       logger.debug('ManifestCache', `Cached ${type} manifest`);
     } catch (error) {
       logger.error('ManifestCache', `Error caching ${type} manifest`, error);
-      
+
       // If quota exceeded, try to clear expired entries
-      if (error.name === 'QuotaExceededError') {
+      if (error instanceof DOMException && error.name === 'QuotaExceededError') {
         logger.warn('ManifestCache', 'localStorage quota exceeded, clearing expired entries');
         this.clearExpired();
       }
@@ -162,7 +162,7 @@ class ManifestCache {
 
     for (const type of types) {
       if (this.isExpired(type)) {
-        this.remove(type);
+        this._remove(type);
         cleared++;
       }
     }
@@ -176,7 +176,7 @@ class ManifestCache {
    * Validate manifest integrity
    * Basic validation - checks if manifest has required structure
    * @param {string} type - Manifest type
-   * @param {Object} data - Manifest data to validate
+   * @param {any} data - Manifest data to validate
    * @returns {boolean} True if valid
    */
   validateIntegrity(type, data) {
@@ -216,6 +216,7 @@ class ManifestCache {
       return { louvores: null, offline: null };
     }
 
+    /** @type {Record<string, Object | null>} */
     const stats = {
       louvores: null,
       offline: null
@@ -245,7 +246,7 @@ class ManifestCache {
       } catch (error) {
         stats[type] = {
           cached: false,
-          error: error.message
+          error: /** @type {any} */ (error).message
         };
       }
     }

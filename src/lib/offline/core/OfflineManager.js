@@ -184,7 +184,7 @@ class OfflineManager {
    * @param {string[]} categories - Categories to download
    * @param {Object} [options] - Download options
    * @param {Function} [options.onProgress] - Progress callback
-   * @param {Array} [options.louvoresData] - Louvores data (if not provided, will be fetched)
+   * @param {Array<Object>} [options.louvoresData] - Louvores data (if not provided, will be fetched)
    * @returns {Promise<DownloadResult>} Download result
    */
   async downloadCategories(categories, options = {}) {
@@ -206,6 +206,11 @@ class OfflineManager {
     // This ensures all routes are available offline
     // Run in background - don't block download if it fails
     cacheAppPages({
+      /**
+       * @param {string} route
+       * @param {number} index
+       * @param {number} total
+       */
       onProgress: (route, index, total) => {
         logger.debug('OfflineManager', `Caching page ${index + 1}/${total}: ${route}`);
       }
@@ -235,6 +240,7 @@ class OfflineManager {
    * @param {string[]} pdfPaths - PDF paths to download
    * @param {Object} [options] - Download options
    * @param {Function} [options.onProgress] - Progress callback
+   * @param {Array<Object>} [options.louvoresData] - Louvores data (if not provided, will be fetched)
    * @returns {Promise<DownloadResult>} Download result
    */
   async downloadMissingPdfs(pdfPaths, options = {}) {
@@ -258,7 +264,9 @@ class OfflineManager {
       return result;
     } catch (error) {
       // If individual PDF download is not implemented, fall back to category-based download
-      if (error.message.includes('not yet implemented')) {
+      // (cast, não narrowing: preserva o comportamento atual de lançar se
+      // `error` não tiver `.message`, igual ao acesso direto de antes)
+      if (/** @type {any} */ (error).message.includes('not yet implemented')) {
         logger.warn('OfflineManager', 'Individual PDF download not implemented, using category-based approach');
         
         // Extract categories from PDF paths
@@ -308,7 +316,7 @@ class OfflineManager {
    * Import offline zip-mãe (manifests + parts) without network.
    * @param {File|Blob} file
    * @param {object} [options]
-   * @param {Function} [options.onProgress]
+   * @param {(p: { phase: string, completed: number, total: number, percentage: number, detail?: string }) => void} [options.onProgress]
    * @param {AbortSignal} [options.signal]
    * @returns {Promise<{ success: boolean, pdfsStored: number, categories: string[], cancelled?: boolean, error?: string }>}
    */
@@ -374,7 +382,7 @@ class OfflineManager {
         source: 'unknown',
         normalizedPath: pdfPath,
         needsDownload: navigator.onLine,
-        error: error.message
+        error: /** @type {any} */ (error).message
       };
     }
   }
@@ -383,7 +391,7 @@ class OfflineManager {
    * Validate category completeness
    * @param {string} category - Category name
    * @param {Object} [options] - Validation options
-   * @param {Array} [options.louvoresData] - Louvores data
+   * @param {Array<Object>} [options.louvoresData] - Louvores data
    * @returns {Promise<CategoryValidationResult>} Validation result
    */
   async validateCategory(category, options = {}) {
@@ -449,8 +457,8 @@ class OfflineManager {
    * @param {Object} [options] - Stats options
    * @param {boolean} [options.useCache] - Use cached stats (default: true)
    * @param {boolean} [options.forceRecalculate] - Force recalculation (default: false)
-   * @param {Array} [options.louvoresData] - Louvores data
-   * @param {Array} [options.cachedPdfs] - Cached PDFs list
+   * @param {Array<Object>} [options.louvoresData] - Louvores data
+   * @param {Array<Object>} [options.cachedPdfs] - Cached PDFs list
    * @returns {Promise<CategoryStats>} Category statistics
    */
   async getCategoryStats(category, options = {}) {
@@ -475,7 +483,7 @@ class OfflineManager {
    * Get all category statistics
    * @param {Object} [options] - Stats options
    * @param {boolean} [options.useCache] - Use cached stats (default: true)
-   * @param {Array} [options.louvoresData] - Louvores data
+   * @param {Array<Object>} [options.louvoresData] - Louvores data
    * @returns {Promise<Record<string, CategoryStats>>} All category statistics
    */
   async getAllStats(options = {}) {
@@ -486,6 +494,7 @@ class OfflineManager {
     try {
       const louvoresData = options.louvoresData || get(louvores);
       const categories = new Set(louvoresData.map(l => l.categoria));
+      /** @type {Record<string, CategoryStats>} */
       const stats = {};
 
       // Get stats for each category
@@ -570,7 +579,7 @@ class OfflineManager {
   /**
    * Get louvores manifest
    * @param {boolean} [useCache=true] - Use cache if available
-   * @returns {Promise<Array>} Louvores manifest array
+   * @returns {Promise<Array<Object>>} Louvores manifest array
    */
   async getLouvoresManifest(useCache = true) {
     await this.ensureInitialized();
@@ -616,9 +625,11 @@ class OfflineManager {
 
     try {
       const louvoresManifest = await this.getLouvoresManifest();
+      /** @type {{ packages?: Record<string, unknown> } | null} */
       const offlineManifest = await this.getOfflineManifest();
 
       // Basic validation
+      /** @type {{ valid: boolean, errors: string[], warnings: string[] }} */
       const result = {
         valid: true,
         errors: [],
@@ -640,7 +651,7 @@ class OfflineManager {
       logger.error('OfflineManager', 'Error validating manifests', error);
       return {
         valid: false,
-        errors: [error.message],
+        errors: [/** @type {any} */ (error).message],
         warnings: []
       };
     }

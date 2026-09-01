@@ -20,8 +20,8 @@ const LOG_LEVELS = {
  * @returns {number} Current log level
  */
 function getLogLevel() {
-  const level = getConfig('LOG_LEVEL') || 'INFO';
-  return LOG_LEVELS[level.toUpperCase()] ?? LOG_LEVELS.INFO;
+  const level = /** @type {string} */ (getConfig('LOG_LEVEL') || 'INFO');
+  return LOG_LEVELS[/** @type {keyof typeof LOG_LEVELS} */ (level.toUpperCase())] ?? LOG_LEVELS.INFO;
 }
 
 /**
@@ -38,7 +38,7 @@ function isLoggingEnabled() {
  * @param {string} level - Log level
  * @param {string} message - Log message
  * @param {any} [data] - Additional data
- * @param {Object} [metrics] - Performance metrics (duration, etc.)
+ * @param {Object | null} [metrics] - Performance metrics (duration, etc.)
  * @returns {string} Formatted log message
  */
 function formatMessage(module, level, message, data = null, metrics = null) {
@@ -126,7 +126,7 @@ export function info(module, message, data = null) {
  * @param {string} module - Module name
  * @param {string} message - Debug message
  * @param {any} [data] - Additional data
- * @param {Object} [metrics] - Performance metrics
+ * @param {Object | null} [metrics] - Performance metrics
  */
 export function debug(module, message, data = null, metrics = null) {
   if (!isLoggingEnabled() || getLogLevel() < LOG_LEVELS.DEBUG) {
@@ -143,15 +143,38 @@ export function debug(module, message, data = null, metrics = null) {
 }
 
 /**
+ * NOTA: os métodos abaixo aceitam argumentos extras via rest (`...unknown[]`)
+ * em vez de uma aridade fixa porque a grande maioria das chamadas em
+ * src/lib/offline/** (~245 de 247 fora dos testes) passa o nome do módulo de
+ * novo como primeiro argumento — ex.: `logger.error('CacheStorageAdapter',
+ * msg, err)` — mesmo com o módulo já vinculado por `createLogger(moduleName)`.
+ * O wrapper abaixo só declara 2-3 parâmetros formais, então esse argumento
+ * extra hoje é descartado silenciosamente em runtime (o objeto de erro real
+ * nunca chega ao `console.error`). É um bug de logging pré-existente, fora do
+ * escopo desta tarefa de tipos (não mexe em normalização/URL/cache) — corrigir
+ * os ~245 call sites mudaria o que é logado, então fica registrado aqui em vez
+ * de "consertado por baixo do capô" por uma anotação de tipo.
+ * @typedef {Object} OfflineLoggerInstance
+ * @property {(message: string, ...rest: unknown[]) => void} error
+ * @property {(message: string, ...rest: unknown[]) => void} warn
+ * @property {(message: string, ...rest: unknown[]) => void} info
+ * @property {(message: string, ...rest: unknown[]) => void} debug
+ */
+
+/**
  * Create a logger instance for a specific module
  * @param {string} moduleName - Name of the module
- * @returns {Object} Logger instance with bound methods
+ * @returns {OfflineLoggerInstance} Logger instance with bound methods
  */
 export function createLogger(moduleName) {
   return {
+    /** @param {string} message @param {any} [err] */
     error: (message, err) => error(moduleName, message, err),
+    /** @param {string} message @param {any} [data] */
     warn: (message, data) => warn(moduleName, message, data),
+    /** @param {string} message @param {any} [data] */
     info: (message, data) => info(moduleName, message, data),
+    /** @param {string} message @param {any} [data] @param {any} [metrics] */
     debug: (message, data, metrics) => debug(moduleName, message, data, metrics)
   };
 }

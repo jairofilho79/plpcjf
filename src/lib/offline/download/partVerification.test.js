@@ -7,7 +7,11 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { getPartPdfPaths, verifyCompletedPart } from './partVerification.js';
 
-/** Resolvedor de teste: só resolve o que está no mapa. */
+/**
+ * Resolvedor de teste: só resolve o que está no mapa.
+ * @param {Record<string, string>} map
+ * @returns {(louvor: { pdfId: string }) => string | null}
+ */
 function makeResolver(map) {
   return ({ pdfId }) => map[pdfId] ?? null;
 }

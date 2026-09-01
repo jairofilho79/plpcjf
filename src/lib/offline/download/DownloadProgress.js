@@ -16,7 +16,7 @@ const logger = createLogger('DownloadProgress');
  * @property {number} progress - Progress percentage (0-100)
  * @property {number} [bytesDownloaded] - Bytes downloaded
  * @property {number} [bytesTotal] - Total bytes to download
- * @property {number} [estimatedTimeRemaining] - Estimated time remaining in seconds
+ * @property {number | null} [estimatedTimeRemaining] - Estimated time remaining in seconds
  * @property {number} [speed] - Download speed in bytes/second
  */
 

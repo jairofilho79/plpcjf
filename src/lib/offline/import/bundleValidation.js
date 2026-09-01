@@ -223,10 +223,10 @@ export function validateBundleRoot({ offlineManifest, louvoresManifest, entryBas
  */
 export function initialImportConcurrency() {
   try {
-    const mem =
-      typeof navigator !== 'undefined' && typeof navigator.deviceMemory === 'number'
-        ? navigator.deviceMemory
-        : 0;
+    // navigator.deviceMemory é uma API experimental (Chrome), fora do lib.dom
+    // do TypeScript — cast documenta isso, não muda a checagem em runtime.
+    const nav = /** @type {any} */ (typeof navigator !== 'undefined' ? navigator : undefined);
+    const mem = nav && typeof nav.deviceMemory === 'number' ? nav.deviceMemory : 0;
     if (mem >= 8) return 3;
     if (mem >= 4) return 2;
   } catch {

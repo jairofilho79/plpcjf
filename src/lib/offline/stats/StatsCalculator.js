@@ -25,8 +25,8 @@ const logger = createLogger('StatsCalculator');
  * @typedef {Object} StatsOptions
  * @property {boolean} [useCache=true] - Use cached stats if available
  * @property {boolean} [forceRecalculate=false] - Force recalculation even if cached
- * @property {Array} [louvoresData] - Louvores data (if not provided, will be fetched from store)
- * @property {Array} [cachedPdfs] - Cached PDFs list (if not provided, will be fetched)
+ * @property {Array<Object> | null} [louvoresData] - Louvores data (if not provided, will be fetched from store)
+ * @property {Array<Object> | null} [cachedPdfs] - Cached PDFs list (if not provided, will be fetched)
  */
 
 /**
@@ -78,21 +78,21 @@ class StatsCalculator {
           timestamp: Date.now()
         });
         logger.debug('StatsCalculator', `Persistent cache hit for category: ${category}`);
-        return cached;
+        return /** @type {CategoryStats} */ (cached);
       }
     }
 
     // Prevent duplicate calculations
     if (this.calculationInProgress.has(category)) {
       // Wait for existing calculation
-      await new Promise(resolve => {
+      await /** @type {Promise<void>} */ (new Promise((resolve) => {
         const checkInterval = setInterval(() => {
           if (!this.calculationInProgress.has(category)) {
             clearInterval(checkInterval);
-            resolve();
+            resolve(undefined);
           }
         }, 50);
-      });
+      }));
       
       // Try cache again after waiting
       const cached = this.memoryCache.get(category) || getCachedStats(category);
@@ -135,7 +135,7 @@ class StatsCalculator {
       const categoryVariants = this._getCategoryVariants(normalizedCategory);
       
       // Filter louvores by category and its variants
-      const categoryLouvores = louvores.filter(l => categoryVariants.includes(l.categoria));
+      const categoryLouvores = louvores.filter((/** @type {any} */ l) => categoryVariants.includes(l.categoria));
       const total = categoryLouvores.length;
 
       if (total === 0) {
@@ -211,7 +211,7 @@ class StatsCalculator {
     }
 
       // Get all unique categories and normalize them
-      const allCategories = [...new Set(louvores.map(l => l.categoria).filter(Boolean))];
+      const allCategories = [...new Set(louvores.map((/** @type {any} */ l) => l.categoria).filter(Boolean))];
       const categories = [...new Set(allCategories.map(cat => this._normalizeCategory(cat)))];
 
     // Load all cached stats if available
@@ -229,6 +229,7 @@ class StatsCalculator {
     }
 
     // Calculate stats for all categories
+    /** @type {Record<string, CategoryStats>} */
     const allStats = {};
     const statsPromises = categories.map(async (category) => {
       const stats = await this.getCategoryStats(category, {
@@ -278,7 +279,7 @@ class StatsCalculator {
   /**
    * Sync stats with current cache state
    * Invalidates and recalculates stats if cache has changed
-   * @param {Array} [cachedPdfs] - Current cached PDFs list
+   * @param {Array<Object> | null} [cachedPdfs] - Current cached PDFs list
    * @returns {Promise<void>}
    */
   async sync(cachedPdfs = null) {

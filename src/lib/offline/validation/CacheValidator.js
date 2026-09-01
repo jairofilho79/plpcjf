@@ -28,9 +28,8 @@ export class CacheValidator extends PdfValidator {
   /**
    * Validate PDF availability via cache
    * @param {string} pdfPath - PDF path to validate
-   * @param {Object} [options] - Validation options
-   * @param {boolean} [options.debug] - Enable debug logging
-   * @returns {Promise<ValidationResult>} Validation result
+   * @param {import('./PdfValidator.js').ValidationOptions & { debug?: boolean }} [options] - Validation options
+   * @returns {Promise<import('./PdfValidator.js').ValidationResult>} Validation result
    */
   async validate(pdfPath, options = {}) {
     if (!pdfPath || typeof pdfPath !== 'string') {
@@ -72,6 +71,7 @@ export class CacheValidator extends PdfValidator {
         logger.debug('CacheValidator', `Validation result for ${normalizedPath}: ${hasPdf ? 'FOUND' : 'NOT FOUND'} (${duration.toFixed(2)}ms)`);
       }
       
+      /** @type {import('./PdfValidator.js').ValidationResult} */
       const result = {
         available: hasPdf,
         source: 'cache',
@@ -95,7 +95,7 @@ export class CacheValidator extends PdfValidator {
         source: 'cache',
         normalizedPath: PdfPathManager.normalizeForStorage(pdfPath) || '',
         needsDownload: false,
-        error: error.message || 'Cache validation failed'
+        error: /** @type {any} */ (error).message || 'Cache validation failed'
       };
     }
   }

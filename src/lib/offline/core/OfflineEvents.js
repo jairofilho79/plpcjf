@@ -53,8 +53,8 @@ class OfflineEventEmitter extends EventTarget {
   /**
    * Add event listener (alias for addEventListener)
    * @param {string} eventName - Name of the event
-   * @param {Function} handler - Event handler function
-   * @param {AddEventListenerOptions} [options] - Event listener options
+   * @param {EventListenerOrEventListenerObject} handler - Event handler function
+   * @param {AddEventListenerOptions | null} [options] - Event listener options
    */
   on(eventName, handler, options = null) {
     if (options) {
@@ -67,8 +67,8 @@ class OfflineEventEmitter extends EventTarget {
   /**
    * Remove event listener (alias for removeEventListener)
    * @param {string} eventName - Name of the event
-   * @param {Function} handler - Event handler function
-   * @param {EventListenerOptions} [options] - Event listener options
+   * @param {EventListenerOrEventListenerObject} handler - Event handler function
+   * @param {EventListenerOptions | null} [options] - Event listener options
    */
   off(eventName, handler, options = null) {
     if (options) {
@@ -81,9 +81,10 @@ class OfflineEventEmitter extends EventTarget {
   /**
    * Add one-time event listener
    * @param {string} eventName - Name of the event
-   * @param {Function} handler - Event handler function
+   * @param {(event: Event) => void} handler - Event handler function
    */
   once(eventName, handler) {
+    /** @param {Event} event */
     const onceHandler = (event) => {
       handler(event);
       this.off(eventName, onceHandler);

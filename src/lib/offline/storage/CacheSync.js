@@ -21,6 +21,7 @@ const logger = createLogger('CacheSync');
  */
 class CacheSync {
   constructor() {
+    /** @type {Array<(payload: { cachedPdfs: any[], timestamp: number }) => void>} */
     this.syncListeners = [];
     this.isSyncing = false;
     this.lastSyncTime = null;
@@ -48,8 +49,8 @@ class CacheSync {
       this.invalidate();
     });
 
-    // Listen for PDF downloaded events
-    offlineEvents.on(EVENTS.PDF_DOWNLOADED, (event) => {
+    // Listen for PDF downloaded events (emit() sempre despacha CustomEvent)
+    offlineEvents.on(EVENTS.PDF_DOWNLOADED, /** @type {EventListenerOrEventListenerObject} */ ((/** @type {CustomEvent} */ event) => {
       logger.debug('CacheSync', 'PDF downloaded event received', event.detail);
       // Sync after a short delay to allow cache to update
       setTimeout(() => {
@@ -57,7 +58,7 @@ class CacheSync {
           logger.error('CacheSync', 'Error syncing after PDF download:', err);
         });
       }, 500);
-    });
+    }));
 
     // Listen for cache updated events from other tabs
     if (typeof window !== 'undefined') {
@@ -119,6 +120,7 @@ class CacheSync {
       logger.debug('CacheSync', 'Starting cache synchronization');
 
       // 1. Get current state from Service Worker (source of truth)
+      /** @type {any[]} */
       let cachedPdfs = [];
       if (browser) {
         try {
@@ -175,7 +177,7 @@ class CacheSync {
    * Sync from a specific source
    * Used when we know the source of truth (e.g., after download)
    * @param {Object} source - Source data
-   * @param {Array} source.cachedPdfs - Cached PDFs from source
+   * @param {Array<any>} source.cachedPdfs - Cached PDFs from source
    * @returns {Promise<void>}
    */
   async syncFrom(source) {
@@ -228,7 +230,7 @@ class CacheSync {
 
   /**
    * Add a listener for cache update events
-   * @param {Function} callback - Callback function to call on cache updates
+   * @param {(payload: { cachedPdfs: any[], timestamp: number }) => void} callback - Callback function to call on cache updates
    * @returns {Function} Unsubscribe function
    */
   onCacheUpdate(callback) {

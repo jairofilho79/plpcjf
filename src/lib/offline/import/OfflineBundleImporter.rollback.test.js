@@ -13,14 +13,18 @@ function createMemoryCaches() {
   const stores = new Map();
 
   return {
+    /** @param {string} name */
     async open(name) {
       if (!stores.has(name)) stores.set(name, new Map());
-      const store = stores.get(name);
+      // set() acima garante a entrada: sempre um Map, nunca undefined.
+      const store = /** @type {Map<string, Response>} */ (stores.get(name));
       return {
+        /** @param {string | { url: string }} request @param {Response} response */
         async put(request, response) {
           const key = typeof request === 'string' ? request : request.url;
           store.set(key, response);
         },
+        /** @param {string | { url: string }} request */
         async match(request) {
           const key = typeof request === 'string' ? request : request.url;
           return store.get(key) || undefined;
@@ -30,6 +34,7 @@ function createMemoryCaches() {
         }
       };
     },
+    /** @param {string} name */
     async delete(name) {
       return stores.delete(name);
     },
@@ -77,7 +82,7 @@ describe('staging commit/rollback', () => {
 
     await caches.delete(STAGING);
 
-    assert.equal(await (await main.match('https://x/assets/a.pdf')).text(), 'OLD');
+    assert.equal(await (/** @type {Response} */ (await main.match('https://x/assets/a.pdf'))).text(), 'OLD');
     assert.equal(caches._dump(STAGING), undefined);
   });
 
@@ -91,8 +96,8 @@ describe('staging commit/rollback', () => {
 
     await commitStaging(caches, STAGING, MAIN);
 
-    assert.equal(await (await main.match('https://x/assets/a.pdf')).text(), 'NEW');
-    assert.equal(await (await main.match('https://x/assets/b.pdf')).text(), 'B');
+    assert.equal(await (/** @type {Response} */ (await main.match('https://x/assets/a.pdf'))).text(), 'NEW');
+    assert.equal(await (/** @type {Response} */ (await main.match('https://x/assets/b.pdf'))).text(), 'B');
     assert.equal(caches._dump(STAGING), undefined);
   });
 });
