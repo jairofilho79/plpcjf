@@ -280,6 +280,9 @@ export function findMissingPdfs(louvores, cachedPdfs) {
   // chaves); getPdfRelPath(louvor) devolve o pdfPath cru, NFD para 8 caminhos
   // do acervo. Sem normalizar aqui, esses 8 apareceriam como "faltando" para
   // sempre depois da migração — a comparação, não a leitura, é que quebraria.
+  // #22.3: `buildPdfCacheIndex` perdeu o fallback por nome de arquivo. A
+  // contagem de faltantes sobe em relação à versão anterior — é o número
+  // verdadeiro: antes, um homônimo em cache escondia a lacuna.
   const cacheIndex = buildPdfCacheIndex(cachedPdfs, { normalize: PdfPathManager.normalizeForStorage });
 
   const missing = [];

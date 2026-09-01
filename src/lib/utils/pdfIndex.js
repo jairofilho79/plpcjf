@@ -3,11 +3,15 @@
 
 import { getCachedPDFsFast, waitForServiceWorker, debugLog } from '$lib/utils/swRegistration';
 import { getPdfRelPath } from '$lib/utils/pathUtils';
-import urlNormalizer from '$lib/offline/normalization/UrlNormalizer.js';
+import PdfPathManager from '$lib/offline/utils/PdfPathManager.js';
 import { buildPdfCacheIndex } from './pdfCacheIndex.js';
 
 const PDF_INDEX_KEY = 'pdfAvailabilityIndex';
-const INDEX_VERSION = 1;
+// #22.3: bumpado de 1 para 2 porque o índice gravado antes desta versão foi
+// construído com a normalização minúscula e contaminado pelo falso positivo de
+// basename. `loadPdfIndex` (:148-152) descarta sozinho o de versão diferente —
+// é como o índice velho morre no próximo carregamento, e não em 24 h de TTL.
+const INDEX_VERSION = 2;
 const INDEX_TTL = 24 * 60 * 60 * 1000; // 24 hours
 
 // SOLUÇÃO 1: Cache de sessão - rastrear última verificação
@@ -46,10 +50,10 @@ export async function generatePdfIndex(louvores) {
   try {
     const cachedPdfs = await getCachedPDFsFast();
 
-    // Mesma normalização de antes (minúsculas + sem acento), agora aplicada
-    // uma vez na indexação e uma vez na consulta.
+    // #22.3: a régua canônica — preserva caixa e acento e unifica a forma
+    // Unicode. Aplicada aos dois lados (lista em cache e candidato), como antes.
     const cacheIndex = buildPdfCacheIndex(cachedPdfs, {
-      normalize: (path) => urlNormalizer.normalizePdfUrl(path)
+      normalize: (path) => PdfPathManager.normalizeForStorage(path)
     });
 
     // Process in chunks to avoid blocking UI

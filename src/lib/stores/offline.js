@@ -683,11 +683,13 @@ function fingerprintForCategory(category, manifest, fallbackParts) {
 }
 
 /**
- * Conjunto estrito dos caminhos que já estão no cache de PDFs.
+ * Conjunto dos caminhos que já estão no cache de PDFs.
  *
- * Estrito de propósito: `buildPdfCacheIndex` também casa por nome de arquivo, e
- * como quase toda parte tem um "Coro.pdf" isso daria falso positivo justamente
- * na hora de decidir se uma parte pode ser pulada.
+ * Era "estrito de propósito" porque `buildPdfCacheIndex` casava por nome de
+ * arquivo e daria falso positivo justamente na hora de decidir se uma parte pode
+ * ser pulada. #22.3 removeu esse fallback: o índice agora é tão estrito quanto
+ * este Set, e esta função sobrevive só por ser o caminho mais direto para ler o
+ * cache de uma vez.
  *
  * @param {Cache} cache
  * @returns {Promise<Set<string> | null>} null quando não deu para ler o cache
@@ -794,6 +796,9 @@ async function startZipDownloadWithSpecificParts(categories, pdfUrls, partsByCat
   // em NFD (pdfUrls vem do pdfId, sem NFC) — para os 5 dos 8 caminhos NFD cujo
   // acento está no próprio nome de arquivo, nem o basename bate, e o PDF
   // deixaria de ser gravado a partir do ZIP, silenciosamente.
+  // #22.3: `buildPdfCacheIndex` perdeu o fallback por nome de arquivo que
+  // disfarçava esse mesmo problema para outros casos — o `normalize` acima
+  // agora é a única guarda contra o PDF em NFD ser pulado em silêncio.
   const wantedIndex = buildPdfCacheIndex(pdfUrls, { normalize: PdfPathManager.normalizeForStorage });
   const remaining = new Set(pdfUrls.map(prepareForComparison));
   let completed = 0;
@@ -1801,6 +1806,9 @@ async function startZipDownload(categories, pdfUrls, alreadyDownloadedCategories
   // em NFD (pdfUrls vem do pdfId, sem NFC) — para os 5 dos 8 caminhos NFD cujo
   // acento está no próprio nome de arquivo, nem o basename bate, e o PDF
   // deixaria de ser gravado a partir do ZIP, silenciosamente.
+  // #22.3: `buildPdfCacheIndex` perdeu o fallback por nome de arquivo que
+  // disfarçava esse mesmo problema para outros casos — o `normalize` acima
+  // agora é a única guarda contra o PDF em NFD ser pulado em silêncio.
   const wantedIndex = buildPdfCacheIndex(pdfUrls, { normalize: PdfPathManager.normalizeForStorage });
   const remaining = new Set(pdfUrls.map(prepareForComparison));
   let completed = 0;
