@@ -2139,7 +2139,7 @@
   </div>
 {/if}
 
-<div id="viewerContainer" bind:this={containerEl} class="container {containerClass}" class:vertical-nav={navigationMode === 'vertical'} class:hidden={pdfLoading || pdfError} style="filter: brightness({readerBrightness}%);">
+<div id="viewerContainer" bind:this={containerEl} class="container {containerClass}" class:vertical-nav={navigationMode === 'vertical'} class:hidden={pdfLoading || pdfError} style:filter="brightness({readerBrightness}%)">
   <!-- Elemento focável invisível para ativar sistema de eventos de teclado no iOS -->
   <textarea
     bind:this={keyboardFocusEl}
