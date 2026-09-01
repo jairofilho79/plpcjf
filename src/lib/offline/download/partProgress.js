@@ -83,7 +83,10 @@ export function computePartsFingerprint(parts, manifestTag = '') {
  */
 function readRecord(storage, downloadKey) {
   try {
-    const raw = storage.getItem(storageKey(downloadKey));
+    // storage pode ser null/undefined; o acesso abaixo lança nesse caso e o
+    // catch trata como "sem persistência" — cast só documenta o tipo, não
+    // adiciona checagem nova (o try/catch já cobre o caso null em runtime).
+    const raw = /** @type {PartStorage} */ (storage).getItem(storageKey(downloadKey));
     if (!raw) return null;
 
     const parsed = JSON.parse(raw);
@@ -151,7 +154,8 @@ export function markPartCompleted(storage, downloadKey, filename, fingerprint = 
   try {
     const done = readCompletedParts(storage, downloadKey, fingerprint, now);
     done.add(filename);
-    storage.setItem(
+    // storage pode ser null/undefined; o catch abaixo já cobre esse caso.
+    /** @type {PartStorage} */ (storage).setItem(
       storageKey(downloadKey),
       JSON.stringify({
         v: RECORD_VERSION,
@@ -171,7 +175,8 @@ export function markPartCompleted(storage, downloadKey, filename, fingerprint = 
  */
 export function clearCompletedParts(storage, downloadKey) {
   try {
-    storage.removeItem(storageKey(downloadKey));
+    // storage pode ser null/undefined; o catch abaixo já cobre esse caso.
+    /** @type {PartStorage} */ (storage).removeItem(storageKey(downloadKey));
   } catch {
     // ignorar
   }
@@ -331,13 +336,27 @@ export function isRetryableStatus(status) {
  * Wi-fi de portal cativo devolve HTTP 200 com uma página de login em HTML.
  * Repetir não resolve — é preciso falhar com uma mensagem que faça sentido.
  *
- * @param {{ headers?: { get?: (name: string) => string | null } } | null | undefined} response
+ * @param {{ headers?: { get?: (name: string) => string | null }, redirected?: boolean } | null | undefined} response
  * @returns {boolean}
  */
 export function looksLikeCaptivePortal(response) {
   try {
-    const contentType = response?.headers?.get?.('content-type') || '';
-    return contentType.toLowerCase().includes('text/html');
+    if (!response) return false;
+    const contentType = (response.headers?.get?.('content-type') || '').toLowerCase();
+    if (contentType.includes('text/html') || contentType.includes('application/xhtml+xml')) {
+      return true;
+    }
+    // Sem content-type nenhum, ou a resposta final não é mais a URL pedida
+    // (redirect): as duas são assinatura de portal cativo devolvendo outra
+    // coisa no lugar do pacote — a não ser que o content-type já diga que é
+    // um arquivo de verdade (pdf/zip). É uma escolha deliberadamente
+    // conservadora: prefere rejeitar uma resposta ambígua a aceitar um
+    // portal como pacote válido.
+    const pareceArquivo = contentType.includes('pdf') || contentType.includes('zip');
+    if (!pareceArquivo && (contentType === '' || response.redirected)) {
+      return true;
+    }
+    return false;
   } catch {
     return false;
   }
@@ -417,7 +436,11 @@ export async function fetchWithRetry(url, init, options = {}) {
         throw error;
       }
 
-      if (error?.name === 'AbortError' && !pending.timedOut) {
+      // Sem narrowing por instanceof aqui de propósito: em runtime real chega
+      // DOMException (fetch nativo abortado), mas os testes deste arquivo
+      // simulam com Error simples — instanceof Error ou DOMException
+      // excluiria um dos dois. Cast preserva o acesso opcional de sempre.
+      if (/** @type {any} */ (error)?.name === 'AbortError' && !pending.timedOut) {
         pending.dispose();
         throw error;
       }

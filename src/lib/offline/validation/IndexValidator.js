@@ -21,7 +21,7 @@ export class IndexValidator extends PdfValidator {
    * @param {string} pdfPath - PDF path to validate
    * @param {Object} [options] - Validation options
    * @param {string} [options.pdfId] - PDF ID for index lookup (required for index validation)
-   * @returns {Promise<ValidationResult>} Validation result
+   * @returns {Promise<import('./PdfValidator.js').ValidationResult>} Validation result
    */
   async validate(pdfPath, options = {}) {
     if (!pdfPath || typeof pdfPath !== 'string') {
@@ -74,6 +74,7 @@ export class IndexValidator extends PdfValidator {
         };
       }
 
+      /** @type {import('./PdfValidator.js').ValidationResult} */
       const result = {
         available: indexResult === true,
         source: 'index',
@@ -92,7 +93,7 @@ export class IndexValidator extends PdfValidator {
         source: 'index',
         normalizedPath: PdfPathManager.normalizeForStorage(pdfPath) || '',
         needsDownload: false,
-        error: error.message || 'Index validation failed'
+        error: /** @type {any} */ (error).message || 'Index validation failed'
       };
     }
   }

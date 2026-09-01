@@ -4,7 +4,6 @@
  */
 
 import { unzip } from 'fflate';
-import urlNormalizer from '../normalization/UrlNormalizer.js';
 import cacheStorageAdapter from '../storage/CacheStorageAdapter.js';
 import offlineEvents, { EVENTS } from '../core/OfflineEvents.js';
 import { createLogger } from '../utils/OfflineLogger.js';
@@ -28,6 +27,13 @@ const logger = createLogger('PackageDownloader');
  */
 
 /**
+ * Retorno de `downloadPackage` — antes de qualquer extração, só o ZIP baixado.
+ * @typedef {Object} PackageBlobResult
+ * @property {Blob} blob - ZIP baixado, ainda não extraído
+ * @property {number} bytesDownloaded - Bytes baixados
+ */
+
+/**
  * Package Downloader
  * Downloads and extracts ZIP packages with automatic normalization
  */
@@ -43,8 +49,8 @@ export class PackageDownloader {
   /**
    * Download package
    * @param {string} packageUrl - Package URL or filename
-   * @param {AbortSignal} [abortSignal] - Abort signal for cancellation
-   * @returns {Promise<PackageDownloadResult>} Download result
+   * @param {AbortSignal | null} [abortSignal] - Abort signal for cancellation
+   * @returns {Promise<PackageBlobResult>} Download result
    */
   async downloadPackage(packageUrl, abortSignal = null) {
     // Normalize URL: if it's an absolute URL (http:// or https://), extract the pathname
@@ -87,6 +93,7 @@ export class PackageDownloader {
 
       // For same-origin requests, don't set mode: 'cors' as it can cause issues
       // The browser will automatically use the correct mode
+      /** @type {RequestInit} */
       const fetchOptions = {
         signal: abortSignal,
         cache: 'no-store'
@@ -122,7 +129,8 @@ export class PackageDownloader {
         bytesDownloaded
       };
     } catch (error) {
-      if (error.name === 'AbortError' || abortSignal?.aborted) {
+      const isAbort = error instanceof DOMException && error.name === 'AbortError';
+      if (isAbort || abortSignal?.aborted) {
         throw new Error('DOWNLOAD_CANCELLED');
       }
       logger.error('PackageDownloader', `Error downloading package: ${fullUrl}`, error);
@@ -150,27 +158,14 @@ export class PackageDownloader {
 
       logger.debug('PackageDownloader', `ZIP contains ${entryNames.length} entries`);
 
-      // Normalize expected PDFs for comparison
-      // Use PdfPathManager to preserve case and accents (consistent with extraction)
-      const expectedSet = new Set();
-      const expectedSetOriginal = new Set(expectedPdfs);
-      
-      for (const pdf of expectedPdfs) {
-        // Normalize using PdfPathManager (preserves case and accents)
-        const normalized = PdfPathManager.normalizeForStorage(pdf);
-        if (normalized) {
-          expectedSet.add(`/${normalized}`);
-          expectedSet.add(normalized);
-        }
-        // Also add original variations
-        expectedSet.add(pdf);
-        expectedSet.add(pdf.replace(/^\/+/, ''));
-        // Add normalized variations for comparison
-        const normalizedForComparison = PdfPathManager.normalizeForStorage(pdf);
-        if (normalizedForComparison) {
-          expectedSet.add(normalizedForComparison);
-        }
-      }
+      // #22.5: um Set canônico. Eram seis formas de cada caminho esperado, e
+      // depois `endsWith` nas duas direções contra cada entrada do ZIP — O(n·m)
+      // e ambíguo. `_normalizeZipEntryName` devolve exatamente esta mesma forma.
+      const esperados = new Set(
+        expectedPdfs
+          .map((/** @type {string} */ pdf) => PdfPathManager.normalizeForStorage(pdf))
+          .filter(Boolean)
+      );
 
       const extractedPdfs = [];
 
@@ -183,30 +178,10 @@ export class PackageDownloader {
           continue;
         }
 
-        // Check if this PDF is expected (if expectedPdfs provided)
-        if (expectedPdfs.length > 0) {
-          const normalizedForComparison = `/${normalizedPath}`;
-          // Also normalize originalName for comparison (preserves case and accents)
-          const originalNormalized = PdfPathManager.normalizeForStorage(entryName);
-          const isExpected = expectedSet.has(normalizedForComparison) ||
-                            expectedSet.has(normalizedPath) ||
-                            expectedSet.has(originalNormalized) ||
-                            expectedSetOriginal.has(normalizedPath) ||
-                            expectedSetOriginal.has(normalizedPath.replace(/^\/+/, '')) ||
-                            expectedSetOriginal.has(entryName) ||
-                            Array.from(expectedSetOriginal).some(url => {
-                              // Use PdfPathManager for consistent normalization
-                              const urlNormalized = PdfPathManager.normalizeForStorage(url);
-                              return urlNormalized === normalizedPath ||
-                                     urlNormalized === originalNormalized ||
-                                     urlNormalized.endsWith(normalizedPath) ||
-                                     normalizedPath.endsWith(urlNormalized);
-                            });
-
-          if (!isExpected) {
-            logger.debug('PackageDownloader', `Skipping unexpected PDF: ${normalizedPath} (original: ${entryName})`);
-            continue;
-          }
+        // #22.5: uma consulta O(1) sobre a forma canônica.
+        if (expectedPdfs.length > 0 && !esperados.has(normalizedPath)) {
+          logger.debug('PackageDownloader', `Ignorando PDF não esperado: ${normalizedPath} (entrada: ${entryName})`);
+          continue;
         }
 
         const fileData = entries[entryName];
@@ -214,7 +189,10 @@ export class PackageDownloader {
           continue;
         }
 
-        const pdfBlob = new Blob([fileData], { type: 'application/pdf' });
+        // Uint8Array é sempre um BlobPart válido em runtime; o cast só
+        // contorna a exigência de TS 5.9 de `buffer: ArrayBuffer` (não
+        // `ArrayBufferLike`), que o typing de fflate/lib.dom não garante.
+        const pdfBlob = new Blob([/** @type {BlobPart} */ (fileData)], { type: 'application/pdf' });
 
         extractedPdfs.push({
           normalizedPath,
@@ -238,7 +216,7 @@ export class PackageDownloader {
    * Download and extract package
    * @param {string} packageUrl - Package URL
    * @param {string[]} expectedPdfs - Expected PDF paths
-   * @param {AbortSignal} [abortSignal] - Abort signal
+   * @param {AbortSignal | null} [abortSignal] - Abort signal
    * @returns {Promise<PackageDownloadResult>} Download and extraction result
    */
   async downloadAndExtract(packageUrl, expectedPdfs = [], abortSignal = null) {
@@ -438,7 +416,7 @@ export class PackageDownloader {
   /**
    * Unzip entries from buffer
    * @param {Uint8Array} buffer - ZIP file buffer
-   * @returns {Promise<Object>} Entries object
+   * @returns {Promise<Record<string, Uint8Array>>} Entries object
    * @private
    */
   _unzipEntries(buffer) {

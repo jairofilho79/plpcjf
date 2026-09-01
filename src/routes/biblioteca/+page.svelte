@@ -1,23 +1,24 @@
 <script>
-  import { onMount, onDestroy } from 'svelte';
+  import { onDestroy, onMount } from 'svelte';
+  import { get } from 'svelte/store';
   import { browser } from '$app/environment';
   import { page } from '$app/stores';
   import { louvores, loadLouvores, louvoresLoaded } from '$lib/stores/louvores';
   import { classificationFilters } from '$lib/stores/classificationFilters';
   import { filters, CATEGORY_OPTIONS } from '$lib/stores/filters';
   import { bibliotecaSort } from '$lib/stores/bibliotecaSort';
-  import { bibliotecaItemsPerPage, VALID_OPTIONS } from '$lib/stores/bibliotecaItemsPerPage';
+  import { bibliotecaItemsPerPage } from '$lib/stores/bibliotecaItemsPerPage';
   import { pdfViewer } from '$lib/stores/pdfViewer';
-  import { parseUrlParams, updateUrlParams } from '$lib/utils/urlSync';
+  import { lerEstadoDaUrl, updateUrlParams } from '$lib/utils/urlSync';
   import ClassificationFilters from '$lib/components/ClassificationFilters.svelte';
   import SpecialArrangementFilters from '$lib/components/SpecialArrangementFilters.svelte';
   import CategoryFilters from '$lib/components/CategoryFilters.svelte';
   import SortSelector from '$lib/components/SortSelector.svelte';
   import PdfViewerSelector from '$lib/components/PdfViewerSelector.svelte';
   import LouvorCard from '$lib/components/LouvorCard.svelte';
-  import GestureButton from '$lib/components/GestureButton.svelte';
-  import { ChevronLeft, ChevronRight } from 'lucide-svelte';
+  import LouvorPaginationControls from '$lib/components/LouvorPaginationControls.svelte';
   import { groupLouvoresByGroupId, compareLouvorNome } from '$lib/utils/groupLouvores.js';
+  import LouvorListSkeleton from '$lib/components/LouvorListSkeleton.svelte';
 
   // Normalize classification by removing content in parentheses
   /**
@@ -63,12 +64,27 @@
     return expanded;
   }
   
+  /**
+   * Extraída para fora do `$:` para poder ser chamada também de dentro do
+   * `.subscribe()` de `louvoresLoaded` (ver `initializeFiltersIfNeeded`
+   * abaixo). Um `.subscribe()` roda de forma síncrona dentro de `instance()`
+   * — antes de o Svelte rodar `$$.update()` pela primeira vez — então a
+   * variável reativa `uniqueNormalizedClassifications` ainda não teria sido
+   * atribuída nessa janela. `$louvores`, por ser uma auto-assinatura
+   * (`$store`), já está disponível nesse ponto, então recalcular aqui é
+   * seguro independente da ordem de inicialização do Svelte.
+   * @param {typeof $louvores} louvoresList
+   */
+  function computeUniqueNormalizedClassifications(louvoresList) {
+    return louvoresList
+      .map(louvor => normalizeClassification(louvor.classificacao))
+      .filter(c => c)
+      .filter((c, index, arr) => arr.indexOf(c) === index)
+      .sort();
+  }
+
   // Get unique normalized classifications from louvores
-  $: uniqueNormalizedClassifications = $louvores
-    .map(louvor => normalizeClassification(louvor.classificacao))
-    .filter(c => c)
-    .filter((c, index, arr) => arr.indexOf(c) === index)
-    .sort();
+  $: uniqueNormalizedClassifications = computeUniqueNormalizedClassifications($louvores);
 
   // Selected classifications (Arranjo)
   $: selectedClassifications = $classificationFilters;
@@ -159,92 +175,51 @@
     });
   })();
 
-  // State for selected special arrangements - inicializar da URL
   /**
+   * Mesmo motivo de `computeUniqueNormalizedClassifications` acima: extraída
+   * do `$:` para poder ser chamada do `.subscribe()` de `louvoresLoaded`
+   * (dentro de `initializeFiltersIfNeeded`), que roda antes do primeiro
+   * `$$.update()` — a variável reativa `estadoUrl` ainda seria `undefined`
+   * nesse ponto. Quem chama passa o valor de `page` que tem à mão: `$page`
+   * no `$:` abaixo, `get(page)` (sempre atual, não depende de `$$.update`)
+   * dentro de `initializeFiltersIfNeeded`.
+   * @param {typeof $page} pageValue
+   */
+  function computeEstadoUrl(pageValue) {
+    return lerEstadoDaUrl(browser && pageValue && pageValue.url ? pageValue.url : { search: '' });
+  }
+
+  // A URL é a fonte de verdade. Nada aqui é sincronizado nos dois sentidos.
+  $: estadoUrl = computeEstadoUrl($page);
+  $: naBiblioteca = browser && $page?.url?.pathname === '/biblioteca';
+
+  /**
+   * Arranjo especial, inteiramente derivado — não é mais estado escrito.
+   *
+   * Antes eram cinco blocos reativos num anel: um deles gravava a URL, a URL
+   * reescrevia a seleção, a seleção recalculava a lista filtrada, a lista
+   * recalculava os arranjos disponíveis, e o primeiro bloco disparava de novo.
+   * A flag que deveria conter isso era ligada e desligada no mesmo tick
+   * síncrono, então nunca protegeu nada contra o `$page`, que é assíncrono.
+   *
+   * Aqui não há escrita nenhuma: quando a URL traz o param, ele manda (filtrado
+   * pelo que existe); quando não traz, o padrão "todos" é **calculado**, e não
+   * gravado na barra de endereços (mesma decisão D-2 da home).
+   *
+   * A detecção antiga de "a URL já tem arranjoEspecial?" era um
+   * `$page.url.search.includes('arranjoEspecial=')` — frágil por natureza,
+   * porque compara substring de uma query string crua em vez de perguntar ao
+   * parser. Aqui vira `estadoUrl.temArranjoEspecial`, que é
+   * `URLSearchParams.has('arranjoEspecial')` (via `lerEstadoDaUrl`): a mesma
+   * pergunta, respondida pelo parser, não por busca de texto.
    * @type {string[]}
    */
-  let selectedSpecialArrangements = browser && $page && $page.url ? (parseUrlParams($page.url).arranjoEspecial || []) : [];
-  let isUpdatingArranjoEspecialFromUrl = false;
-
-  // Reset special arrangements when selected classifications change significantly
-  let previousSelectedClassifications = [];
-  $: {
-    // Reset if classifications changed significantly (different set of items)
-    const currentSet = new Set(selectedClassifications);
-    const previousSet = new Set(previousSelectedClassifications);
-    
-    // Check if sets are different (not just reordered)
-    if (currentSet.size !== previousSet.size || 
-        !Array.from(currentSet).every(c => previousSet.has(c))) {
-      // Keep only valid selections
-      selectedSpecialArrangements = selectedSpecialArrangements.filter(sa => 
-        availableSpecialArrangements.includes(sa)
-      );
-      previousSelectedClassifications = [...selectedClassifications];
-    }
-  }
-
-  // Track previous available arrangements length to detect appearance/disappearance
-  let previousAvailableLength = 0;
-  let specialArrangementsInitialized = false;
-
-  // Reagir a mudanças na URL para atualizar selectedSpecialArrangements
-  $: if (browser && !isUpdatingArranjoEspecialFromUrl && $page && $page.url) {
-    const urlParams = parseUrlParams($page.url);
-    const urlArranjoEspecial = urlParams.arranjoEspecial || [];
-    // Só atualizar se for diferente e se os valores da URL são válidos (existem em availableSpecialArrangements)
-    if (urlArranjoEspecial.length > 0 && availableSpecialArrangements.length > 0) {
-      const validFromUrl = urlArranjoEspecial.filter(sa => availableSpecialArrangements.includes(sa));
-      if (JSON.stringify(validFromUrl.sort()) !== JSON.stringify(selectedSpecialArrangements.sort())) {
-        isUpdatingArranjoEspecialFromUrl = true;
-        selectedSpecialArrangements = validFromUrl;
-        specialArrangementsInitialized = true; // Se veio da URL, marcar como inicializado
-        isUpdatingArranjoEspecialFromUrl = false;
-      }
-    } else if (urlArranjoEspecial.length === 0 && selectedSpecialArrangements.length > 0 && $page.pathname === '/biblioteca') {
-      // Se URL não tem arranjoEspecial, manter seleção atual (não limpar automaticamente)
-      // A lógica abaixo vai lidar com auto-seleção quando disponível
-    }
-  }
-
-  // Clear special arrangements when they become unavailable
-  // Auto-select all when they become available (só se não vier da URL e não foi inicializado ainda)
-  $: {
-    const currentLength = availableSpecialArrangements.length;
-    
-    if (currentLength === 0) {
-      // Clear selections when component disappears
-      if (!isUpdatingArranjoEspecialFromUrl && selectedSpecialArrangements.length > 0) {
-        isUpdatingArranjoEspecialFromUrl = true;
-        selectedSpecialArrangements = [];
-        specialArrangementsInitialized = false; // Reset flag quando desaparece
-        isUpdatingArranjoEspecialFromUrl = false;
-        if (browser) {
-          updateUrlParams({ arranjoEspecial: [] });
-        }
-      }
-    } else if (currentLength > 0 && previousAvailableLength === 0) {
-      // Auto-select all when arrangements appear for the first time (só se não vier da URL e não foi inicializado)
-      if (browser && !isUpdatingArranjoEspecialFromUrl && !specialArrangementsInitialized && $page && $page.url) {
-        const urlParams = parseUrlParams($page.url);
-        const urlHasArranjoEspecial = $page.url.search && $page.url.search.includes('arranjoEspecial=');
-        
-        // Se URL não tem arranjoEspecial e não há seleção, selecionar todos (só na primeira vez)
-        if (!urlHasArranjoEspecial && selectedSpecialArrangements.length === 0 && availableSpecialArrangements.length > 0) {
-          isUpdatingArranjoEspecialFromUrl = true;
-          selectedSpecialArrangements = [...availableSpecialArrangements];
-          specialArrangementsInitialized = true;
-          isUpdatingArranjoEspecialFromUrl = false;
-          updateUrlParams({ arranjoEspecial: selectedSpecialArrangements });
-        } else if (urlHasArranjoEspecial) {
-          // Se URL tem parâmetro, marcar como inicializado
-          specialArrangementsInitialized = true;
-        }
-      }
-    }
-    
-    previousAvailableLength = currentLength;
-  }
+  $: selectedSpecialArrangements =
+    availableSpecialArrangements.length === 0
+      ? []
+      : estadoUrl.temArranjoEspecial
+        ? estadoUrl.arranjoEspecial.filter((sa) => availableSpecialArrangements.includes(sa))
+        : availableSpecialArrangements;
 
   // Final filtered list (refined by Arranjo Especial if applicable)
   $: filteredLouvores = (() => {
@@ -277,27 +252,13 @@
     return sorted.sort(compareLouvorNome);
   })();
   
-  // Pagination
-  let currentPage = 1;
+  // Paginação
   let pageInput = '1';
-  let itemsPerPageMenuOpen = false;
-  /**
-   * @type {HTMLElement | null}
-   */
+  /** @type {HTMLElement | null} */
   let louvoresContainer = null;
-  
-  // Flags para evitar loops infinitos na sincronização URL
-  let urlSyncInitialized = false;
-  let isUpdatingSortFromUrl = false;
-  let isUpdatingItemsPerPageFromUrl = false;
-  let isUpdatingPageFromUrl = false;
-  
-  // Rastrear último estado conhecido da URL para evitar loops
-  let lastKnownUrlState = {
-    ordenar: null,
-    itensPorPagina: null,
-    pagina: null
-  };
+  /** Critério de filtro da última execução; mudar de verdade zera a paginação. */
+  /** @type {string | null} */
+  let criterioAnterior = null;
 
   function scrollToLouvores() {
     if (!browser) return;
@@ -315,203 +276,158 @@
     });
   }
 
-  /**
-   * @param {number} page
-   * @param {{ scroll?: boolean, skipUrlUpdate?: boolean }} [options]
-   */
-  function setPage(page, { scroll = true, skipUrlUpdate = false } = {}) {
-    const maxPage = totalPages > 0 ? totalPages : 1;
-    const pageNum = Math.max(1, Math.min(maxPage, page));
-    currentPage = pageNum;
-    pageInput = pageNum.toString();
-
-    // Atualizar URL quando a página mudar (se não estiver vindo da URL e sincronização inicializada)
-    if (browser && !skipUrlUpdate && !isUpdatingPageFromUrl && urlSyncInitialized) {
-      updateUrlParams({ pagina: pageNum });
-    }
-
-    if (scroll && totalPages > 0) {
-      scrollToLouvores();
-    }
-  }
-
   $: itemsPerPage = $bibliotecaItemsPerPage;
   $: groupedLouvores = groupLouvoresByGroupId(sortedLouvores);
-  $: totalPages = Math.ceil(groupedLouvores.length / itemsPerPage);
+  $: totalPages =
+    groupedLouvores.length === 0 ? 1 : Math.max(1, Math.ceil(groupedLouvores.length / itemsPerPage));
+
+  /** Página efetiva: a que está na URL, limitada ao que existe de verdade. */
+  $: currentPage = Math.min(Math.max(1, estadoUrl.pagina), totalPages);
   $: paginatedLouvores = groupedLouvores.slice(
     (currentPage - 1) * itemsPerPage,
     currentPage * itemsPerPage
   );
-  
-  // Reset to page 1 when items per page changes
-  $: {
-    if (itemsPerPage && urlSyncInitialized && !pageInitializedFromUrl) {
-      const newTotalPages = Math.ceil(groupedLouvores.length / itemsPerPage);
-      if (currentPage > newTotalPages && newTotalPages > 0) {
-        setPage(1, { scroll: false });
+  /** Espelha a página efetiva no input, sem atropelar quem está digitando nele. */
+  let ultimaPaginaPublicada = null;
+  $: if (currentPage !== ultimaPaginaPublicada) {
+    ultimaPaginaPublicada = currentPage;
+    pageInput = String(currentPage);
+  }
+
+  /**
+   * Única porta de escrita da paginação.
+   * @param {number} numeroPagina
+   * @param {{ scroll?: boolean }} [options]
+   */
+  function setPage(numeroPagina, { scroll = true } = {}) {
+    const alvo = Math.max(1, Math.min(totalPages, numeroPagina));
+    updateUrlParams({ pagina: alvo });
+    if (scroll) {
+      scrollToLouvores();
+    }
+  }
+
+  /**
+   * Grava o store E a URL juntos, mesma razão do `handleSortSelect` (abaixo):
+   * a cópia inline que este handler substitui (`handleItemsPerPageSelect`)
+   * também gravava os dois — se só desse `.set()`, o clique mudaria a lista
+   * mas a URL nunca chegaria a saber (o `page.subscribe` manual, acima, só
+   * reage a navegação de verdade, não a `.set()` de outra store). Também não
+   * chama `setPage(1, ...)`: a cópia inline não resetava a página ao trocar
+   * o número de itens, e este handler preserva esse comportamento.
+   * @param {CustomEvent<{ value: number }>} e
+   */
+  function handleItemsPerPage(e) {
+    bibliotecaItemsPerPage.set(e.detail.value);
+    updateUrlParams({ itensPorPagina: e.detail.value });
+    scrollToLouvores();
+  }
+
+  /**
+   * @param {CustomEvent<{ page: number; scroll?: boolean }>} e
+   */
+  function handleGotoPage(e) {
+    setPage(e.detail.page, { scroll: e.detail.scroll !== false });
+  }
+
+  /** Só depois disso faz sentido corrigir a paginação (preserva `?pagina=N`). */
+  $: resultadosProntos = $louvoresLoaded && $louvores.length > 0 && $classificationFilters.length > 0;
+
+  // Corrige a URL quando a página pedida não existe mais. Idempotente: depois
+  // da escrita a condição é falsa, então não há laço e não há flag.
+  $: if (browser && naBiblioteca && resultadosProntos && estadoUrl.pagina !== currentPage) {
+    updateUrlParams({ pagina: currentPage });
+  }
+
+  // Chave de identidade do filtro. Separadores fora do alfabeto dos valores.
+  // `[...]` antes de `.sort()`: o código antigo ordenava o array no lugar.
+  $: criterioAtual = [
+    [...$filters].sort().join('\u0001'),
+    [...$classificationFilters].sort().join('\u0001'),
+    [...selectedSpecialArrangements].sort().join('\u0001')
+  ].join('\u0000');
+
+  // Trocar de filtro volta para a página 1. A **primeira** chave é só
+  // registrada: é o que preserva `/biblioteca?pagina=5` de um deep link.
+  $: if (browser && naBiblioteca && resultadosProntos) {
+    if (criterioAnterior === null) {
+      criterioAnterior = criterioAtual;
+    } else if (criterioAtual !== criterioAnterior) {
+      criterioAnterior = criterioAtual;
+      if (estadoUrl.pagina !== 1) {
+        updateUrlParams({ pagina: 1 });
       }
     }
   }
-  
-  // Reset to page 1 when filters change or when current page exceeds total pages
-  let previousFilteredCount = 0;
-  let pageInitializedFromUrl = false;
-  $: {
-    if (urlSyncInitialized && totalPages > 0) {
-      const currentFilteredCount = filteredLouvores.length;
-      // Se ainda não inicializamos previousFilteredCount, fazer isso agora (primeira execução)
-      if (previousFilteredCount === 0 && currentFilteredCount > 0) {
-        previousFilteredCount = currentFilteredCount;
-        // Se a página foi inicializada da URL, verificar se é válida antes de resetar
-        if (pageInitializedFromUrl) {
-          // Se a página da URL é válida, manter; caso contrário, ajustar
-          if (currentPage > totalPages) {
-            setPage(totalPages, { scroll: false });
-          }
-        } else {
-          // Se não foi inicializado da URL, pode resetar normalmente
-          if (currentPage > totalPages) {
-            setPage(totalPages, { scroll: false });
-          }
-        }
-      } else {
-        // Reset to page 1 if filtered results count changed significantly or current page is invalid
-        // Mas não resetar se a página foi inicializada da URL e ainda é válida
-        if (currentPage > totalPages) {
-          setPage(totalPages, { scroll: false });
-        } else if (previousFilteredCount !== 0 && previousFilteredCount !== currentFilteredCount && !pageInitializedFromUrl) {
-          // Só resetar se não foi inicializado da URL e a contagem mudou significativamente
-          setPage(1, { scroll: false });
-        }
-        previousFilteredCount = currentFilteredCount;
+
+  /**
+   * ordenar/itensPorPagina: sincronização com a URL feita por um
+   * `page.subscribe` MANUAL — de propósito, não um `$:`.
+   *
+   * Uma primeira versão usava `$: if (browser && naBiblioteca && $page?.url) {
+   * ...lendo $bibliotecaSort/$bibliotecaItemsPerPage... }`, o mesmo desenho
+   * que a home já usa para `itensPorPagina`. Provou em navegador (achado
+   * desta tarefa, não pego pela revisão de código) que esse desenho quebra:
+   * um `$:` que LÊ `$bibliotecaSort` dentro do corpo também o tem como
+   * dependência, então um `bibliotecaSort.set(...)` de um clique (evento de
+   * usuário, não navegação) já dispara esse bloco de novo, com `$page.url`
+   * ainda desatualizado (o `goto` do clique nem começou). O bloco lê a URL
+   * velha como se fosse a verdade e desfaz o clique. Quando o valor clicado É
+   * o default — `construirQueryAtualizada` apaga o param —, não sobra
+   * nenhuma passada seguinte para corrigir: o valor errado fica preso para
+   * sempre ("Por número" nunca pegava depois de já existir `?ordenar=nome`).
+   *
+   * Um `page.subscribe` puro só reage quando `$page` de fato muda (uma
+   * navegação real terminando) — nunca por causa do `.set()` de outra store,
+   * porque essa store não é dependência dele. Sem `$:` na frente do valor
+   * lido por `get()`, o laço não existe. Mesmo princípio de
+   * `filters.js`/`classificationFilters.js` (Tarefa 11); aqui fica na página,
+   * e não dentro de `bibliotecaItemsPerPage.js`, porque esse store é
+   * compartilhado com a home (D-10) e sua sincronização própria não é desta
+   * tarefa para reabrir.
+   * @param {import('@sveltejs/kit').Page | null} $p
+   */
+  function sincronizarOrdenarEItensPorPaginaComUrl($p) {
+    if (!$p || !$p.url || $p.url.pathname !== '/biblioteca') return;
+
+    const params = $p.url.searchParams;
+    const estado = lerEstadoDaUrl($p.url);
+
+    if (params.has('ordenar')) {
+      if (estado.ordenar !== get(bibliotecaSort)) {
+        bibliotecaSort.set(estado.ordenar);
       }
+    } else if (get(bibliotecaSort) !== 'numero') {
+      updateUrlParams({ ordenar: get(bibliotecaSort) });
     }
-  }
-  
-  // Sincronizar URL -> Stores (apenas quando URL mudar externamente, não quando atualizamos nós mesmos)
-  $: if (browser && urlSyncInitialized && !isUpdatingSortFromUrl && !isUpdatingItemsPerPageFromUrl && !isUpdatingPageFromUrl && $page && $page.url) {
-    const urlParams = parseUrlParams($page.url);
-    const urlOrdenar = urlParams.ordenar || 'numero';
-    const urlItensPorPagina = urlParams.itensPorPagina || 10;
-    const urlPagina = urlParams.pagina;
-    const urlPageNum = urlPagina !== null && urlPagina > 0 ? urlPagina : 1;
-    
-    // Verificar se a URL realmente mudou (navegação back/forward ou mudança externa)
-    // Comparar com o último estado conhecido para evitar loops
-    const urlChanged = 
-      lastKnownUrlState.ordenar !== urlOrdenar ||
-      lastKnownUrlState.itensPorPagina !== urlItensPorPagina ||
-      lastKnownUrlState.pagina !== urlPageNum;
-    
-    if (urlChanged) {
-      // Verificar se os stores já estão com os valores corretos (evita sincronização desnecessária)
-      const currentSort = $bibliotecaSort;
-      const currentItemsPerPage = $bibliotecaItemsPerPage;
-      const storesMatchUrl = 
-        (urlOrdenar === currentSort || (!urlOrdenar && currentSort === 'numero')) &&
-        (urlItensPorPagina === currentItemsPerPage || (!urlItensPorPagina && currentItemsPerPage === 10)) &&
-        (urlPageNum === currentPage);
-      
-      // Se os stores já estão corretos, apenas atualizar último estado conhecido
-      if (storesMatchUrl) {
-        lastKnownUrlState = {
-          ordenar: urlOrdenar,
-          itensPorPagina: urlItensPorPagina,
-          pagina: urlPageNum
-        };
-      } else {
-        // Atualizar último estado conhecido ANTES de fazer qualquer mudança
-        lastKnownUrlState = {
-          ordenar: urlOrdenar,
-          itensPorPagina: urlItensPorPagina,
-          pagina: urlPageNum
-        };
-        
-        // Sincronizar ordenar
-        if (urlOrdenar !== currentSort && (urlOrdenar === 'numero' || urlOrdenar === 'nome')) {
-          isUpdatingSortFromUrl = true;
-          bibliotecaSort.set(urlOrdenar);
-          setTimeout(() => {
-            isUpdatingSortFromUrl = false;
-          }, 100);
-        }
-        
-        // Sincronizar itensPorPagina
-        if (urlItensPorPagina !== currentItemsPerPage && VALID_OPTIONS.includes(urlItensPorPagina)) {
-          isUpdatingItemsPerPageFromUrl = true;
-          bibliotecaItemsPerPage.set(urlItensPorPagina);
-          setTimeout(() => {
-            isUpdatingItemsPerPageFromUrl = false;
-          }, 100);
-        }
-        
-        // Sincronizar pagina
-        if (urlPageNum !== currentPage) {
-          isUpdatingPageFromUrl = true;
-          // Atualizar diretamente sem usar setPage para evitar limitação por totalPages
-          // O setPage limita ao maxPage, mas quando sincronizando da URL, queremos o valor exato
-          currentPage = urlPageNum;
-          pageInput = urlPageNum.toString();
-          setTimeout(() => {
-            isUpdatingPageFromUrl = false;
-          }, 100);
-        }
+
+    if (params.has('itensPorPagina')) {
+      if (estado.itensPorPagina !== get(bibliotecaItemsPerPage)) {
+        bibliotecaItemsPerPage.set(estado.itensPorPagina);
       }
+    } else if (get(bibliotecaItemsPerPage) !== 10) {
+      updateUrlParams({ itensPorPagina: get(bibliotecaItemsPerPage) });
+    }
+
+    // D-9: param conhecido com valor inválido é normalizado uma vez.
+    if (estado.paramsInvalidos.length > 0) {
+      updateUrlParams({});
     }
   }
-  
-  // Atualizar URL quando bibliotecaSort mudar (apenas se não estiver vindo da URL)
-  $: if (browser && urlSyncInitialized && !isUpdatingSortFromUrl && $bibliotecaSort && $page && $page.url) {
-    const urlParams = parseUrlParams($page.url);
-    const urlOrdenar = urlParams.ordenar || 'numero';
-    if (urlOrdenar !== $bibliotecaSort) {
-      updateUrlParams({ ordenar: $bibliotecaSort });
-    }
+
+  /** @type {(() => void) | null} */
+  let pararDeSincronizarComUrl = null;
+  if (browser) {
+    pararDeSincronizarComUrl = page.subscribe(sincronizarOrdenarEItensPorPaginaComUrl);
   }
-  
-  // Atualizar URL quando bibliotecaItemsPerPage mudar (apenas se não estiver vindo da URL)
-  $: if (browser && urlSyncInitialized && !isUpdatingItemsPerPageFromUrl && $bibliotecaItemsPerPage && $page && $page.url) {
-    const urlParams = parseUrlParams($page.url);
-    const urlItensPorPagina = urlParams.itensPorPagina || 10;
-    if (urlItensPorPagina !== $bibliotecaItemsPerPage) {
-      updateUrlParams({ itensPorPagina: $bibliotecaItemsPerPage });
-    }
-  }
-  
+
   /**
      * @param {number} page
      */
   function goToPage(page) {
     setPage(page);
   }
-  
-  /**
-     * @param {Event & { currentTarget: EventTarget & HTMLInputElement }} event
-     */
-  function handlePageInput(event) {
-    const value = event.currentTarget.value;
-    pageInput = value;
-    const pageNum = parseInt(value, 10);
-    if (!isNaN(pageNum) && pageNum >= 1 && pageNum <= totalPages) {
-      setPage(pageNum, { scroll: false });
-    }
-  }
-  
-  /**
-     * @param {KeyboardEvent & { currentTarget: EventTarget & HTMLInputElement }} event
-     */
-  function handlePageInputKeydown(event) {
-    if (event.key === 'Enter') {
-      event.currentTarget.blur();
-      const pageNum = parseInt(pageInput, 10);
-      if (!isNaN(pageNum)) {
-        setPage(pageNum);
-      } else {
-        pageInput = currentPage.toString();
-      }
-    }
-  }
-  
+
   function nextPage() {
     if (currentPage < totalPages) {
       setPage(currentPage + 1);
@@ -536,181 +452,95 @@
     }
   }
   
-  /**
-   * @type {HTMLElement | null}
-   */
-  let itemsPerPageButtonElement = null;
-  
-  // Close menu when clicking outside
-  /**
-   * @param {MouseEvent} event
-   */
-  function handleClickOutside(event) {
-    if (itemsPerPageButtonElement && event.target instanceof Node && !itemsPerPageButtonElement.contains(event.target)) {
-      itemsPerPageMenuOpen = false;
-    }
-  }
-  
   let filtersInitialized = false;
-  let initTimeout = null;
-  
-  // Função para inicializar os filtros
-  function initializeFiltersIfNeeded() {
-    if (filtersInitialized || !browser || !$page || !$page.url) return;
-    if (!$louvores.length || !$louvoresLoaded) return;
-    
-    const urlParams = parseUrlParams($page.url);
-    const urlHasArranjo = $page.url.search && $page.url.search.includes('arranjo=');
-    
-    // Calcular classificações únicas
-    const classifications = $louvores
-      .map(louvor => normalizeClassification(louvor.classificacao))
-      .filter(c => c)
-      .filter((c, index, arr) => arr.indexOf(c) === index)
-      .sort();
-    
-    if (classifications.length === 0) return; // Ainda não há classificações disponíveis
-    
-    // Se URL não tem arranjo e não há filtros selecionados, selecionar todos
-    if (!urlHasArranjo && $classificationFilters.length === 0) {
-      filtersInitialized = true;
-      // Usar setTimeout para garantir que não haja conflito com outras atualizações
-      setTimeout(() => {
-        if ($classificationFilters.length === 0 && classifications.length > 0) {
-          classificationFilters.selectAll(classifications);
-        }
-      }, 0);
-    } else if (urlHasArranjo || $classificationFilters.length > 0) {
-      // Já tem parâmetro na URL ou já há filtros selecionados
-      filtersInitialized = true;
-    }
+
+  /**
+   * Não é chamada de dentro de um `$:` — de propósito.
+   *
+   * Uma primeira versão disparava isto de um bloco reativo (`$: if (browser
+   * && $louvoresLoaded && $louvores.length > 0 && !filtersInitialized) {...}`),
+   * o mesmo padrão que a home usa para o próprio backup de filtros. Provou em
+   * navegador (achado desta tarefa) que trava a biblioteca inteira: o
+   * `classificationFilters.aplicarPadrao(...)` daqui muda `$classificationFilters`
+   * NO MEIO da mesma passada reativa que `classificationFilteredLouvores` (e
+   * tudo que vem depois dela — `filteredLouvores`, `sortedLouvores`,
+   * `groupedLouvores`, `paginatedLouvores`) também pertence. Sem nenhum
+   * gatilho externo depois, essa cadeia nunca mais recalcula e fica lendo o
+   * `[]` de antes do padrão ser aplicado — para sempre: a biblioteca abre com
+   * "Nenhum louvor encontrado" mesmo com os cinco chips de Arranjo marcados.
+   * A home nunca bateu nisso porque a lista dela é montada por
+   * `filterLouvores()`, chamada de um `setTimeout` (o debounce de busca) —
+   * sempre uma passada nova. Aqui a chamada direta depois do `await
+   * loadLouvores()` cumpre o mesmo papel: por essa altura o fetch (ou o
+   * cache em memória) já resolveu há vários microtasks, o flush reativo do
+   * catálogo já sedimentou, e chamar isto fora de qualquer `$:` garante uma
+   * passada só dela quando de fato aplica o padrão.
+   */
+  /**
+   * Rede de segurança contra um ponto único de falha silencioso (achado da
+   * Tarefa 17): `loadLouvores()` (`src/lib/stores/louvores.js:365-422`) tem
+   * uma guarda de cancelamento por geração — se uma segunda chamada
+   * concorrente começar antes da primeira terminar, o `await loadLouvores()`
+   * do `onMount` abaixo pode resolver sem jamais marcar
+   * `$louvoresLoaded`/`$louvores` (a chamada perdedora só retorna cedo, sem
+   * setá-los). Nessa janela estreita, a chamada direta de
+   * `initializeFiltersIfNeeded()` logo abaixo vira no-op (a guarda dela mesma
+   * checa `$louvoresLoaded`) e nada mais chamaria de novo — o filtro padrão
+   * de arranjos nunca se aplicaria, e nada avisaria.
+   *
+   * Um `.subscribe()` de store NÃO é um bloco `$:`: só reage quando
+   * `$louvoresLoaded` de fato muda de valor (a chamada vencedora terminando),
+   * nunca por causa da escrita em `classificationFilters` que
+   * `initializeFiltersIfNeeded` faz aqui dentro — o mesmo raciocínio que já
+   * protege `sincronizarOrdenarEItensPorPaginaComUrl`, acima. Como
+   * `initializeFiltersIfNeeded` é idempotente, reassinar quando já
+   * inicializou é inofensivo.
+   * @type {(() => void) | null}
+   */
+  let pararDeObservarCargaConcluida = null;
+  if (browser) {
+    pararDeObservarCargaConcluida = louvoresLoaded.subscribe(($carregado) => {
+      if ($carregado) initializeFiltersIfNeeded();
+    });
   }
-  
+
   onMount(async () => {
     await loadLouvores();
-    
-    if (browser) {
-      document.addEventListener('click', handleClickOutside);
-
-      // Inicializar valores da URL uma única vez
-      if ($page && $page.url) {
-        const urlParams = parseUrlParams($page.url);
-        
-        // Inicializar ordenar da URL
-        const urlOrdenar = urlParams.ordenar;
-        if (urlOrdenar && (urlOrdenar === 'numero' || urlOrdenar === 'nome')) {
-          isUpdatingSortFromUrl = true;
-          bibliotecaSort.set(urlOrdenar);
-        }
-        
-        // Inicializar itensPorPagina da URL
-        const urlItensPorPagina = urlParams.itensPorPagina;
-        if (urlItensPorPagina !== null && VALID_OPTIONS.includes(urlItensPorPagina)) {
-          isUpdatingItemsPerPageFromUrl = true;
-          bibliotecaItemsPerPage.set(urlItensPorPagina);
-        }
-        
-        // Inicializar pagina da URL
-        const urlPagina = urlParams.pagina;
-        const urlPageNum = urlPagina !== null && urlPagina > 0 ? urlPagina : 1;
-        // Sempre inicializar da URL, mesmo se for página 1, para garantir consistência
-        isUpdatingPageFromUrl = true;
-        if (urlPageNum !== 1) {
-          pageInitializedFromUrl = true;
-        }
-        // Atualizar diretamente sem usar setPage para evitar limitação por totalPages ainda não calculado
-        currentPage = urlPageNum;
-        pageInput = urlPageNum.toString();
-        
-        // Inicializar último estado conhecido
-        lastKnownUrlState = {
-          ordenar: urlOrdenar || 'numero',
-          itensPorPagina: urlItensPorPagina !== null ? urlItensPorPagina : 10,
-          pagina: urlPageNum
-        };
-        
-        // Aguardar um pouco antes de habilitar sincronização bidirecional
-        setTimeout(() => {
-          isUpdatingSortFromUrl = false;
-          isUpdatingItemsPerPageFromUrl = false;
-          isUpdatingPageFromUrl = false;
-          urlSyncInitialized = true;
-          // Após um tempo, permitir que a lógica de reset funcione normalmente
-          setTimeout(() => {
-            pageInitializedFromUrl = false;
-          }, 500);
-        }, 100);
-      } else {
-        urlSyncInitialized = true;
-      }
-      
-      // Aguardar até que os louvores estejam realmente carregados e processados
-      const initFilters = () => {
-        if (filtersInitialized) return;
-        
-        const urlParams = parseUrlParams($page.url);
-        const urlHasArranjo = $page.url.search && $page.url.search.includes('arranjo=');
-        
-        // Calcular classificações únicas
-        const classifications = $louvores
-          .map(louvor => normalizeClassification(louvor.classificacao))
-          .filter(c => c)
-          .filter((c, index, arr) => arr.indexOf(c) === index)
-          .sort();
-        
-        if (classifications.length === 0) return; // Ainda não há classificações
-        
-        // Se URL não tem arranjo e não há filtros selecionados, selecionar todos
-        if (!urlHasArranjo && $classificationFilters.length === 0) {
-          filtersInitialized = true;
-          classificationFilters.selectAll(classifications);
-        } else {
-          filtersInitialized = true;
-        }
-      };
-      
-      // Aguardar até que os louvores estejam carregados
-      const checkAndInit = () => {
-        if ($louvoresLoaded && $louvores.length > 0 && !filtersInitialized) {
-          // Aguardar um pouco para garantir que os dados reativos estejam processados
-          initTimeout = setTimeout(() => {
-            initFilters();
-          }, 200);
-        }
-      };
-      
-      // Verificar imediatamente se já está pronto
-      checkAndInit();
-      
-      // Também escutar mudanças
-      const unsubscribeLouvores = louvoresLoaded.subscribe(() => {
-        checkAndInit();
-      });
-      
-      // Cleanup
-      return () => {
-        unsubscribeLouvores();
-        if (initTimeout) clearTimeout(initTimeout);
-        document.removeEventListener('click', handleClickOutside);
-      };
-    }
-  });
-  
-  onDestroy(() => {
-    if (browser) {
-      if (initTimeout) clearTimeout(initTimeout);
-      document.removeEventListener('click', handleClickOutside);
-    }
-  });
-  
-  // Initialize filters with all classifications on first load if URL doesn't have arranjo param
-  // Esta lógica funciona como backup caso o onMount não execute ou os dados estejam prontos antes
-  // Usa flag para garantir que só inicialize uma vez, permitindo que usuário desselecione depois
-  $: if ($louvores.length > 0 && $louvoresLoaded && !filtersInitialized && browser && $page && $page.url) {
-    // Usar a mesma função de inicialização para garantir consistência
     initializeFiltersIfNeeded();
+  });
+
+  // O retorno de um `onMount` async é uma Promise e o Svelte o ignora: o
+  // cleanup antigo nunca rodava. Fica só este.
+  onDestroy(() => {
+    if (pararDeSincronizarComUrl) {
+      pararDeSincronizarComUrl();
+    }
+    if (pararDeObservarCargaConcluida) {
+      pararDeObservarCargaConcluida();
+    }
+  });
+
+  function initializeFiltersIfNeeded() {
+    if (filtersInitialized || !browser || !$louvoresLoaded || !$louvores.length) return;
+
+    // Não usa a variável reativa `uniqueNormalizedClassifications` aqui:
+    // quando esta função é chamada pelo `.subscribe()` (ver acima) dentro de
+    // `instance()`, o Svelte ainda não rodou `$$.update()` e ela estaria
+    // `undefined`. Recalcula a partir de `$louvores`, que já está atualizado.
+    const classifications = computeUniqueNormalizedClassifications($louvores);
+    if (classifications.length === 0) return;
+
+    filtersInitialized = true;
+    // Não usa a variável reativa `estadoUrl` pelo mesmo motivo de
+    // `uniqueNormalizedClassifications`: recalcula a partir de `get(page)`.
+    const estadoAtual = computeEstadoUrl(get(page));
+    // D-2: o padrão "todos os arranjos" é calculado, não gravado na URL. Links
+    // no formato `?arranjo=<5 valores>` continuam sendo lidos normalmente.
+    if (!estadoAtual.temArranjo && $classificationFilters.length === 0) {
+      classificationFilters.aplicarPadrao(classifications);
+    }
   }
-  
+
   /**
    * @param {{ groupId?: string, materials?: { pdfId?: string }[] }} group
    */
@@ -718,51 +548,54 @@
     return group.groupId || group.materials?.[0]?.pdfId || '';
   }
 
-  // Handlers for Special Arrangement Filters
+  // Handlers do filtro de arranjo especial: a única coisa que fazem é gravar a
+  // URL. A seleção exibida volta pela derivação, no mesmo ciclo.
   /**
    * @param {CustomEvent<{ item: string }>} event
    */
   function handleSpecialArrangementToggle(event) {
-    if (isUpdatingArranjoEspecialFromUrl) return;
     const item = event.detail.item;
-    selectedSpecialArrangements = selectedSpecialArrangements.includes(item)
-      ? selectedSpecialArrangements.filter(sa => sa !== item)
+    const novo = selectedSpecialArrangements.includes(item)
+      ? selectedSpecialArrangements.filter((sa) => sa !== item)
       : [...selectedSpecialArrangements, item];
-    // Atualizar URL após mudança
-    if (browser) {
-      updateUrlParams({ arranjoEspecial: selectedSpecialArrangements });
-    }
+    updateUrlParams({ arranjoEspecial: novo });
   }
 
   /**
    * @param {CustomEvent<{ item: string }>} event
    */
   function handleSpecialArrangementSelectOnly(event) {
-    if (isUpdatingArranjoEspecialFromUrl) return;
-    selectedSpecialArrangements = [event.detail.item];
-    if (browser) {
-      updateUrlParams({ arranjoEspecial: selectedSpecialArrangements });
-    }
+    updateUrlParams({ arranjoEspecial: [event.detail.item] });
   }
 
   /**
    * @param {CustomEvent<{ items: string[] }>} event
    */
   function handleSpecialArrangementSelectAll(event) {
-    if (isUpdatingArranjoEspecialFromUrl) return;
-    selectedSpecialArrangements = [...event.detail.items];
-    if (browser) {
-      updateUrlParams({ arranjoEspecial: selectedSpecialArrangements });
-    }
+    updateUrlParams({ arranjoEspecial: [...event.detail.items] });
   }
 
   function handleSpecialArrangementDeselectAll() {
-    if (isUpdatingArranjoEspecialFromUrl) return;
-    selectedSpecialArrangements = [];
-    if (browser) {
-      updateUrlParams({ arranjoEspecial: [] });
-    }
+    // Vazio é gravado como `arranjoEspecial=` para sobreviver a um F5.
+    updateUrlParams({ arranjoEspecial: [] });
   }
+
+  /**
+   * Ordenar: grava o store E a URL juntos. O `page.subscribe` manual (acima)
+   * só reage a navegação de verdade, então nada mais vai publicar essa
+   * escolha na URL — se este handler só desse `.set()`, o clique mudaria o
+   * chip ativo mas a URL nunca chegaria a saber.
+   * @param {CustomEvent<{ value: string }>} event
+   */
+  function handleSortSelect(event) {
+    const valor = event.detail.value;
+    bibliotecaSort.set(valor);
+    updateUrlParams({ ordenar: valor });
+  }
+
+  // `handleItemsPerPage`, perto de `setPage` acima, substitui
+  // `handleItemsPerPageSelect` — a lógica de "grava os dois juntos, não
+  // força página 1" descrita ali é a mesma.
 </script>
 
 <svelte:head>
@@ -786,217 +619,54 @@
       />
     {/if}
     
-    <SortSelector />
+    <SortSelector on:select={handleSortSelect} />
     
     <PdfViewerSelector />
   </div>
   
   <div class="mt-8 flex justify-center">
-    {#if paginatedLouvores.length > 0}
+    {#if !$louvoresLoaded}
+      <div class="louvores-container w-full max-w-4xl">
+        <span class="container-tag">Louvores</span>
+        <LouvorListSkeleton count={itemsPerPage} />
+      </div>
+    {:else if paginatedLouvores.length > 0}
       <div id="louvores" class="louvores-container w-full max-w-4xl" bind:this={louvoresContainer}>
         <span class="container-tag">Louvores</span>
         
-        <!-- Pagination Controls (Top) -->
-        <div class="pagination-controls pagination-controls-top">
-          <div class="pagination-info">
-            Página <strong>{currentPage}</strong> de <strong>{totalPages}</strong>
-          </div>
-          
-          <div class="pagination-controls-right">
-            <div class="items-per-page-selector">
-              <span class="items-per-page-label">Itens por página:</span>
-              <div class="items-per-page-wrapper" bind:this={itemsPerPageButtonElement}>
-                <button
-                  type="button"
-                  class="items-per-page-button"
-                  on:click={(e) => {
-                    e.stopPropagation();
-                    itemsPerPageMenuOpen = !itemsPerPageMenuOpen;
-                  }}
-                  aria-label="Alterar itens por página"
-                >
-                  {$bibliotecaItemsPerPage}
-                </button>
-                {#if itemsPerPageMenuOpen}
-                  <div class="items-per-page-menu">
-                    {#each VALID_OPTIONS as option}
-                      <button
-                        type="button"
-                        class="items-per-page-option"
-                        class:active={$bibliotecaItemsPerPage === option}
-                        on:click={(e) => {
-                          e.stopPropagation();
-                          bibliotecaItemsPerPage.set(option);
-                          itemsPerPageMenuOpen = false;
-                          scrollToLouvores();
-                        }}
-                      >
-                        {option}
-                      </button>
-                    {/each}
-                  </div>
-                {/if}
-              </div>
-            </div>
-            
-            <div class="pagination-input-group">
-              <GestureButton
-                on:click={previousPage}
-                on:longpress={goToFirstPage}
-                longPressDuration={500}
-                hapticFeedback={true}
-                preventDefault={true}
-              >
-                <button
-                  type="button"
-                  class="pagination-button"
-                  disabled={currentPage === 1}
-                  title="Página anterior (long press para primeira página)"
-                >
-                  <ChevronLeft class="w-5 h-5" />
-                </button>
-              </GestureButton>
-              
-              <input
-                type="number"
-                class="pagination-input"
-                bind:value={pageInput}
-                on:input={handlePageInput}
-                on:keydown={handlePageInputKeydown}
-                on:blur={() => {
-                  const pageNum = parseInt(pageInput, 10);
-                  if (isNaN(pageNum) || pageNum < 1 || pageNum > totalPages) {
-                    pageInput = currentPage.toString();
-                  }
-                }}
-                min="1"
-                max={totalPages}
-                aria-label="Número da página"
-              />
-              
-              <GestureButton
-                on:click={nextPage}
-                on:longpress={goToLastPage}
-                longPressDuration={500}
-                hapticFeedback={true}
-                preventDefault={true}
-              >
-                <button
-                  type="button"
-                  class="pagination-button"
-                  disabled={currentPage === totalPages}
-                  title="Próxima página (long press para última página)"
-                >
-                  <ChevronRight class="w-5 h-5" />
-                </button>
-              </GestureButton>
-            </div>
-          </div>
-        </div>
-        
+        <LouvorPaginationControls
+          variant="top"
+          bind:pageInput
+          currentPage={currentPage}
+          totalPages={totalPages}
+          itemsPerPage={itemsPerPage}
+          on:itemsPerPage={handleItemsPerPage}
+          on:gotoPage={handleGotoPage}
+          on:previous={previousPage}
+          on:next={nextPage}
+          on:first={goToFirstPage}
+          on:last={goToLastPage}
+        />
+
         <div class="louvores-list">
           {#each paginatedLouvores as group (getGroupKey(group))}
             <LouvorCard louvor={group.materials[0]} materials={group.materials} />
           {/each}
         </div>
-        
-        <!-- Pagination Controls (Bottom) -->
-        <div class="pagination-controls">
-          <div class="pagination-info">
-            Página <strong>{currentPage}</strong> de <strong>{totalPages}</strong>
-          </div>
-          
-          <div class="pagination-controls-right">
-            <div class="items-per-page-selector">
-              <span class="items-per-page-label">Itens por página:</span>
-              <div class="items-per-page-wrapper" bind:this={itemsPerPageButtonElement}>
-                <button
-                  type="button"
-                  class="items-per-page-button"
-                  on:click={(e) => {
-                    e.stopPropagation();
-                    itemsPerPageMenuOpen = !itemsPerPageMenuOpen;
-                  }}
-                  aria-label="Alterar itens por página"
-                >
-                  {$bibliotecaItemsPerPage}
-                </button>
-                {#if itemsPerPageMenuOpen}
-                  <div class="items-per-page-menu">
-                    {#each VALID_OPTIONS as option}
-                      <button
-                        type="button"
-                        class="items-per-page-option"
-                        class:active={$bibliotecaItemsPerPage === option}
-                        on:click={(e) => {
-                          e.stopPropagation();
-                          bibliotecaItemsPerPage.set(option);
-                          itemsPerPageMenuOpen = false;
-                          scrollToLouvores();
-                        }}
-                      >
-                        {option}
-                      </button>
-                    {/each}
-                  </div>
-                {/if}
-              </div>
-            </div>
-            
-            <div class="pagination-input-group">
-              <GestureButton
-                on:click={previousPage}
-                on:longpress={goToFirstPage}
-                longPressDuration={500}
-                hapticFeedback={true}
-                preventDefault={true}
-              >
-                <button
-                  type="button"
-                  class="pagination-button"
-                  disabled={currentPage === 1}
-                  title="Página anterior (long press para primeira página)"
-                >
-                  <ChevronLeft class="w-5 h-5" />
-                </button>
-              </GestureButton>
-              
-              <input
-                type="number"
-                class="pagination-input"
-                bind:value={pageInput}
-                on:input={handlePageInput}
-                on:keydown={handlePageInputKeydown}
-                on:blur={() => {
-                  const pageNum = parseInt(pageInput, 10);
-                  if (isNaN(pageNum) || pageNum < 1 || pageNum > totalPages) {
-                    pageInput = currentPage.toString();
-                  }
-                }}
-                min="1"
-                max={totalPages}
-                aria-label="Número da página"
-              />
-              
-              <GestureButton
-                on:click={nextPage}
-                on:longpress={goToLastPage}
-                longPressDuration={500}
-                hapticFeedback={true}
-                preventDefault={true}
-              >
-                <button
-                  type="button"
-                  class="pagination-button"
-                  disabled={currentPage === totalPages}
-                  title="Próxima página (long press para última página)"
-                >
-                  <ChevronRight class="w-5 h-5" />
-                </button>
-              </GestureButton>
-            </div>
-          </div>
-        </div>
+
+        <LouvorPaginationControls
+          variant="bottom"
+          bind:pageInput
+          currentPage={currentPage}
+          totalPages={totalPages}
+          itemsPerPage={itemsPerPage}
+          on:itemsPerPage={handleItemsPerPage}
+          on:gotoPage={handleGotoPage}
+          on:previous={previousPage}
+          on:next={nextPage}
+          on:first={goToFirstPage}
+          on:last={goToLastPage}
+        />
 
         <!-- End louvores container -->
       </div>
@@ -1029,218 +699,41 @@
     z-index: 10;
     line-height: 1;
   }
-  
+
+  /* #16: content-visibility avaliado e descartado em 2026-09-01. Medido
+     nesta página (LouvorCard, paginação de até 50 itens), build de
+     produção (`npm run build` + `npm run preview`), custo de layout de
+     10→50 cards via reflow forçado (40 amostras/medição, mediana): 3
+     repetições completas —
+       rep 1: 50 itens = 1.9ms (min 1.5/max 7.1) · 10 itens = 2.5ms (min 1.2/
+         max 3.4) · delta = -0.6ms · ruído = 5.6ms
+       rep 2: 50 itens = 10.8ms (min 6.3/max 14.4) · 10 itens = 3.2ms (min
+         1.2/max 3.7) · delta = 7.6ms · ruído = 8.1ms
+       rep 3: 50 itens = 12.0ms (min 6.3/max 15.3) · 10 itens = 3.4ms (min
+         1.3/max 4.1) · delta = 8.6ms · ruído = 9.0ms
+     Nas 3 repetições, delta < ruído (nunca claramente maior) — o custo
+     marginal de ir de 10 para 50 cards não se distingue com confiança do
+     ruído da própria medição (que varia mais entre repetições, 1.9–12.0ms,
+     do que o delta varia dentro de cada uma). A lista é coluna única
+     (flex-direction: column): com 50 itens, ~49 dos 50 cards ficam fora da
+     viewport inicial mesmo num desktop widescreen (1920×929) — o mecanismo
+     teria bastante conteúdo para pular; a ausência de ganho não é por
+     falta de itens fora de tela. Ressalva importante: medido em hardware
+     real sem CPU throttle (a automação de navegador desta sessão não
+     expôs o painel de throttling do DevTools) — o resultado é informativo
+     sobre aparelhos rápidos e genuinamente silencioso sobre o aparelho
+     modesto que a auditoria original tinha em mente; não assuma que a
+     conclusão vale lá sem medir de novo com throttle real. As listas já
+     paginam em no máximo 50 itens (bibliotecaItemsPerPage.js); não há
+     lista longa de verdade para otimizar hoje nos aparelhos medidos.
+     Reabrir com throttle real se o limite de paginação subir, o card
+     ficar bem mais pesado, ou surgir relato de jank em aparelho modesto. */
   .louvores-list {
     display: flex;
     flex-direction: column;
     gap: 0.5rem;
     margin-top: 1.5rem;
     margin-bottom: 1.5rem;
-  }
-  
-  .pagination-controls {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding-top: 1rem;
-    border-top: 2px solid var(--gold-color);
-    gap: 1rem;
-    flex-wrap: wrap;
-  }
-  
-  .pagination-controls-top {
-    padding-top: 0;
-    border-top: none;
-    padding-bottom: 1rem;
-    border-bottom: 2px solid var(--gold-color);
-  }
-  
-  .pagination-info {
-    color: var(--text-dark);
-    font-size: 0.875rem;
-  }
-  
-  .pagination-info strong {
-    color: var(--text-dark);
-    font-weight: 700;
-  }
-  
-  .pagination-controls-right {
-    display: flex;
-    align-items: center;
-    gap: 1rem;
-    flex-wrap: wrap;
-  }
-  
-  .items-per-page-selector {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-  }
-  
-  .items-per-page-label {
-    color: var(--text-dark);
-    font-size: 0.875rem;
-    white-space: nowrap;
-  }
-  
-  .items-per-page-wrapper {
-    position: relative;
-  }
-  
-  .items-per-page-button {
-    height: 2.5rem;
-    min-width: 3rem;
-    padding: 0 0.75rem;
-    background-color: var(--card-color);
-    color: var(--text-dark);
-    border: 2px solid var(--gold-color);
-    border-radius: 0.5rem;
-    font-size: 0.875rem;
-    font-weight: 600;
-    cursor: pointer;
-    transition: all 0.2s ease;
-    text-align: center;
-  }
-  
-  .items-per-page-button:hover {
-    border-color: var(--gold-light);
-    background-color: rgba(244, 208, 63, 0.1);
-  }
-  
-  /* :not(:focus-visible) só cobre o clique/toque — o anel de teclado vem
-     do :focus-visible global em app.css, que não é sobrescrito aqui. */
-  .items-per-page-button:focus:not(:focus-visible) {
-    outline: none;
-    border-color: var(--gold-light);
-    box-shadow: 0 0 0 3px rgba(244, 208, 63, 0.25);
-  }
-  
-  .items-per-page-menu {
-    position: absolute;
-    top: calc(100% + 0.25rem);
-    left: 0;
-    background-color: var(--card-color);
-    border: 2px solid var(--gold-color);
-    border-radius: 0.5rem;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
-    z-index: 100;
-    min-width: 100%;
-    overflow: hidden;
-  }
-  
-  .items-per-page-option {
-    display: block;
-    width: 100%;
-    padding: 0.5rem 0.75rem;
-    background-color: transparent;
-    color: var(--text-dark);
-    border: none;
-    font-size: 0.875rem;
-    font-weight: 600;
-    cursor: pointer;
-    transition: all 0.2s ease;
-    text-align: center;
-  }
-  
-  .items-per-page-option:hover {
-    background-color: rgba(244, 208, 63, 0.2);
-  }
-  
-  .items-per-page-option.active {
-    background-color: rgba(244, 208, 63, 0.3);
-    color: var(--text-dark);
-  }
-  
-  .pagination-input-group {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-  }
-  
-  .pagination-button {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 2.5rem;
-    height: 2.5rem;
-    background-color: var(--title-color);
-    color: var(--text-light);
-    border: 2px solid var(--gold-color);
-    border-radius: 0.5rem;
-    cursor: pointer;
-    transition: all 0.2s ease;
-    padding: 0;
-    user-select: none;
-    -webkit-user-select: none;
-    -moz-user-select: none;
-    -ms-user-select: none;
-    -webkit-touch-callout: none;
-    -webkit-tap-highlight-color: transparent;
-  }
-  
-  .pagination-button:hover:not(:disabled) {
-    background-color: var(--gold-light);
-    transform: translateY(-1px);
-    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
-  }
-  
-  .pagination-button:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-    background-color: var(--badge-gray-bg);
-  }
-  
-  .pagination-input {
-    width: 4rem;
-    height: 2.5rem;
-    text-align: center;
-    background-color: var(--card-color);
-    color: var(--text-dark);
-    border: 2px solid var(--gold-color);
-    border-radius: 0.5rem;
-    font-size: 0.875rem;
-    font-weight: 600;
-    padding: 0 0.5rem;
-    transition: all 0.2s ease;
-  }
-  
-  /* :not(:focus-visible) só cobre o clique/toque — o anel de teclado vem
-     do :focus-visible global em app.css, que não é sobrescrito aqui. */
-  .pagination-input:focus:not(:focus-visible) {
-    outline: none;
-    border-color: var(--gold-light);
-    box-shadow: 0 0 0 3px rgba(244, 208, 63, 0.25);
-  }
-  
-  .pagination-input::-webkit-inner-spin-button,
-  .pagination-input::-webkit-outer-spin-button {
-    opacity: 1;
-  }
-  
-  @media (max-width: 640px) {
-    .pagination-controls {
-      flex-direction: column;
-      align-items: stretch;
-    }
-    
-    .pagination-info {
-      text-align: center;
-    }
-    
-    .pagination-controls-right {
-      flex-direction: column;
-      align-items: stretch;
-      gap: 0.75rem;
-    }
-    
-    .items-per-page-selector {
-      justify-content: center;
-    }
-    
-    .pagination-input-group {
-      justify-content: center;
-    }
   }
   
   .no-results-message {

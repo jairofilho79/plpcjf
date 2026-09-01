@@ -6,7 +6,7 @@ import { getPdfRelPath } from '$lib/utils/pathUtils';
 import { isPdfAvailableInIndex } from '$lib/utils/pdfIndex';
 import compositeValidator from '$lib/offline/validation/CompositeValidator.js';
 import cacheStorageAdapter from '$lib/offline/storage/CacheStorageAdapter.js';
-import { createUrlUtf8 } from '$lib/utils/urlEncoding.js';
+import PdfPathManager from '$lib/offline/utils/PdfPathManager.js';
 import { buildPdfCacheIndex } from './pdfCacheIndex.js';
 import {
   readValidationEntry,
@@ -117,8 +117,9 @@ export async function validatePdfAvailabilityFast(pdfPath, pdfId = null) {
     return { available: false, needsDownload: false, url: null };
   }
 
-  const normalizedPath = pdfPath.startsWith('/') ? pdfPath.substring(1) : pdfPath;
-  const fullUrl = createUrlUtf8(`/${normalizedPath}`, window.location.origin);
+  // #22.1: um só construtor de URL de PDF em todo o cliente.
+  const normalizedPath = PdfPathManager.normalizeForStorage(pdfPath);
+  const fullUrl = PdfPathManager.createRequestUrl(pdfPath, window.location.origin);
 
   // Strategy 1: Check validation cache (if PDF ID is provided) - Fase 2
   if (pdfId) {
@@ -166,9 +167,9 @@ export async function validatePdfAvailability(pdfPath, pdfId = null) {
     return { available: false, needsDownload: false, url: null };
   }
 
-  // Normalize path (remove leading slash if present)
-  const normalizedPath = pdfPath.startsWith('/') ? pdfPath.substring(1) : pdfPath;
-  const fullUrl = createUrlUtf8(`/${normalizedPath}`, window.location.origin);
+  // #22.1: um só construtor de URL de PDF em todo o cliente.
+  const normalizedPath = PdfPathManager.normalizeForStorage(pdfPath);
+  const fullUrl = PdfPathManager.createRequestUrl(pdfPath, window.location.origin);
 
   // Wait for Service Worker to be ready (reduzido para 500ms para melhor performance)
   const swReady = await waitForServiceWorker(500);
@@ -275,9 +276,14 @@ export function findMissingPdfs(louvores, cachedPdfs) {
     return louvores.filter(l => l.pdfId);
   }
 
-  // Índice O(1) dos PDFs em cache (caminhos decodificados, sem normalização —
-  // preserva maiúsculas/minúsculas e acentos, como antes).
-  const cacheIndex = buildPdfCacheIndex(cachedPdfs);
+  // #22.2: a chave real do cache está em NFC (normalizeForStorage/migração de
+  // chaves); getPdfRelPath(louvor) devolve o pdfPath cru, NFD para 8 caminhos
+  // do acervo. Sem normalizar aqui, esses 8 apareceriam como "faltando" para
+  // sempre depois da migração — a comparação, não a leitura, é que quebraria.
+  // #22.3: `buildPdfCacheIndex` perdeu o fallback por nome de arquivo. A
+  // contagem de faltantes sobe em relação à versão anterior — é o número
+  // verdadeiro: antes, um homônimo em cache escondia a lacuna.
+  const cacheIndex = buildPdfCacheIndex(cachedPdfs, { normalize: PdfPathManager.normalizeForStorage });
 
   const missing = [];
 

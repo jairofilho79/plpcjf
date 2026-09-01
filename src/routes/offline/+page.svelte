@@ -1,16 +1,19 @@
 <script>
   import { onMount } from 'svelte';
   import { goto } from '$app/navigation';
-  import { Download, AlertCircle, CheckCircle, Info, Package, TrendingUp, RefreshCw, Upload } from 'lucide-svelte';
+  import { Download, AlertCircle, Info, Package, RefreshCw, Upload } from 'lucide-svelte';
   import { offline, isDownloading } from '$lib/stores/offline';
   import { CATEGORY_OPTIONS } from '$lib/stores/filters';
   import { louvores, loadLouvores, louvoresLoaded } from '$lib/stores/louvores';
   import OfflineRequirementsAlert from '$lib/components/OfflineRequirementsAlert.svelte';
   import OfflineIndicator from '$lib/components/OfflineIndicator.svelte';
   import ErrorModal from '$lib/components/ErrorModal.svelte';
+  import OfflineDownloadProgress from '$lib/components/OfflineDownloadProgress.svelte';
+  import OfflineStatsSummary from '$lib/components/OfflineStatsSummary.svelte';
   import { downloadMissingPdfs } from '$lib/utils/missingPdfsDownloader.js';
   import { setupCacheSync, onCacheSync, checkCacheVersionChanged, updateCacheVersion } from '$lib/utils/cacheSync';
   import { clearPdfIndex } from '$lib/utils/pdfIndex';
+  import { formatSize } from '$lib/utils/formatSize.js';
   import {
     initStatsCache,
     getCachedStats,
@@ -25,7 +28,6 @@
   import offlineEvents, { EVENTS as OFFLINE_EVENTS } from '$lib/offline/core/OfflineEvents.js';
   import { getConfig } from '$lib/offline/core/OfflineConfig.js';
   import offlineManager from '$lib/offline/core/OfflineManager.js';
-  import cacheMigrationV2 from '$lib/offline/storage/CacheMigrationV2.js';
   import { browser } from '$app/environment';
 
   // Offline available flag from localStorage
@@ -44,12 +46,6 @@
   let bundleFileInput = null;
   /** @type {Array<{ id: string, label: string, status: 'pending' | 'active' | 'done', counts?: { ok: number, fail: number, total: number } }>} */
   let importChecklist = [];
-
-  const IMPORT_STATUS_LABEL = {
-    pending: 'A fazer',
-    active: 'Em progresso',
-    done: 'Concluído'
-  };
 
   // Selected categories for download
   /**
@@ -91,11 +87,6 @@
   let isSyncing = false;
   let lastSyncTime = null;
   
-  // Migration V2 state
-  let isMigrating = false;
-  let migrationProgress = null;
-  let migrationResult = null;
-  let migrationNeeded = false;
   /** @type {(() => void) | null} */
   let syncUnsubscribe = null;
   
@@ -556,46 +547,6 @@
     }
   }
 
-  /**
-   * Run cache migration V2 manually
-   */
-  async function runMigration() {
-    if (isMigrating) return;
-    
-    isMigrating = true;
-    migrationProgress = null;
-    migrationResult = null;
-    
-    try {
-      console.log('[Offline Page] Starting cache migration V2...');
-      
-      const result = await cacheMigrationV2.migrate({
-        force: false,
-        onProgress: (progress) => {
-          migrationProgress = progress;
-        }
-      });
-      
-      migrationResult = result;
-      migrationNeeded = false;
-      
-      // Reload stats after migration
-      await loadCategoryStats(true);
-      
-      console.log('[Offline Page] Migration completed:', result);
-    } catch (error) {
-      console.error('[Offline Page] Migration error:', error);
-      migrationResult = {
-        migrated: 0,
-        skipped: 0,
-        errors: 1,
-        errorDetails: [error.message || 'Migration failed']
-      };
-    } finally {
-      isMigrating = false;
-    }
-  }
-
   // Track last stats load time to prevent excessive calls
   let lastStatsLoadTime = 0;
   const MIN_STATS_LOAD_INTERVAL = 2000; // Minimum 2 seconds between loads
@@ -916,20 +867,6 @@
   $: overallPercentage = totalStats.total > 0 
     ? Math.round((totalStats.available / totalStats.total) * 100) 
     : 0;
-  
-  /**
-   * Format bytes to human readable size
-   * @param {number} bytes
-   */
-  function formatSize(bytes) {
-    if (!bytes || bytes === 0) return '0 B';
-    const mb = bytes / (1024 * 1024);
-    if (mb >= 1) {
-      return `${mb.toFixed(2)} MB`;
-    }
-    const kb = bytes / 1024;
-    return `${kb.toFixed(2)} KB`;
-  }
   
   /**
    * Get total size of selected categories (excluding already downloaded and complete ones)
@@ -1356,204 +1293,33 @@
   <!-- Body -->
   <div class="page-body">
 
-      <!-- Migration progress -->
-      {#if isMigrating && migrationProgress}
-        <div class="migration-progress">
-          <div class="migration-progress-header">
-            <span>Migrando cache: {migrationProgress.current} / {migrationProgress.total}</span>
-            <span class="migration-stats">
-              {migrationProgress.migrated} migrados, {migrationProgress.skipped} ignorados, {migrationProgress.errors} erros
-            </span>
-          </div>
-          <div class="migration-progress-bar">
-            <div 
-              class="migration-progress-fill" 
-              style="width: {Math.round((migrationProgress.current / migrationProgress.total) * 100)}%"
-            ></div>
-          </div>
-        </div>
-      {/if}
-
-      <!-- Migration result -->
-      {#if migrationResult && !isMigrating}
-        <div class="migration-result" class:success={migrationResult.errors === 0} class:error={migrationResult.errors > 0}>
-          <div class="migration-result-content">
-            {#if migrationResult.errors === 0}
-              <CheckCircle class="w-5 h-5" />
-              <div class="migration-result-text">
-                <strong>Migração concluída com sucesso!</strong>
-                <span>{migrationResult.migrated} PDFs migrados, {migrationResult.skipped} ignorados</span>
-              </div>
-            {:else}
-              <AlertCircle class="w-5 h-5" />
-              <div class="migration-result-text">
-                <strong>Migração concluída com erros</strong>
-                <span>{migrationResult.migrated} migrados, {migrationResult.errors} erros</span>
-              </div>
-            {/if}
-            <button class="migration-close" on:click={() => migrationResult = null}>×</button>
-          </div>
-        </div>
-      {/if}
-
-      {#if downloading}
-      <!-- Download / import progress -->
-      <div class="progress-section">
-        <div class="progress-info">
-          <p class="progress-title">{isImportingBundle ? 'A importar pacote offline…' : 'Baixando PDFs...'}</p>
-          {#if !isImportingBundle}
-            {#if totalParts > 0}
-              <!-- Só a linha de parte/fase é aria-live: o contador de PDFs abaixo
-                   muda várias vezes por segundo e anunciaria demais. -->
-              <p class="progress-part" role="status" aria-live="polite">
-                <span class="download-part">Parte {currentPart} de {totalParts}</span>
-                {#if partPhase}
-                  <span class="download-phase">
-                    {#if partPhase === 'baixando'}Baixando{:else if partPhase === 'extraindo'}Extraindo{:else if partPhase === 'gravando'}Gravando{/if}
-                    {currentPartName}
-                  </span>
-                {/if}
-              </p>
-            {/if}
-            <p class="progress-stats">
-              {completed} de {total} PDFs baixados
-              {#if failed > 0}
-                <span class="failed-count">({failed} falharam)</span>
-              {/if}
-            </p>
-            {#if bytesDownloaded > 0 || bytesTotal}
-              <p class="progress-bytes">
-                {formatSize(bytesDownloaded)}{#if bytesTotal} de {formatSize(bytesTotal)}{/if} baixados
-              </p>
-            {/if}
-          {/if}
-        </div>
-        <div class="progress-bar-container">
-          <div class="progress-bar" style="width: {progress}%"></div>
-        </div>
-        <p class="progress-percentage">{progress}%</p>
-        {#if !isImportingBundle && totalParts > 0}
-          <p class="download-warning">
-            Mantenha o app aberto até terminar. Se a conexão cair, o download retoma da parte em que parou na próxima tentativa.
-          </p>
-        {/if}
-        {#if isImportingBundle && importChecklist.length}
-          <ul class="import-checklist">
-            {#each importChecklist as item (item.id)}
-              <li class="import-checklist-item" data-status={item.status}>
-                <span class="import-checklist-label">{item.label}</span>
-                <span class="import-checklist-meta">
-                  {#if item.counts}
-                    <span class="import-counts" aria-label="válidos, inválidos, total">
-                      <span class="import-count-ok">{item.counts.ok}</span>
-                      <span class="import-count-sep">;</span>
-                      <span class="import-count-fail">{item.counts.fail}</span>
-                      <span class="import-count-sep">,</span>
-                      <span class="import-count-total">{item.counts.total}</span>
-                    </span>
-                  {/if}
-                  <span class="import-status-tag" data-status={item.status}
-                    >{IMPORT_STATUS_LABEL[item.status]}</span
-                  >
-                </span>
-              </li>
-            {/each}
-          </ul>
-        {/if}
-        <div class="action-buttons">
-          <button class="btn btn-danger" on:click={cancelDownload}>
-            {isImportingBundle ? 'Cancelar importação' : 'Cancelar Download'}
-          </button>
-        </div>
-      </div>
-      {:else if progress >= 100}
-      <div class="complete-section">
-        <CheckCircle class="w-16 h-16 complete-icon" />
-        <p class="complete-title">{importJustFinished ? 'Importação concluída!' : 'Download concluído!'}</p>
-        <p class="complete-stats">
-          {completed} PDFs {importJustFinished ? 'importados' : 'baixados'} com sucesso
-          {#if failed > 0}
-            <br />
-            <span class="failed-count">{failed} PDFs falharam</span>
-          {/if}
-        </p>
-        <div class="action-buttons"></div>
-      </div>
+      {#if downloading || progress >= 100}
+      <OfflineDownloadProgress
+        {downloading}
+        {isImportingBundle}
+        {importJustFinished}
+        {totalParts}
+        {currentPart}
+        {partPhase}
+        {currentPartName}
+        {completed}
+        {total}
+        {failed}
+        {bytesDownloaded}
+        {bytesTotal}
+        {progress}
+        {importChecklist}
+        on:cancel={cancelDownload}
+      />
       {:else}
-      <!-- Stats: capa com cache ao abrir; cálculo só ao clicar atualizar -->
-      <div class="availability-summary" class:has-stale-overlay={statsStale}>
-        <div class="summary-header">
-          <TrendingUp class="w-5 h-5 summary-icon" />
-          <h3 class="summary-title">Disponibilidade Geral</h3>
-          {#if !statsStale}
-            <button
-              class="refresh-stats-btn"
-              on:click={() => loadCategoryStats(true)}
-              disabled={isLoadingStats}
-              title="Atualizar estatísticas"
-            >
-              <RefreshCw class="w-4 h-4 {isLoadingStats ? 'spinning' : ''}" />
-            </button>
-          {/if}
-          {#if performanceMetrics.enabled && performanceMetrics.lastMetrics}
-            <button
-              class="metrics-btn"
-              on:click={() => {
-                const metrics = getCacheMetrics();
-                console.table(metrics);
-                alert(`Cache Hit Rate: ${(metrics.cacheHitRate * 100).toFixed(1)}%\nAvg Calculation: ${metrics.avgCalculationTime}ms\nAvg Load: ${metrics.avgLoadTime}ms\nCache Size: ${(metrics.cacheSize / 1024).toFixed(2)} KB\nCategories Cached: ${metrics.categoriesCached}`);
-              }}
-              title="Mostrar métricas de performance (desenvolvimento)"
-            >
-              <TrendingUp class="w-4 h-4" />
-            </button>
-          {/if}
-        </div>
-        <div class="summary-stats">
-          <div class="stat-item">
-            <span class="stat-value">{totalStats.available}</span>
-            <span class="stat-label">Disponíveis</span>
-          </div>
-          <div class="stat-item">
-            <span class="stat-value">{totalStats.missing}</span>
-            <span class="stat-label">Faltantes</span>
-          </div>
-          <div class="stat-item">
-            <span class="stat-value">{totalStats.total}</span>
-            <span class="stat-label">Total</span>
-          </div>
-          <div class="stat-item highlight">
-            <span class="stat-value">{overallPercentage}%</span>
-            <span class="stat-label">Completo</span>
-          </div>
-        </div>
-        <div class="summary-progress-bar">
-          <div 
-            class="summary-progress-fill" 
-            style="width: {overallPercentage}%"
-          ></div>
-        </div>
-
-        {#if statsStale}
-          <div class="stats-stale-overlay">
-            <p class="stats-stale-hint">Dados em cache — podem estar desatualizados</p>
-            <button
-              class="btn btn-primary stats-refresh-cta"
-              type="button"
-              on:click={() => loadCategoryStats(true)}
-              disabled={isLoadingStats}
-            >
-              {#if isLoadingStats}
-                <RefreshCw class="w-5 h-5 spinning" />
-                <span>A atualizar…</span>
-              {:else}
-                <RefreshCw class="w-5 h-5" />
-                <span>Clique aqui para atualizar</span>
-              {/if}
-            </button>
-          </div>
-        {/if}
-      </div>
+      <OfflineStatsSummary
+        {statsStale}
+        {totalStats}
+        {overallPercentage}
+        {isLoadingStats}
+        {performanceMetrics}
+        on:refresh={() => loadCategoryStats(true)}
+      />
 
       <!-- Info about category persistence and cache limitation -->
       <div class="info-box">
@@ -2054,179 +1820,6 @@
     border-color: #28a745;
   }
   
-  /* Availability summary styles */
-  .availability-summary {
-    position: relative;
-    background-color: var(--background-color);
-    border: 2px solid var(--gold-color);
-    border-radius: 0.75rem;
-    padding: 1.5rem;
-    margin-bottom: 1.5rem;
-    overflow: hidden;
-  }
-
-  .stats-stale-overlay {
-    position: absolute;
-    inset: 0;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    gap: 0.75rem;
-    padding: 1rem;
-    background: rgba(15, 15, 20, 0.55);
-    backdrop-filter: blur(1px);
-    z-index: 2;
-  }
-
-  .stats-stale-hint {
-    margin: 0;
-    color: #f5f5f5;
-    font-size: 0.875rem;
-    text-align: center;
-    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
-  }
-
-  .stats-refresh-cta {
-    max-width: 100%;
-  }
-  
-  /* Garantir contraste no summary */
-  .availability-summary .summary-title {
-    color: var(--text-light);
-  }
-  
-  .refresh-stats-btn {
-    background: transparent;
-    border: 1px solid var(--border-color);
-    border-radius: 0.5rem;
-    padding: 0.5rem;
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    transition: all 0.2s ease;
-    color: var(--text-color);
-  }
-
-  .refresh-stats-btn:hover:not(:disabled) {
-    background: var(--hover-bg);
-    border-color: var(--primary-color);
-    transform: translateY(-1px);
-  }
-
-  .refresh-stats-btn:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-  }
-
-  .refresh-stats-btn .spinning {
-    animation: spin 1s linear infinite;
-  }
-
-  @keyframes spin {
-    from { transform: rotate(0deg); }
-    to { transform: rotate(360deg); }
-  }
-
-  .summary-header {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    margin-bottom: 1rem;
-  }
-  
-  .summary-icon {
-    color: var(--gold-color);
-  }
-  
-  /* Ajustar cores dos stat items para fundo escuro */
-  .availability-summary .stat-item {
-    background-color: rgba(212, 175, 55, 0.15);
-    border: 1px solid rgba(212, 175, 55, 0.4);
-  }
-  
-  .availability-summary .stat-value,
-  .availability-summary .stat-label {
-    color: var(--text-light);
-  }
-  
-  .availability-summary .stat-item.highlight {
-    background-color: var(--gold-color);
-    border-color: var(--gold-color);
-  }
-  
-  .availability-summary .stat-item.highlight .stat-value,
-  .availability-summary .stat-item.highlight .stat-label {
-    color: var(--text-dark);
-  }
-  
-  .summary-title {
-    font-size: 1.125rem;
-    font-weight: 700;
-    color: var(--text-light);
-    margin: 0;
-  }
-  
-  .summary-stats {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
-    gap: 1rem;
-    margin-bottom: 1rem;
-  }
-  
-  .stat-item {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    padding: 0.75rem;
-    background-color: rgba(255, 255, 255, 0.1);
-    border-radius: 0.5rem;
-    border: 1px solid rgba(212, 175, 55, 0.3);
-  }
-  
-  .stat-item.highlight {
-    background-color: var(--gold-color);
-    border-color: var(--gold-color);
-  }
-  
-  .stat-value {
-    font-size: 1.5rem;
-    font-weight: 700;
-    color: var(--text-dark);
-  }
-  
-  .stat-item.highlight .stat-value {
-    color: var(--text-dark);
-  }
-  
-  .stat-label {
-    font-size: 0.75rem;
-    color: var(--text-dark);
-    opacity: 0.85;
-    margin-top: 0.25rem;
-  }
-  
-  .stat-item.highlight .stat-label {
-    color: var(--text-dark);
-    opacity: 0.95;
-  }
-  
-  .summary-progress-bar {
-    width: 100%;
-    height: 1rem;
-    background-color: var(--background-color);
-    border-radius: 0.5rem;
-    overflow: hidden;
-    border: 1px solid var(--placeholder-color);
-  }
-  
-  .summary-progress-fill {
-    height: 100%;
-    background: linear-gradient(90deg, var(--gold-color), #ffd700);
-    transition: width 0.3s ease;
-  }
-  
   /* Packages info styles */
   .packages-info {
     display: flex;
@@ -2275,215 +1868,6 @@
     padding: 0.25rem 0.5rem;
     background-color: rgba(23, 162, 184, 0.1);
     border-radius: 0.25rem;
-  }
-
-  /* Progress section */
-  .progress-section {
-    text-align: center;
-  }
-
-  .progress-info {
-    margin-bottom: 1.5rem;
-  }
-
-  .progress-title {
-    font-size: 1.125rem;
-    font-weight: 600;
-    color: var(--text-light);
-    margin: 0 0 0.5rem 0;
-  }
-
-  .progress-stats {
-    font-size: 0.9375rem;
-    color: var(--text-light);
-    margin: 0;
-  }
-
-  .failed-count {
-    color: #dc3545;
-    font-weight: 600;
-  }
-
-  .progress-bar-container {
-    width: 100%;
-    height: 2rem;
-    background-color: var(--background-color);
-    border: 2px solid var(--placeholder-color);
-    border-radius: 1rem;
-    overflow: hidden;
-    margin-bottom: 0.75rem;
-  }
-
-  .progress-bar {
-    height: 100%;
-    background: linear-gradient(90deg, var(--gold-color), #ffd700);
-    transition: width 0.3s ease;
-    border-radius: 0.875rem;
-  }
-
-  .progress-percentage {
-    font-size: 1.5rem;
-    font-weight: 700;
-    color: var(--text-light);
-    margin: 0 0 1rem 0;
-  }
-
-  .progress-part {
-    display: flex;
-    flex-wrap: wrap;
-    justify-content: center;
-    align-items: baseline;
-    gap: 0.5rem;
-    margin: 0 0 0.375rem 0;
-    font-size: 0.9375rem;
-  }
-
-  .download-part {
-    font-weight: 600;
-    color: var(--text-light);
-    font-variant-numeric: tabular-nums;
-  }
-
-  .download-phase {
-    color: var(--placeholder-color);
-    max-width: 100%;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .progress-bytes {
-    font-size: 0.8125rem;
-    color: var(--placeholder-color);
-    margin: 0.25rem 0 0 0;
-    font-variant-numeric: tabular-nums;
-  }
-
-  .download-warning {
-    margin: 0.75rem 0 0 0;
-    font-size: 0.8rem;
-    line-height: 1.5;
-    color: var(--placeholder-color);
-  }
-
-  .import-checklist {
-    list-style: none;
-    margin: 0 0 1.25rem;
-    padding: 0;
-    text-align: left;
-    display: flex;
-    flex-direction: column;
-    gap: 0.5rem;
-  }
-
-  .import-checklist-item {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 0.75rem;
-    padding: 0.5rem 0.65rem;
-    border: 1px solid rgba(212, 175, 55, 0.25);
-    border-radius: 0.35rem;
-    background: rgba(0, 0, 0, 0.15);
-  }
-
-  .import-checklist-label {
-    font-size: 0.875rem;
-    color: var(--text-light);
-    min-width: 0;
-  }
-
-  .import-checklist-meta {
-    display: flex;
-    align-items: center;
-    gap: 0.6rem;
-    flex-shrink: 0;
-  }
-
-  .import-counts {
-    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-    font-size: 0.8125rem;
-    font-weight: 600;
-    display: inline-flex;
-    align-items: baseline;
-    gap: 0.15rem;
-  }
-
-  .import-count-ok {
-    color: #4ade80;
-  }
-
-  .import-count-fail {
-    color: #f87171;
-  }
-
-  .import-count-total {
-    color: #f5f5f5;
-  }
-
-  .import-count-sep {
-    color: rgba(245, 245, 245, 0.45);
-    font-weight: 400;
-  }
-
-  .import-status-tag {
-    flex-shrink: 0;
-    font-size: 0.6875rem;
-    font-weight: 600;
-    letter-spacing: 0.02em;
-    padding: 0.2rem 0.45rem;
-    border-radius: 0.25rem;
-    border: 1px solid transparent;
-  }
-
-  .import-status-tag[data-status='pending'] {
-    color: #c8c2b4;
-    border-color: rgba(200, 194, 180, 0.35);
-    background: rgba(200, 194, 180, 0.08);
-  }
-
-  .import-status-tag[data-status='active'] {
-    color: #1a1a1a;
-    border-color: var(--gold-color);
-    background: var(--gold-color);
-  }
-
-  .import-status-tag[data-status='done'] {
-    color: #d4edda;
-    border-color: rgba(40, 167, 69, 0.55);
-    background: rgba(40, 167, 69, 0.2);
-  }
-
-  .progress-note {
-    font-size: 0.875rem;
-    color: var(--text-light);
-    opacity: 0.8;
-    margin: 1rem 0 0 0;
-    font-style: italic;
-  }
-
-  /* Complete section */
-  .complete-section {
-    text-align: center;
-    padding: 1rem 0;
-  }
-
-  .complete-section :global(.complete-icon) {
-    color: #28a745;
-    margin: 0 auto 1rem;
-  }
-
-  .complete-title {
-    font-size: 1.25rem;
-    font-weight: 700;
-    color: var(--text-light);
-    margin: 0 0 0.75rem 0;
-  }
-
-  .complete-stats {
-    font-size: 1rem;
-    color: var(--text-light);
-    margin: 0 0 1.5rem 0;
   }
 
   /* Error box */
@@ -2567,19 +1951,6 @@
     opacity: 0;
     overflow: hidden;
     z-index: -1;
-  }
-
-  .btn-danger {
-    background-color: #dc3545;
-    color: white;
-    border-color: #dc3545;
-  }
-
-  .btn-danger:hover:not(:disabled) {
-    background-color: #c82333;
-    border-color: #c82333;
-    transform: translateY(-2px);
-    box-shadow: 0 4px 8px rgba(220, 53, 69, 0.3);
   }
 
   .btn .spinning {
@@ -2747,101 +2118,6 @@
   @keyframes spin {
     from { transform: rotate(0deg); }
     to { transform: rotate(360deg); }
-  }
-
-  /* Migration V2 Styles */
-  .migration-banner {
-    background: linear-gradient(135deg, rgba(59, 130, 246, 0.1) 0%, rgba(147, 51, 234, 0.1) 100%);
-    border-left: 4px solid #3b82f6;
-  }
-
-  .migration-progress {
-    background: var(--background-color);
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    border-radius: 0.5rem;
-    padding: 1rem;
-    margin-bottom: 1.5rem;
-  }
-
-  .migration-progress-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 0.5rem;
-    font-size: 0.875rem;
-  }
-
-  .migration-stats {
-    opacity: 0.7;
-    font-size: 0.75rem;
-  }
-
-  .migration-progress-bar {
-    width: 100%;
-    height: 0.5rem;
-    background: rgba(255, 255, 255, 0.1);
-    border-radius: 0.25rem;
-    overflow: hidden;
-  }
-
-  .migration-progress-fill {
-    height: 100%;
-    background: linear-gradient(90deg, #3b82f6, #8b5cf6);
-    transition: width 0.3s ease;
-  }
-
-  .migration-result {
-    background: var(--background-color);
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    border-radius: 0.5rem;
-    padding: 1rem;
-    margin-bottom: 1.5rem;
-  }
-
-  .migration-result.success {
-    border-left: 4px solid #10b981;
-  }
-
-  .migration-result.error {
-    border-left: 4px solid #ef4444;
-  }
-
-  .migration-result-content {
-    display: flex;
-    align-items: center;
-    gap: 0.75rem;
-  }
-
-  .migration-result-text {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    gap: 0.25rem;
-  }
-
-  .migration-result-text strong {
-    font-weight: 600;
-  }
-
-  .migration-result-text span {
-    font-size: 0.875rem;
-    opacity: 0.8;
-  }
-
-  .migration-close {
-    background: transparent;
-    border: none;
-    color: var(--text-light);
-    font-size: 1.5rem;
-    line-height: 1;
-    cursor: pointer;
-    padding: 0.25rem;
-    opacity: 0.7;
-    transition: opacity 0.2s;
-  }
-
-  .migration-close:hover {
-    opacity: 1;
   }
 
   /* Responsive */

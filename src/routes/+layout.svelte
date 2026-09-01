@@ -86,6 +86,25 @@
       const removeStaleChunkListeners = installStaleChunkRecoveryListeners();
       const cancelStaleRecoveryReset = scheduleStaleRecoveryCounterReset();
 
+      // Correção (defeito 1): a migração de chaves NFD→NFC do cache de PDFs
+      // vivia só dentro de `OfflineManager.initialize()`, que a página
+      // /offline só chama quando há categoria selecionada — num aparelho
+      // limpo, nunca roda. Aqui ela dispara em toda visita à aplicação
+      // (inclusive /leitor, que nunca toca OfflineManager), sem bloquear o
+      // carregamento da página: sai cedo se já rodou (flag em localStorage).
+      //
+      // Achado I2: import dinâmico, não estático — `OfflineManager` e o que
+      // ele arrasta (48 KB / 14 KB gzip) não precisam ir no chunk de toda
+      // rota só porque /leitor (que nunca usa OfflineManager para mais nada)
+      // também passa por aqui. A chamada continua incondicional em toda
+      // rota — só a forma de carregar o módulo virou preguiçosa, não a
+      // migração em si.
+      import('$lib/offline/core/OfflineManager.js')
+        .then(({ default: offlineManager }) => offlineManager.ensureNfcMigration())
+        .catch((err) => {
+          console.warn('[Layout] Migração NFC de PDFs falhou (não crítico):', err);
+        });
+
       // CORREÇÃO PARA STANDALONE: Garantir que o SvelteKit router processe a URL correta
       // Quando o Service Worker serve o shell root ('/'), o SvelteKit pode não ter
       // processado a URL real da barra de endereços ainda. Verificamos e corrigimos.
@@ -112,12 +131,20 @@
       checkAndFixUrl();
       setTimeout(checkAndFixUrl, 100);
       
+      let disposed = false;
       /** @type {(() => void) | null} */
       let swCleanup = null;
       /** @type {(() => void) | null} */
       let swMessageCleanup = null;
 
       registerServiceWorker().then(({ cleanup }) => {
+        if (disposed) {
+          // O componente já foi desmontado enquanto o registro estava em voo:
+          // não adianta religar listener nenhum, só soltar o que acabou de
+          // ser criado.
+          cleanup?.();
+          return;
+        }
         swCleanup = cleanup;
 
         // Setup Service Worker message listener
@@ -133,6 +160,7 @@
       const removeLouvoresChecksumTriggers = setupLouvoresManifestChecksumTriggers();
 
       return () => {
+        disposed = true;
         removeLouvoresChecksumTriggers();
         removeStaleChunkListeners();
         cancelStaleRecoveryReset();

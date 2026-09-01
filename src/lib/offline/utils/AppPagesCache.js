@@ -27,7 +27,7 @@ const APP_ROUTES = [
 /**
  * Cache all application pages
  * @param {Object} [options] - Options
- * @param {Function} [options.onProgress] - Progress callback (route, index, total)
+ * @param {(route: string, index: number, total: number) => void} [options.onProgress] - Progress callback
  * @returns {Promise<{success: number, failed: number, total: number, errors: string[]}>}
  */
 export async function cacheAppPages(options = {}) {
@@ -98,21 +98,25 @@ export async function cacheAppPages(options = {}) {
             response = await fetch(request);
             logger.debug('AppPagesCache', `Fetch completed for ${route}`);
           } catch (fetchError) {
+            // fetchError é `unknown` sob strict; acesso a .message/.name/.stack
+            // preserva o comportamento de runtime já existente (property access
+            // permissivo do JS), só documentado para o checador de tipos.
+            const err = /** @type {any} */ (fetchError);
             // Log fetch error to console for visibility
             console.error(`[AppPagesCache] ❌ Fetch failed for ${route}:`, {
-              error: fetchError,
-              message: fetchError.message,
-              name: fetchError.name,
-              stack: fetchError.stack,
+              error: err,
+              message: err.message,
+              name: err.name,
+              stack: err.stack,
               url: url.href
             });
-            
+
             logger.error('AppPagesCache', `Fetch failed for ${route}:`, {
-              error: fetchError.message,
-              name: fetchError.name,
-              stack: fetchError.stack
+              error: err.message,
+              name: err.name,
+              stack: err.stack
             });
-            throw new Error(`Fetch failed: ${fetchError.message}`);
+            throw new Error(`Fetch failed: ${err.message}`);
           }
 
           logger.debug('AppPagesCache', `Response for ${route}: status=${response?.status}, ok=${response?.ok}, type=${response?.type}, url=${response?.url}`);
@@ -147,7 +151,8 @@ export async function cacheAppPages(options = {}) {
               await cache.put(request, responseClone);
               logger.debug('AppPagesCache', `Cache.put completed for ${route}`);
             } catch (cacheError) {
-              logger.error('AppPagesCache', `Cache.put failed for ${route}:`, cacheError);
+              const err = /** @type {any} */ (cacheError);
+              logger.error('AppPagesCache', `Cache.put failed for ${route}:`, err);
               // If cache.put fails, try with a fresh clone
               try {
                 const freshClone = response.clone();
@@ -155,7 +160,7 @@ export async function cacheAppPages(options = {}) {
                 logger.debug('AppPagesCache', `Cache.put succeeded with fresh clone for ${route}`);
               } catch (retryError) {
                 logger.error('AppPagesCache', `Cache.put retry also failed for ${route}:`, retryError);
-                throw new Error(`Cache.put failed: ${cacheError.message}`);
+                throw new Error(`Cache.put failed: ${err.message}`);
               }
             }
             
@@ -204,34 +209,35 @@ export async function cacheAppPages(options = {}) {
             throw new Error(`HTTP ${status} ${statusText} for ${route}`);
           }
         } catch (error) {
+          const err = /** @type {any} */ (error);
           // Log detailed error information to console for visibility
           console.error(`[AppPagesCache] ❌ Failed to cache page: ${route}`, {
-            error: error,
-            message: error.message,
-            name: error.name,
-            stack: error.stack,
+            error: err,
+            message: err.message,
+            name: err.name,
+            stack: err.stack,
             route: route,
             url: url?.href
           });
-          
+
           // Also log via logger
           const errorDetails = {
-            message: error.message,
-            stack: error.stack,
-            name: error.name,
+            message: err.message,
+            stack: err.stack,
+            name: err.name,
             route: route,
             url: url?.href
           };
           logger.error('AppPagesCache', `Failed to cache page ${route}:`, errorDetails);
-          
-          return { 
-            success: false, 
-            route, 
-            error: error.message || 'Unknown error', 
+
+          return {
+            success: false,
+            route,
+            error: err.message || 'Unknown error',
             errorDetails: {
-              message: error.message,
-              name: error.name,
-              stack: error.stack?.split('\n').slice(0, 3).join(' | ') // First 3 lines of stack
+              message: err.message,
+              name: err.name,
+              stack: err.stack?.split('\n').slice(0, 3).join(' | ') // First 3 lines of stack
             }
           };
         }
@@ -241,6 +247,7 @@ export async function cacheAppPages(options = {}) {
     // Count successes and failures
     let success = 0;
     let failed = 0;
+    /** @type {string[]} */
     const errors = [];
 
     results.forEach((result, index) => {
@@ -278,12 +285,13 @@ export async function cacheAppPages(options = {}) {
       errors
     };
   } catch (error) {
-    logger.error('AppPagesCache', 'Error caching application pages:', error);
+    const err = /** @type {any} */ (error);
+    logger.error('AppPagesCache', 'Error caching application pages:', err);
     return {
       success: 0,
       failed: APP_ROUTES.length,
       total: APP_ROUTES.length,
-      errors: [error.message || 'Unknown error']
+      errors: [err.message || 'Unknown error']
     };
   }
 }

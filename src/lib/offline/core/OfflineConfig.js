@@ -92,7 +92,7 @@ const config = {
  * @returns {any} Configuration value
  */
 export function getConfig(key) {
-  return config[key];
+  return (/** @type {Record<string, any>} */ (config))[key];
 }
 
 /**
@@ -101,7 +101,7 @@ export function getConfig(key) {
  * @param {any} value - Configuration value
  */
 export function setConfig(key, value) {
-  config[key] = value;
+  (/** @type {Record<string, any>} */ (config))[key] = value;
 }
 
 /**

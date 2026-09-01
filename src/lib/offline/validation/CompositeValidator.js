@@ -21,7 +21,7 @@ const logger = createLogger('CompositeValidator');
  */
 export class CompositeValidator extends PdfValidator {
   /**
-   * @param {Array<PdfValidator>} [validators] - Custom validators (defaults to standard set)
+   * @param {Array<PdfValidator> | null} [validators] - Custom validators (defaults to standard set)
    */
   constructor(validators = null) {
     super();
@@ -41,7 +41,7 @@ export class CompositeValidator extends PdfValidator {
    * @param {boolean} [options.useIndex] - Whether to use index (default: true)
    * @param {boolean} [options.checkNetwork] - Whether to check network (default: true if online)
    * @param {string} [options.pdfId] - PDF ID for index lookup
-   * @returns {Promise<ValidationResult>} Validation result
+   * @returns {Promise<import('./PdfValidator.js').ValidationResult>} Validation result
    */
   async validate(pdfPath, options = {}) {
     const startTime = performance.now();

@@ -1,202 +1,112 @@
+/**
+ * Ponte entre a camada de estado de URL (urlEstado.js / urlParams.js) e a
+ * navegação do SvelteKit. Todo o cálculo mora nos outros dois módulos, que
+ * rodam sob `node --test`; aqui só ficam as três coisas que exigem o
+ * framework: ler a URL corrente de `$app/stores`, acumular escritas do mesmo
+ * tick e navegar com `goto` (#21).
+ *
+ * Design (Tarefa 11): a URL é a fonte de verdade. Não há mais nenhuma flag de
+ * "estou atualizando" nem religamento por `setTimeout` — o que segura os
+ * laços agora é: (1) cada escrita é idempotente (depois dela, a condição que
+ * a disparou fica falsa) e (2) a guarda de rota abaixo, conferida tanto na
+ * chamada quanto no flush.
+ */
+
 import { goto } from '$app/navigation';
 import { page } from '$app/stores';
 import { get } from 'svelte/store';
+import { aplicarParamsNaQuery, lerEstadoDaUrl } from './urlEstado.js';
+import { podeEscreverNaUrl } from './urlParams.js';
+
+export { lerEstadoDaUrl };
 
 /**
- * Serializa um array em um único valor de query (vírgulas entre itens).
- * Não use encodeURIComponent por item: URLSearchParams.set já codifica o valor inteiro
- * uma vez; codificar antes geraria %2520 etc.
- * Itens não devem conter vírgula literal (não há escape por item neste formato).
- * @param {string[]} array
- * @returns {string}
+ * Query acumulada até o próximo flush, e a rota em que foi acumulada. Sem
+ * isto, duas chamadas de `updateUrlParams` no mesmo tick partiriam ambas de
+ * `get(page).url.search` e a segunda descartaria a primeira — era o bug que
+ * `homeSearchUrlParams` remendava à mão só para a paginação (§4.9).
+ * @type {string | null}
  */
-export function serializeArrayParam(array) {
-  if (!Array.isArray(array) || array.length === 0) {
-    return '';
-  }
-  return array.map((item) => String(item)).join(',');
-}
+let queryPendente = null;
+/** @type {string | null} */
+let rotaPendente = null;
+let flushAgendado = false;
+let versaoFlush = 0;
 
-function safeDecodeURIComponent(value) {
-  if (value == null || value === '') return '';
-  try {
-    return decodeURIComponent(value);
-  } catch {
-    return value;
-  }
-}
+function agendarFlush() {
+  if (flushAgendado) return;
+  flushAgendado = true;
 
-/**
- * Deserializa uma string de URL param em array
- * @param {string} param
- * @returns {string[]}
- */
-export function deserializeArrayParam(param) {
-  if (!param || typeof param !== 'string') {
-    return [];
-  }
-  return param.split(',').map((item) => safeDecodeURIComponent(item.trim())).filter(Boolean);
-}
+  queueMicrotask(async () => {
+    flushAgendado = false;
+    const query = queryPendente;
+    const rota = rotaPendente;
+    const minhaVersao = ++versaoFlush;
 
-/**
- * Parseia todos os params relevantes da URL atual
- * @param {URL} url - URL object (pode ser $page.url)
- * @returns {Object}
- */
-export function parseUrlParams(url) {
-  const search = url.search || '';
-  const params = new URLSearchParams(search);
-  
-  const comoAbrirParam = params.get('comoAbrir');
-  const pesquisaParam = params.get('pesquisa');
-  
-  const ordenarParam = params.get('ordenar');
-  const itensPorPaginaParam = params.get('itensPorPagina');
-  const paginaParam = params.get('pagina');
-  
-  return {
-    materiais: deserializeArrayParam(params.get('materiais') || ''),
-    arranjo: deserializeArrayParam(params.get('arranjo') || ''),
-    arranjoEspecial: deserializeArrayParam(params.get('arranjoEspecial') || ''),
-    comoAbrir: safeDecodeURIComponent(comoAbrirParam || ''),
-    pesquisa: safeDecodeURIComponent(pesquisaParam || ''),
-    ordenar: safeDecodeURIComponent(ordenarParam || ''),
-    itensPorPagina: itensPorPaginaParam ? parseInt(itensPorPaginaParam, 10) : null,
-    pagina: paginaParam ? parseInt(paginaParam, 10) : null
-  };
+    // #21/R4: a rota pode ter mudado entre a chamada e o flush — digitar e
+    // clicar num louvor em menos de 500ms levava a escrita da busca para
+    // dentro da URL do leitor. A guarda da Tarefa 4 (podeEscreverNaUrl) é
+    // conferida de novo aqui, não só na chamada de updateUrlParams.
+    const atual = get(page);
+    const rotaAgora = atual && atual.url ? atual.url.pathname : null;
+    if (rotaAgora !== rota || !podeEscreverNaUrl(rotaAgora)) {
+      if (minhaVersao === versaoFlush) {
+        queryPendente = null;
+        rotaPendente = null;
+      }
+      return;
+    }
+
+    try {
+      await goto(rota + (query ? `?${query}` : ''), {
+        replaceState: true,
+        noScroll: true,
+        keepFocus: true
+      });
+    } catch (err) {
+      // Uma navegação superada por outra mais nova rejeita a Promise do
+      // `goto` — comportamento normal do SvelteKit, não um erro real. Sem
+      // isto virava rejeição não tratada no console.
+      console.debug('[urlSync] goto interrompido por navegação superada:', err);
+    }
+
+    // Só limpa o acumulado se ninguém escreveu por cima durante o goto.
+    if (minhaVersao === versaoFlush) {
+      queryPendente = null;
+      rotaPendente = null;
+    }
+  });
 }
 
 /**
- * Atualiza os params da URL mantendo os existentes e adicionando/atualizando os novos
- * Remove params vazios ou com valores padrão
+ * Atualiza params da URL mantendo os existentes e adicionando/atualizando os
+ * novos. Remove params vazios ou com valores padrão (ver aplicarParamsNaQuery).
+ * Sempre `replaceState` (D-1): filtro, busca e paginação não entram no
+ * histórico do navegador.
+ *
  * @param {Object} newParams - Objeto com os params a atualizar
- * @param {Object} options - Opções
- * @param {string[]} options.defaultMateriais - Array de materiais padrão (para não incluir na URL se todos selecionados)
- * @param {string} options.defaultComoAbrir - Valor padrão de comoAbrir (geralmente 'leitor')
- * @param {boolean} options.replaceState - Se true, usa replaceState (default: true)
+ * @param {Object} [options]
+ * @param {string[]} [options.defaultMateriais] - Materiais padrão (somem da URL se todos selecionados)
  */
 export function updateUrlParams(newParams, options = {}) {
-  const {
-    defaultMateriais = [],
-    defaultComoAbrir = 'leitor',
-    replaceState = true
-  } = options;
-  
-  const currentUrl = get(page);
-  if (!currentUrl || !currentUrl.url || !currentUrl.url.pathname) {
-    console.warn('updateUrlParams: currentUrl inválido', currentUrl);
+  const atual = get(page);
+  if (!atual || !atual.url || !atual.url.pathname) {
+    console.warn('updateUrlParams: página inválida', atual);
     return;
   }
-  
-  const search = currentUrl.url.search || '';
-  const currentParams = new URLSearchParams(search);
-  
-  // Atualizar params
-  if (newParams.materiais !== undefined) {
-    const materiais = Array.isArray(newParams.materiais) ? newParams.materiais : [];
-    // Se todos os materiais estão selecionados, remover o param
-    const allSelected = materiais.length === defaultMateriais.length && 
-                       defaultMateriais.every(m => materiais.includes(m));
-    if (allSelected || materiais.length === 0) {
-      currentParams.delete('materiais');
-    } else {
-      const serialized = serializeArrayParam(materiais);
-      if (serialized) {
-        currentParams.set('materiais', serialized);
-      } else {
-        currentParams.delete('materiais');
-      }
-    }
-  }
-  
-  if (newParams.arranjo !== undefined) {
-    const arranjo = Array.isArray(newParams.arranjo) ? newParams.arranjo : [];
-    // Se array vazio, remover param
-    if (arranjo.length === 0) {
-      currentParams.delete('arranjo');
-    } else {
-      const serialized = serializeArrayParam(arranjo);
-      if (serialized) {
-        currentParams.set('arranjo', serialized);
-      } else {
-        currentParams.delete('arranjo');
-      }
-    }
-  }
-  
-  if (newParams.arranjoEspecial !== undefined) {
-    const arranjoEspecial = Array.isArray(newParams.arranjoEspecial) ? newParams.arranjoEspecial : [];
-    if (arranjoEspecial.length === 0) {
-      currentParams.delete('arranjoEspecial');
-    } else {
-      const serialized = serializeArrayParam(arranjoEspecial);
-      if (serialized) {
-        currentParams.set('arranjoEspecial', serialized);
-      } else {
-        currentParams.delete('arranjoEspecial');
-      }
-    }
-  }
-  
-  if (newParams.comoAbrir !== undefined) {
-    const comoAbrir = newParams.comoAbrir || '';
-    // Se é o valor padrão, remover param
-    if (comoAbrir === defaultComoAbrir || !comoAbrir) {
-      currentParams.delete('comoAbrir');
-    } else {
-      // URLSearchParams.set já aplica percent-encoding
-      currentParams.set('comoAbrir', comoAbrir);
-    }
-  }
-  
-  if (newParams.pesquisa !== undefined) {
-    const pesquisa = (newParams.pesquisa || '').trim();
-    if (!pesquisa) {
-      currentParams.delete('pesquisa');
-    } else {
-      currentParams.set('pesquisa', pesquisa);
-    }
-  }
-  
-  if (newParams.ordenar !== undefined) {
-    const ordenar = (newParams.ordenar || '').trim();
-    // Se é o valor padrão ('numero'), remover param
-    if (ordenar === 'numero' || !ordenar) {
-      currentParams.delete('ordenar');
-    } else {
-      currentParams.set('ordenar', ordenar);
-    }
-  }
-  
-  if (newParams.itensPorPagina !== undefined) {
-    const itensPorPagina = parseInt(newParams.itensPorPagina, 10);
-    // Se é o valor padrão (10) ou inválido, remover param
-    if (isNaN(itensPorPagina) || itensPorPagina === 10) {
-      currentParams.delete('itensPorPagina');
-    } else {
-      currentParams.set('itensPorPagina', itensPorPagina.toString());
-    }
-  }
-  
-  if (newParams.pagina !== undefined) {
-    const pagina = parseInt(newParams.pagina, 10);
-    // Se é o valor padrão (1) ou inválido, remover param
-    if (isNaN(pagina) || pagina <= 1) {
-      currentParams.delete('pagina');
-    } else {
-      currentParams.set('pagina', pagina.toString());
-    }
-  }
-  
-  // Construir nova URL
-  const newSearch = currentParams.toString();
-  const pathname = currentUrl.url.pathname || '/';
-  const newUrl = pathname + (newSearch ? `?${newSearch}` : '');
-  
-  // Atualizar URL usando replaceState para não adicionar ao histórico
-  goto(newUrl, { 
-    replaceState, 
-    noScroll: true,
-    keepFocus: true
+
+  const pathname = atual.url.pathname;
+
+  // #21: nenhuma escrita de URL em /leitor. A guarda mora aqui (checagem
+  // imediata) e de novo no flush (checagem tardia, acima) — as stores globais
+  // (filters, classificationFilters, pdfViewer) escrevem a partir de um
+  // page.subscribe de módulo, que roda em qualquer rota.
+  if (!podeEscreverNaUrl(pathname)) return;
+
+  const base = queryPendente !== null && rotaPendente === pathname ? queryPendente : atual.url.search;
+  queryPendente = aplicarParamsNaQuery(base, newParams, {
+    materiaisPadrao: options.defaultMateriais
   });
+  rotaPendente = pathname;
+  agendarFlush();
 }

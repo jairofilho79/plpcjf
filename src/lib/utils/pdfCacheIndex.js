@@ -1,10 +1,15 @@
 /**
- * Índice de PDFs em cache.
+ * Índice de PDFs em cache. Correspondência **exata** de caminho, e só ela.
  *
- * Substitui as três cópias da "Estratégia 3" (Array.from(set).some(...) dentro do
- * laço principal) por duas consultas O(1). O Set de nomes de arquivo é um
- * superconjunto estrito daquela estratégia: para caminhos que terminam em nome de
- * arquivo, `a.endsWith(b)` implica basename(a) === basename(b).
+ * Até #22.3 havia um segundo Set indexado por nome de arquivo: se o caminho não
+ * batesse, o índice aceitava qualquer entrada em cache com o mesmo basename.
+ * Como 3311 dos 4629 caminhos do acervo partilham nome de arquivo — 1036 se
+ * chamam `Cifra I.pdf` —, isso fazia o índice responder "tem" para milhares de
+ * louvores que não estavam baixados. Era o falso positivo de maior alcance do
+ * sistema, e `stores/offline.js` já o evitava de propósito.
+ *
+ * Quem precisa casar caixa, acento e forma Unicode passa `options.normalize`
+ * (use `PdfPathManager.normalizeForStorage`), que é aplicado aos dois lados.
  *
  * Só importa por caminho relativo — precisa rodar sob `node --test`.
  */
@@ -39,16 +44,6 @@ export function toComparablePath(url) {
 }
 
 /**
- * @param {string} path
- * @returns {string}
- */
-export function basenameOf(path) {
-  if (!path) return '';
-  const i = path.lastIndexOf('/');
-  return i === -1 ? path : path.slice(i + 1);
-}
-
-/**
  * @typedef {{ size: number, has: (candidate: string) => boolean }} PdfCacheIndex
  */
 
@@ -63,8 +58,6 @@ export function buildPdfCacheIndex(cachedUrls, options = {}) {
 
   /** @type {Set<string>} */
   const byPath = new Set();
-  /** @type {Set<string>} */
-  const byBasename = new Set();
 
   const list = Array.isArray(cachedUrls) ? cachedUrls : [];
 
@@ -72,18 +65,15 @@ export function buildPdfCacheIndex(cachedUrls, options = {}) {
     const path = normalize(toComparablePath(url));
     if (!path) continue;
     byPath.add(path);
-    const base = basenameOf(path);
-    if (base) byBasename.add(base);
   }
 
   return {
     size: byPath.size,
     has(candidate) {
+      // #22.3: só caminho exato. O fallback por nome de arquivo saiu daqui.
       const path = normalize(toComparablePath(candidate));
       if (!path) return false;
-      if (byPath.has(path)) return true;
-      const base = basenameOf(path);
-      return base ? byBasename.has(base) : false;
+      return byPath.has(path);
     }
   };
 }

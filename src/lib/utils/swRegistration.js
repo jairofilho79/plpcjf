@@ -76,16 +76,31 @@ export async function registerServiceWorker() {
       registration.update();
     }, 60 * 60 * 1000);
 
+    /** @type {ServiceWorker | null} worker cujo listener de statechange está ativo agora. */
+    let installingWorker = null;
+    /** @type {(() => void) | null} o listener em si, para poder removê-lo depois. */
+    let onInstallingStateChange = null;
+
     const onUpdateFound = () => {
       const newWorker = registration.installing;
       if (!newWorker) return;
-      newWorker.addEventListener('statechange', () => {
+
+      // Cada `updatefound` é uma tentativa de instalação nova: solta o listener
+      // da tentativa anterior antes de prender um novo, senão acumula um por
+      // checagem horária (setInterval acima) sem nunca soltar nenhum.
+      if (installingWorker && onInstallingStateChange) {
+        installingWorker.removeEventListener('statechange', onInstallingStateChange);
+      }
+
+      onInstallingStateChange = () => {
         if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
           // Novo service worker disponível
           debugLog('[SW Registration] New service worker available');
           dispatchUpdateEvent();
         }
-      });
+      };
+      installingWorker = newWorker;
+      newWorker.addEventListener('statechange', onInstallingStateChange);
     };
 
     registration.addEventListener('updatefound', onUpdateFound);
@@ -98,30 +113,14 @@ export async function registerServiceWorker() {
         clearInterval(updateIntervalId);
         registration.removeEventListener('updatefound', onUpdateFound);
         navigator.serviceWorker.removeEventListener('controllerchange', onControllerChange);
+        if (installingWorker && onInstallingStateChange) {
+          installingWorker.removeEventListener('statechange', onInstallingStateChange);
+        }
       }
     };
   } catch (error) {
     console.error('[SW Registration] Failed to register service worker:', error);
     return { registration: null, cleanup: () => {} };
-  }
-}
-
-/**
- * Unregister the service worker
- */
-export async function unregisterServiceWorker() {
-  if (!swRegistration) {
-    return false;
-  }
-
-  try {
-    const success = await swRegistration.unregister();
-    debugLog('[SW Registration] Service worker unregistered:', success);
-    swRegistration = null;
-    return success;
-  } catch (error) {
-    console.error('[SW Registration] Failed to unregister service worker:', error);
-    return false;
   }
 }
 

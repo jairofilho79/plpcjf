@@ -20,7 +20,7 @@ export class NetworkValidator extends PdfValidator {
    * @param {string} pdfPath - PDF path to validate
    * @param {Object} [options] - Validation options
    * @param {boolean} [options.checkNetwork] - Whether to check network (default: true if online)
-   * @returns {Promise<ValidationResult>} Validation result
+   * @returns {Promise<import('./PdfValidator.js').ValidationResult>} Validation result
    */
   async validate(pdfPath, options = {}) {
     if (!pdfPath || typeof pdfPath !== 'string') {
@@ -37,10 +37,14 @@ export class NetworkValidator extends PdfValidator {
     const shouldCheckNetwork = options.checkNetwork !== false && navigator.onLine;
     
     if (!shouldCheckNetwork) {
+      // #22.5: o normalizador antigo nunca foi importado neste arquivo — esta
+      // linha lançava ReferenceError exatamente no ramo offline, e o try/catch
+      // do CompositeValidator engolia o erro, fazendo a validação de rede
+      // sumir sem log. `PdfPathManager` já está importado em :7.
       return {
         available: false,
         source: 'network',
-        normalizedPath: urlNormalizer.normalizeForCache(pdfPath) || '',
+        normalizedPath: PdfPathManager.normalizeForStorage(pdfPath) || '',
         needsDownload: false,
         error: 'Network check skipped (offline or disabled)'
       };
@@ -72,6 +76,7 @@ export class NetworkValidator extends PdfValidator {
 
       const available = response.ok;
       
+      /** @type {import('./PdfValidator.js').ValidationResult} */
       const result = {
         available: available,
         source: 'network',
@@ -83,15 +88,16 @@ export class NetworkValidator extends PdfValidator {
       this._logValidation(pdfPath, result);
       return result;
     } catch (error) {
+      const err = /** @type {any} */ (error);
       // Network error or timeout - assume not available
-      logger.debug('NetworkValidator', `Network check failed for ${pdfPath}:`, error.message);
-      
+      logger.debug('NetworkValidator', `Network check failed for ${pdfPath}:`, err.message);
+
       return {
         available: false,
         source: 'network',
         normalizedPath: PdfPathManager.normalizeForStorage(pdfPath) || '',
         needsDownload: false,
-        error: error.message || 'Network check failed'
+        error: err.message || 'Network check failed'
       };
     }
   }

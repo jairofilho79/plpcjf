@@ -10,10 +10,12 @@
   import { loadPdfJsComplete, loadPdfJsViewer } from '$lib/utils/pdfjsLoader';
   import { clearPdfFromSwCache } from '$lib/utils/swRegistration';
   import { checkEffectiveConnectivity } from '$lib/utils/pdfValidation';
-  import { getFitMode, setFitMode, getNavigationMode, setNavigationMode } from '$lib/pdf-reader/readerPreferences';
+  import { getFitMode, setFitMode, getNavigationMode, setNavigationMode, getBrightness, setBrightness, BRIGHTNESS_PRESETS, DEFAULT_BRIGHTNESS } from '$lib/pdf-reader/readerPreferences';
   import { ZoomController } from '$lib/pdf-reader/zoomController';
   import { resolvePdfSourceUrl as resolveSource } from '$lib/pdf-reader/pdfSourceResolver';
   import { ViewerAdapter } from '$lib/pdf-reader/viewerAdapter';
+  import PdfPathManager from '$lib/offline/utils/PdfPathManager.js';
+  import { createPdfTouchGestureHandlers } from '$lib/utils/pdfTouchGestures.js';
 
   // ── Performance Debug ────────────────────────────────────────────────────────
   const _perfEnabled = () =>
@@ -111,6 +113,35 @@
   let preferredFitMode: 'page-width' | 'page-fit' = getFitMode();
   // Controlador de zoom: encapsula cache de escala e cálculos de page-width
   const zoomCtrl = new ZoomController();
+
+  // Swipe horizontal de página + pinch-to-zoom — ver src/lib/utils/pdfTouchGestures.js.
+  // nextPage/prevPage são function declarations (hoisted), podem ser referenciadas aqui
+  // mesmo estando definidas mais abaixo no script.
+  const touchHandlers = createPdfTouchGestureHandlers({
+    getViewer: () => viewer,
+    getContainerEl: () => containerEl,
+    getViewerEl: () => viewerEl,
+    getNavigationMode: () => navigationMode,
+    getPreferredFitMode: () => preferredFitMode,
+    zoomCtrl,
+    nextPage,
+    prevPage
+  });
+
+  // Brilho da página do PDF (não da toolbar) — persistido via readerPreferences
+  let readerBrightness: number = getBrightness();
+
+  function cycleBrightness() {
+    const idx = BRIGHTNESS_PRESETS.indexOf(readerBrightness);
+    const next = BRIGHTNESS_PRESETS[(idx + 1) % BRIGHTNESS_PRESETS.length];
+    readerBrightness = next;
+    setBrightness(next);
+  }
+
+  function resetBrightness() {
+    readerBrightness = DEFAULT_BRIGHTNESS;
+    setBrightness(DEFAULT_BRIGHTNESS);
+  }
   
   // PDF validation states
   type PdfUiState =
@@ -156,47 +187,7 @@
     zoomCtrl.applyPageWidth({ viewer, containerEl, viewerEl, forceRecalculate });
   }
 
-  // Gesture state for pinch to zoom
-  let pinchInitialDistance = 0;
-  let pinchInitialScale = 1;
-  // Ponto focal (centro dos dedos) relativo ao canto superior-esquerdo do container visível
-  let pinchStartFocalX = 0;
-  let pinchStartFocalY = 0;
-  // Coordenada de conteúdo sob o ponto focal na escala inicial (usada para restaurar scroll)
-  let pinchStartContentX = 0;
-  let pinchStartContentY = 0;
-  // Ponto focal em coordenadas do viewerEl (para transform-origin)
-  let pinchFocalXInViewer = 0;
-  let pinchFocalYInViewer = 0;
-  // Ratio acumulado pelo touchmove (lido pelo rAF)
-  let pinchCurrentRatio = 1;
-  // Handle do requestAnimationFrame pendente do preview
-  let pinchRafId: number | null = null;
-  let isPinching = false;
-  
-  // Gesture state for single touch navigation
-  let touchStartX = 0;
-  let touchStartY = 0;
-  let touchStartTime = 0;
-  let hasMoved = false;
-  const TOUCH_MOVE_THRESHOLD = 10; // pixels
   const TOUCH_TIME_THRESHOLD = 300; // ms
-
-  const ENABLE_SWIPE_PAGE_NAV = true;
-  const SWIPE_MIN_DISTANCE_PX = 80;
-  const SWIPE_MAX_DURATION_MS = 400;
-  const SWIPE_HORIZONTAL_RATIO = 1.4;
-  const SWIPE_MIN_VELOCITY_PX_MS = 0.35;
-  const SWIPE_COOLDOWN_MS = 250;
-  const SWIPE_ZOOM_STRICT_SCALE = 1.15;
-  const SWIPE_EXTRA_DISTANCE_WHEN_ZOOMED_PX = 20;
-  const SWIPE_EXTRA_VELOCITY_WHEN_ZOOMED = 0.1;
-
-  let swipePageStartX = 0;
-  let swipePageStartY = 0;
-  let swipePageStartTime = 0;
-  let swipePageGestureValid = false;
-  let lastSwipePageTurnAt = 0;
 
   async function resolvePdfSourceUrl(fileUrl: string): Promise<string> {
     const { url, newObjectUrl } = await resolveSource(fileUrl, {
@@ -261,80 +252,103 @@
     // O PDF deve ser carregado e validado usando o caminho original (preserva case e acentos)
     const urlObj = new URL(fileUrl, window.location.origin);
     const pdfPath = urlObj.pathname.startsWith('/') ? urlObj.pathname.substring(1) : urlObj.pathname;
-    const originalFullUrl = new URL(`/${pdfPath}`, window.location.origin).href;
+    // Achado I3 (corrigido): dois caminhos que o leitor abre não são do
+    // acervo — o exemplo padrão (`/pdfs/exemplo.pdf`, quando não há
+    // `?file=`) e a página de configuração offline (`/offline-setup.pdf`,
+    // aberta por `stores/offline.js`). Ambos vivem em `static/`, fora de
+    // `assets/`. A tentativa original de distinguir os dois olhando se
+    // `pdfPath` começa com `assets/` inverte o contrato: um link de acervo
+    // legado (`?file=` sem o prefixo `assets/`, formato suportado desde
+    // sempre — ver `urlParams.test.js` §5.5) também não começa com
+    // `assets/`, e passava a ser tratado como estático, pulando a
+    // normalização que o fazia resolver. A lista curta é a única forma
+    // segura: só os dois arquivos estáticos conhecidos usam o caminho como
+    // está; qualquer outro — incluindo formatos de acervo que não previmos —
+    // continua indo por `PdfPathManager`/validação, como sempre foi.
+    const isKnownStaticFile =
+      pdfPath.toLowerCase() === 'pdfs/exemplo.pdf' || pdfPath.toLowerCase() === 'offline-setup.pdf';
+    const isCatalogAsset = !isKnownStaticFile;
+    // #22.1: um só codificador. O parser WHATWG deixa `[` e `]` literais e o
+    // escritor do cache os escapa — para os 3 PDFs do acervo com colchetes no
+    // nome, a URL pedida aqui nunca era a chave gravada.
+    const originalFullUrl = isCatalogAsset
+      ? PdfPathManager.createRequestUrl(pdfPath, window.location.origin)
+      : new URL(`/${pdfPath}`, window.location.origin).toString();
     lastPdfPathForRecovery = pdfPath;
     lastOriginalFullUrlForRecovery = originalFullUrl;
-    
+
     try {
-      
-      // VALIDAÇÃO: Check if PDF is available in cache using original path (no normalization)
-      const { validatePdfAvailability } = await import('$lib/utils/pdfValidation');
-      const { downloadPDFsViaSW } = await import('$lib/utils/swRegistration');
-      
-      const validation = await validatePdfAvailability(pdfPath);
-      
-      if (!validation.available) {
-        // Try to download automatically if online
-        const effectiveOnline = await checkEffectiveConnectivity({ timeoutMs: 1500 });
-        if (validation.needsDownload && effectiveOnline && retryCount < MAX_RETRIES) {
-          retryCount++;
-          console.log('[Leitor] auto-download-start', { pdfPath, attempt: retryCount });
-          
-          // Show feedback
-          setPdfUi('autoDownloading', 'Baixando PDF...');
-          
-          try {
-            // Download via Service Worker
-            const result = await downloadPDFsViaSW(
-              [validation.url],
-              1,
-              undefined,
-              { timeoutMs: 30000 }
-            );
 
-            if (!result.success) {
-              const msg = result.partialSuccess
-                ? 'Download parcial do PDF. Tente novamente ou use “Buscar online”.'
-                : 'Não foi possível baixar o PDF automaticamente. Tente novamente ou use “Buscar online”.';
-              console.log('[Leitor] auto-download-partial', { pdfPath, ...result });
-              setPdfUi('retryableError', msg);
-              return;
-            }
+      if (isCatalogAsset) {
+        // VALIDAÇÃO: Check if PDF is available in cache using original path (no normalization)
+        const { validatePdfAvailability } = await import('$lib/utils/pdfValidation');
+        const { downloadPDFsViaSW } = await import('$lib/utils/swRegistration');
 
-            // Revalidar antes de carregar para evitar falso-sucesso
-            const recheck = await validatePdfAvailability(pdfPath);
-            if (!recheck.available) {
-              setPdfUi('retryableError', 'O PDF ainda não está disponível após o download. Tente “Buscar online”.');
-              return;
-            }
+        const validation = await validatePdfAvailability(pdfPath);
 
-            // Voltar para estado normal e seguir carregamento
-            setPdfUi('loading', null);
-          } catch (downloadErr) {
-            const isTimeout = String((downloadErr as any)?.message || '').includes('timeout');
-            if (isTimeout) {
-              console.log('[Leitor] auto-download-timeout', { pdfPath });
-            }
-            console.error('[Leitor] Download automático falhou:', downloadErr);
-            setPdfUi('retryableError', 'Erro ao baixar PDF. Verifique sua conexão ou use “Buscar online”.');
-            
-            // FASE 2: Invalidar cache de validação quando download falha
+        if (!validation.available) {
+          // Try to download automatically if online
+          const effectiveOnline = await checkEffectiveConnectivity({ timeoutMs: 1500 });
+          if (validation.needsDownload && effectiveOnline && retryCount < MAX_RETRIES) {
+            retryCount++;
+            console.log('[Leitor] auto-download-start', { pdfPath, attempt: retryCount });
+
+            // Show feedback
+            setPdfUi('autoDownloading', 'Baixando PDF...');
+
             try {
-              const { clearAllValidationCache } = await import('$lib/utils/pdfValidation');
-              clearAllValidationCache();
-            } catch (err) {
-              console.warn('[Leitor] Erro ao invalidar cache de validação:', err);
+              // Download via Service Worker
+              const result = await downloadPDFsViaSW(
+                [validation.url],
+                1,
+                undefined,
+                { timeoutMs: 30000 }
+              );
+
+              if (!result.success) {
+                const msg = result.partialSuccess
+                  ? 'Download parcial do PDF. Tente novamente ou use “Buscar online”.'
+                  : 'Não foi possível baixar o PDF automaticamente. Tente novamente ou use “Buscar online”.';
+                console.log('[Leitor] auto-download-partial', { pdfPath, ...result });
+                setPdfUi('retryableError', msg);
+                return;
+              }
+
+              // Revalidar antes de carregar para evitar falso-sucesso
+              const recheck = await validatePdfAvailability(pdfPath);
+              if (!recheck.available) {
+                setPdfUi('retryableError', 'O PDF ainda não está disponível após o download. Tente “Buscar online”.');
+                return;
+              }
+
+              // Voltar para estado normal e seguir carregamento
+              setPdfUi('loading', null);
+            } catch (downloadErr) {
+              const isTimeout = String((downloadErr as any)?.message || '').includes('timeout');
+              if (isTimeout) {
+                console.log('[Leitor] auto-download-timeout', { pdfPath });
+              }
+              console.error('[Leitor] Download automático falhou:', downloadErr);
+              setPdfUi('retryableError', 'Erro ao baixar PDF. Verifique sua conexão ou use “Buscar online”.');
+
+              // FASE 2: Invalidar cache de validação quando download falha
+              try {
+                const { clearAllValidationCache } = await import('$lib/utils/pdfValidation');
+                clearAllValidationCache();
+              } catch (err) {
+                console.warn('[Leitor] Erro ao invalidar cache de validação:', err);
+              }
+
+              return;
             }
-            
+          } else {
+            // PDF not available and cannot be downloaded
+            setPdfUi('fatalError', 'PDF não está disponível offline. Por favor, baixe primeiro na página de configuração offline.');
             return;
           }
-        } else {
-          // PDF not available and cannot be downloaded
-          setPdfUi('fatalError', 'PDF não está disponível offline. Por favor, baixe primeiro na página de configuração offline.');
-          return;
         }
       }
-      
+
       // PDF is available, load using ORIGINAL URL (not normalized) to preserve exact path from pdfId
       const loadingTask = getDocument({ url: originalFullUrl, withCredentials: false });
       const pdfDocument = await loadingTask.promise;
@@ -366,60 +380,26 @@
         }
       }
       
-      // Try fallback variations if original URL failed
-      // Try variations of the URL (all using original path, no normalization)
-      const urlVariations = [
-        originalFullUrl, // Already tried, but keep for reference
-        fileUrl, // Original URL from parameter
-        new URL(`/${pdfPath}`, window.location.origin).href, // Original path with leading slash
-        new URL(pdfPath, window.location.origin).href, // Original path without leading slash
-        pdfPath.startsWith('/') ? pdfPath : `/${pdfPath}`, // Original path with/without slash
-        pdfPath // Original path as-is
-      ];
-      
-      // Remove duplicates and already tried URL
-      const uniqueVariations = [...new Set(urlVariations)].filter(url => url !== originalFullUrl);
-      
-      let loadedSuccessfully = false;
-      for (const variationUrl of uniqueVariations) {
-        try {
-          console.log(`[Leitor] Tentando variação de URL: ${variationUrl}`);
-          const loadingTask = getDocument({ url: variationUrl, withCredentials: false });
-          const pdfDocument = await loadingTask.promise;
-          linkService.setDocument(pdfDocument);
-          viewer.setDocument(pdfDocument);
-          totalPages = pdfDocument.numPages ?? 0;
-          currentPage = 1;
-          lastLoadedFile = variationUrl;
-          retryCount = 0;
-          pdfError = null;
-          loadedSuccessfully = true;
-          console.log(`[Leitor] PDF carregado com sucesso usando variação: ${variationUrl}`);
-          break;
-        } catch (variationError) {
-          // Continue to next variation
-          continue;
-        }
+      // #22.5: não há mais variações a tentar. `originalFullUrl` é a chave
+      // canônica — a mesma string que o escritor do cache grava e que o Service
+      // Worker procura. As seis tentativas do bloco antigo eram a mesma URL em
+      // seis formatos, e cada uma custava um `getDocument` completo.
+      setPdfUi('retryableError', 'Erro ao carregar PDF. Verifique se o arquivo está disponível.');
+
+      // FASE 2: Invalidar cache de validação quando há erro definitivo no leitor
+      // Como não temos pdfId aqui, invalidamos todo o cache para forçar revalidação
+      try {
+        const { clearAllValidationCache } = await import('$lib/utils/pdfValidation');
+        clearAllValidationCache();
+      } catch (err) {
+        console.warn('[Leitor] Erro ao invalidar cache de validação:', err);
       }
-      
-      if (!loadedSuccessfully) {
-        setPdfUi('retryableError', 'Erro ao carregar PDF. Verifique se o arquivo está disponível.');
-        
-        // FASE 2: Invalidar cache de validação quando há erro definitivo no leitor
-        // Como não temos pdfId aqui, invalidamos todo o cache para forçar revalidação
-        try {
-          const { clearAllValidationCache } = await import('$lib/utils/pdfValidation');
-          clearAllValidationCache();
-        } catch (err) {
-          console.warn('[Leitor] Erro ao invalidar cache de validação:', err);
-        }
-        
-        // Try retry if still have attempts
-        if (retryCount < MAX_RETRIES && navigator.onLine) {
-          retryCount++;
-          setTimeout(() => load(fileUrl), 2000);
-          return;
-        }
+
+      // Try retry if still have attempts
+      if (retryCount < MAX_RETRIES && navigator.onLine) {
+        retryCount++;
+        setTimeout(() => load(fileUrl), 2000);
+        return;
       }
     } finally {
       if (pdfUiState === 'loading' || pdfUiState === 'autoDownloading') {
@@ -711,15 +691,15 @@
     // Wrapper para touchstart que também ativa o teclado
     const touchStartWrapper = (e: TouchEvent) => {
       handleFirstInteraction();
-      onTouchStart(e);
+      touchHandlers.onTouchStart(e);
     };
-    
+
     // Add touch gesture handlers
     if (containerEl) {
       containerEl.addEventListener('touchstart', touchStartWrapper, { passive: false });
-      containerEl.addEventListener('touchmove', onTouchMove, { passive: false });
-      containerEl.addEventListener('touchend', onTouchEnd, { passive: false });
-      containerEl.addEventListener('touchcancel', onTouchEnd, { passive: false });
+      containerEl.addEventListener('touchmove', touchHandlers.onTouchMove, { passive: false });
+      containerEl.addEventListener('touchend', touchHandlers.onTouchEnd, { passive: false });
+      containerEl.addEventListener('touchcancel', touchHandlers.onTouchEnd, { passive: false });
       containerEl.addEventListener('click', handleFirstInteraction, { passive: true, capture: true });
     }
     
@@ -804,9 +784,9 @@
       }
       if (containerEl) {
         containerEl.removeEventListener('touchstart', touchStartWrapper);
-        containerEl.removeEventListener('touchmove', onTouchMove);
-        containerEl.removeEventListener('touchend', onTouchEnd);
-        containerEl.removeEventListener('touchcancel', onTouchEnd);
+        containerEl.removeEventListener('touchmove', touchHandlers.onTouchMove);
+        containerEl.removeEventListener('touchend', touchHandlers.onTouchEnd);
+        containerEl.removeEventListener('touchcancel', touchHandlers.onTouchEnd);
         containerEl.removeEventListener('click', handleFirstInteraction, true);
       }
       try { if (toolbarEl) ro.unobserve(toolbarEl); } catch {}
@@ -890,305 +870,6 @@
     (viewer as any).currentPageNumber = maxPages;
   }
 
-  // Calculate distance between two touch points
-  function getTouchDistance(touch1: Touch, touch2: Touch): number {
-    const dx = touch2.clientX - touch1.clientX;
-    const dy = touch2.clientY - touch1.clientY;
-    return Math.sqrt(dx * dx + dy * dy);
-  }
-
-  /**
-   * Swipe horizontal rápido (1 dedo): dx negativo => próxima página; positivo => anterior.
-   * Não substitui tap/long press nas zonas — GestureButton cancela tap se houve movimento grande.
-   */
-  function trySwipePageTurn(e: TouchEvent) {
-    if (!ENABLE_SWIPE_PAGE_NAV || !viewer) return;
-    // Modo vertical: navegação por scroll, não por swipe horizontal
-    if (navigationMode === 'vertical') return;
-    if (e.type === 'touchcancel') return;
-    const t = e.changedTouches[0];
-    if (!t) return;
-
-    const now = performance.now();
-    if (now - lastSwipePageTurnAt < SWIPE_COOLDOWN_MS) return;
-
-    const dx = t.clientX - swipePageStartX;
-    const dy = t.clientY - swipePageStartY;
-    const dt = Math.max(now - swipePageStartTime, 1);
-
-    const scale = (viewer as any).currentScale ?? 1;
-    const zoomed = scale > SWIPE_ZOOM_STRICT_SCALE;
-    const minDist =
-      SWIPE_MIN_DISTANCE_PX + (zoomed ? SWIPE_EXTRA_DISTANCE_WHEN_ZOOMED_PX : 0);
-    const minVel =
-      SWIPE_MIN_VELOCITY_PX_MS + (zoomed ? SWIPE_EXTRA_VELOCITY_WHEN_ZOOMED : 0);
-
-    if (dt > SWIPE_MAX_DURATION_MS) return;
-    if (Math.abs(dx) < minDist) return;
-    if (Math.abs(dx) < Math.abs(dy) * SWIPE_HORIZONTAL_RATIO) return;
-    const v = Math.abs(dx) / dt;
-    if (v < minVel) return;
-
-    lastSwipePageTurnAt = now;
-    if (dx < 0) {
-      nextPage();
-    } else {
-      prevPage();
-    }
-    e.preventDefault();
-  }
-
-  // ── Pinch-to-zoom ──────────────────────────────────────────────────────────
-  // A estratégia de preview-then-commit separa o feedback visual (rAF + CSS transform)
-  // do re-render do PDF.js (feito uma única vez no final do gesto), dando ~60fps fluidos.
-
-  /**
-   * Inicia estado do gesto de pinch ao detectar 2 dedos.
-   * Funciona em ambos os modos (horizontal e vertical).
-   */
-  function startPinch(e: TouchEvent) {
-    if (!viewer || !containerEl) return;
-    const touches = e.touches;
-    isPinching = true;
-    swipePageGestureValid = false;
-    // Se havia page-width agendado (pagesloaded/resize/toolbar), ele não deve
-    // sobrescrever o zoom manual que o usuário está iniciando agora.
-    zoomCtrl.cancelScheduled();
-    pinchInitialDistance = getTouchDistance(touches[0], touches[1]);
-    pinchInitialScale = (viewer as any).currentScale ?? 1;
-    pinchCurrentRatio = 1;
-
-    const containerRect = containerEl.getBoundingClientRect();
-    const focalViewportX = (touches[0].clientX + touches[1].clientX) / 2;
-    const focalViewportY = (touches[0].clientY + touches[1].clientY) / 2;
-
-    // Posição do focal relativa à área visível do container
-    pinchStartFocalX = focalViewportX - containerRect.left;
-    pinchStartFocalY = focalViewportY - containerRect.top;
-
-    // Coordenada de conteúdo sob o focal (para calcular scroll ao commitar)
-    pinchStartContentX = (containerEl.scrollLeft + pinchStartFocalX) / Math.max(pinchInitialScale, 0.0001);
-    pinchStartContentY = (containerEl.scrollTop + pinchStartFocalY) / Math.max(pinchInitialScale, 0.0001);
-
-    // Ponto focal em coordenadas do viewerEl (para transform-origin do CSS preview)
-    pinchFocalXInViewer = containerEl.scrollLeft + pinchStartFocalX;
-    pinchFocalYInViewer = containerEl.scrollTop + pinchStartFocalY;
-
-    e.preventDefault();
-  }
-
-  /**
-   * Acumula o novo ratio a cada touchmove e agenda 1 frame rAF para o preview.
-   * Nunca chama viewer.currentScale durante o movimento.
-   */
-  function movePinch(e: TouchEvent) {
-    if (!isPinching || !viewerEl || !containerEl) return;
-    const currentDistance = getTouchDistance(e.touches[0], e.touches[1]);
-    if (currentDistance && pinchInitialDistance) {
-      pinchCurrentRatio = currentDistance / pinchInitialDistance;
-    }
-    // Agendar preview apenas se não há rAF pendente
-    if (!pinchRafId) {
-      pinchRafId = requestAnimationFrame(applyPinchPreview);
-    }
-    e.preventDefault();
-  }
-
-  /**
-   * Aplica CSS transform no viewerEl como preview visual barato (~60fps, sem re-render do PDF.js).
-   * Chamado via rAF para garantir no máximo 1 update por frame.
-   */
-  function applyPinchPreview() {
-    pinchRafId = null;
-    if (!viewerEl || !isPinching) return;
-    const clampedScale = Math.max(0.25, Math.min(4, pinchInitialScale * pinchCurrentRatio));
-    const ratio = clampedScale / pinchInitialScale;
-    viewerEl.style.transformOrigin = `${pinchFocalXInViewer}px ${pinchFocalYInViewer}px`;
-    viewerEl.style.transform = `scale(${ratio})`;
-  }
-
-  /**
-   * Remove o preview CSS e faz um único commit da escala final no PDF.js.
-   * Chamado quando os dedos são levantados (touches.length < 2).
-   */
-  function commitPinch() {
-    if (!isPinching) return;
-    isPinching = false;
-
-    // Cancelar rAF pendente
-    if (pinchRafId !== null) {
-      cancelAnimationFrame(pinchRafId);
-      pinchRafId = null;
-    }
-
-    // Remover preview CSS antes do commit
-    if (viewerEl) {
-      viewerEl.style.transform = '';
-      viewerEl.style.transformOrigin = '';
-    }
-
-    const finalScale = Math.max(0.25, Math.min(4, pinchInitialScale * pinchCurrentRatio));
-    const targetScrollLeft = Math.max(0, pinchStartContentX * finalScale - pinchStartFocalX);
-    const targetScrollTop = Math.max(0, pinchStartContentY * finalScale - pinchStartFocalY);
-    zoomCtrl.cancelScheduled();
-
-    // CRÍTICO: definir userScale ANTES de viewer.currentScale.
-    // O evento pagechanging disparado pelo PDF.js durante a mudança de escala consulta
-    // zoomCtrl.userScale para decidir se chama schedulePageWidth. Se userScale for null
-    // nesse momento, schedulePageWidth agenda applyPageWidth(~50ms depois), que reseta
-    // a escala para page-width e provoca o scroll voltando para (0,0).
-    zoomCtrl.setUserScale(finalScale);
-
-    // Único commit no PDF.js — aqui ocorre o re-render
-    if (viewer) {
-      viewer.currentScale = finalScale;
-    }
-
-    // Após o PDF.js reposicionar o conteúdo via scrollPageIntoView, corrigir scroll
-    // para preservar o ponto focal entre os dedos. Usar snapshots calculados antes
-    // da limpeza do estado, senão a rAF leria variáveis já zeradas e iria para (0,0).
-    requestAnimationFrame(() => {
-      if (!containerEl) return;
-      containerEl.scrollLeft = targetScrollLeft;
-      containerEl.scrollTop = targetScrollTop;
-    });
-
-    // Limpar estado do pinch
-    pinchInitialDistance = 0;
-    pinchInitialScale = 1;
-    pinchCurrentRatio = 1;
-    pinchStartFocalX = 0;
-    pinchStartFocalY = 0;
-    pinchStartContentX = 0;
-    pinchStartContentY = 0;
-    pinchFocalXInViewer = 0;
-    pinchFocalYInViewer = 0;
-  }
-  // ──────────────────────────────────────────────────────────────────────────
-
-  // Handle touch start for gestures
-  function onTouchStart(e: TouchEvent) {
-    if (!viewer || !containerEl) return;
-
-    // PINCH (2 dedos) — funciona em ambos os modos
-    if (e.touches.length === 2) {
-      startPinch(e);
-      return;
-    }
-
-    // Modo vertical: gestos de 1 dedo são nativos — scroll/pan do browser
-    if (navigationMode === 'vertical') return;
-
-    const touches = e.touches;
-
-    // Um dedo: candidato a swipe em todo o canvas (sobreposto a zonas ou PDF)
-    if (touches.length === 1 && ENABLE_SWIPE_PAGE_NAV) {
-      swipePageGestureValid = true;
-      swipePageStartX = touches[0].clientX;
-      swipePageStartY = touches[0].clientY;
-      swipePageStartTime = performance.now();
-    }
-
-    // PRIORIDADE 2: Zonas de navegação — estado para hasMoved / GestureButton
-    if (touches.length === 1) {
-      const containerRect = containerEl.getBoundingClientRect();
-      const relativeX = touches[0].clientX - containerRect.left;
-      const quarterWidth = containerRect.width / 4;
-
-      const isInLeftZone = relativeX < quarterWidth;
-      const isInRightZone = relativeX > containerRect.width - quarterWidth;
-
-      if (!isInLeftZone && !isInRightZone) {
-        return;
-      }
-
-      touchStartX = touches[0].clientX;
-      touchStartY = touches[0].clientY;
-      touchStartTime = Date.now();
-      hasMoved = false;
-    }
-  }
-
-  // Handle touch move for gestures
-  function onTouchMove(e: TouchEvent) {
-    if (!viewer || !containerEl) return;
-
-    // PINCH (2 dedos) — funciona em ambos os modos
-    if (e.touches.length === 2 && isPinching) {
-      movePinch(e);
-      return;
-    }
-
-    // Modo vertical: gestos de 1 dedo são nativos — scroll/pan do browser
-    if (navigationMode === 'vertical') return;
-
-    const touches = e.touches;
-
-    // Single touch: check if it moved significantly
-    if (touches.length === 1 && !isPinching) {
-      // Impede pan nativo da viewport durante swipe horizontal entre páginas.
-      const swipeDx = touches[0].clientX - swipePageStartX;
-      const swipeDy = touches[0].clientY - swipePageStartY;
-      const isMostlyHorizontalSwipe = Math.abs(swipeDx) > Math.abs(swipeDy) * 1.1;
-      if (ENABLE_SWIPE_PAGE_NAV && swipePageGestureValid && isMostlyHorizontalSwipe) {
-        e.preventDefault();
-      }
-
-      // Em page-fit sem zoom relevante, evita micro-scroll vertical residual do browser.
-      const currentScale = (viewer as any).currentScale ?? 1;
-      if (preferredFitMode === 'page-fit' && currentScale <= 1.02) {
-        e.preventDefault();
-      }
-
-      const dx = Math.abs(touches[0].clientX - touchStartX);
-      const dy = Math.abs(touches[0].clientY - touchStartY);
-
-      if (dx > TOUCH_MOVE_THRESHOLD || dy > TOUCH_MOVE_THRESHOLD) {
-        hasMoved = true;
-      }
-    }
-  }
-
-  // Handle touch end for gestures
-  function onTouchEnd(e: TouchEvent) {
-    if (!viewer || !containerEl) return;
-
-    // PINCH terminou (dedos levantados abaixo de 2)
-    if (isPinching && e.touches.length < 2) {
-      commitPinch();
-      swipePageGestureValid = false;
-      touchStartX = 0;
-      touchStartY = 0;
-      touchStartTime = 0;
-      hasMoved = false;
-      return;
-    }
-
-    // Modo vertical: gestos de 1 dedo são nativos
-    if (navigationMode === 'vertical') return;
-
-    const touches = e.touches;
-
-    if (e.type === 'touchcancel') {
-      swipePageGestureValid = false;
-    } else if (
-      ENABLE_SWIPE_PAGE_NAV &&
-      swipePageGestureValid &&
-      !isPinching &&
-      touches.length === 0
-    ) {
-      trySwipePageTurn(e);
-    }
-
-    swipePageGestureValid = false;
-
-    // Navegação por toque simples é processada pelos GestureButtons
-    touchStartX = 0;
-    touchStartY = 0;
-    touchStartTime = 0;
-    hasMoved = false;
-  }
-  
   // Função para navegar para a tela inicial
   // Tenta usar history.go(-1) primeiro, se não houver histórico usa goto('/')
   // No Safari iOS, verificações de histórico não são confiáveis, então usamos uma abordagem simples
@@ -1360,6 +1041,7 @@
   $: showZoomFit = deviceType !== 'mobile' || activeToolbarLayer === 1 || activeToolbarLayer === 3;
   $: showZoomPlus = deviceType !== 'mobile' || activeToolbarLayer === 3;
   $: showLayerToggle = deviceType === 'mobile';
+  $: showBrightness = deviceType !== 'mobile' || activeToolbarLayer === 3;
   // ──────────────────────────────────────────────────────────────────────────────
 
   // Reativo: atualizar altura do container quando a visibilidade da barra mudar
@@ -1667,6 +1349,29 @@
     font-weight: 700;
     font-size: 0.875rem;
     min-width: var(--tbtn-h);
+  }
+
+  /* brightness-toggle: mesma estrutura de zoom-fit — GestureButton preenche a área do .btn */
+  .btn.brightness-toggle {
+    padding: 0;
+    cursor: pointer;
+    position: relative;
+  }
+  .btn.brightness-toggle :global(.gesture-button-wrapper) {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 3px;
+    height: 100%;
+    min-width: var(--tbtn-h);
+    padding: 0 var(--tbtn-px);
+    position: relative;
+    box-sizing: border-box;
+  }
+  .brightness-value {
+    font-size: 0.6875rem;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
   }
 
   /* Indicadores de modo no zoom-fit */
@@ -2007,6 +1712,25 @@
       </button>
     {/if}
 
+    {#if showBrightness}
+      <!-- brightness-toggle: mesma estrutura de zoom-fit — GestureButton preenche o .btn, sem button aninhado -->
+      <div class="btn brightness-toggle">
+        <GestureButton
+          on:click={cycleBrightness}
+          on:longpress={resetBrightness}
+          longPressDuration={500}
+          hapticFeedback={true}
+          preventDefault={true}
+          ariaLabel="Brilho da página: {readerBrightness}% — toque para alternar entre predefinições, toque longo para voltar ao padrão"
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="icon">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M12 3v2.25m6.364.386-1.591 1.591M21 12h-2.25m-.386 6.364-1.591-1.591M12 18.75V21m-4.773-4.227-1.591 1.591M5.25 12H3m4.227-4.773L5.636 5.636M15.75 12a3.75 3.75 0 1 1-7.5 0 3.75 3.75 0 0 1 7.5 0Z" />
+          </svg>
+          <span class="brightness-value">{readerBrightness}%</span>
+        </GestureButton>
+      </div>
+    {/if}
+
     {#if showNavMode}
       <button
         class="btn nav-mode-toggle"
@@ -2081,7 +1805,7 @@
   </div>
 {/if}
 
-<div id="viewerContainer" bind:this={containerEl} class="container {containerClass}" class:vertical-nav={navigationMode === 'vertical'} class:hidden={pdfLoading || pdfError}>
+<div id="viewerContainer" bind:this={containerEl} class="container {containerClass}" class:vertical-nav={navigationMode === 'vertical'} class:hidden={pdfLoading || pdfError} style:filter="brightness({readerBrightness}%)">
   <!-- Elemento focável invisível para ativar sistema de eventos de teclado no iOS -->
   <textarea
     bind:this={keyboardFocusEl}

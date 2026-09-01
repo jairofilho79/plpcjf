@@ -9,12 +9,7 @@ import offlineEvents, { EVENTS } from '../core/OfflineEvents.js';
 import { createLogger } from '../utils/OfflineLogger.js';
 import { browser } from '$app/environment';
 import PdfPathManager from '../utils/PdfPathManager.js';
-import { 
-  encodeUrlUtf8, 
-  decodeUrlUtf8, 
-  encodeUrlComponentUtf8, 
-  decodeUrlComponentUtf8
-} from '$lib/utils/urlEncoding.js';
+import { decodeUrlUtf8 } from '$lib/utils/urlEncoding.js';
 
 const logger = createLogger('CacheStorageAdapter');
 
@@ -24,7 +19,7 @@ const logger = createLogger('CacheStorageAdapter');
  */
 export class CacheStorageAdapter extends CacheRepository {
   /**
-   * @param {string} [cacheName] - Cache name (defaults to config)
+   * @param {string | null} [cacheName] - Cache name (defaults to config)
    */
   constructor(cacheName = null) {
     super();
@@ -194,56 +189,35 @@ export class CacheStorageAdapter extends CacheRepository {
       }
 
       const cache = await this._openCache();
-      
-      // Use PdfPathManager to generate search variations
-      const searchVariations = PdfPathManager.createSearchVariations(pdfPath, window.location.origin);
 
-      for (const url of searchVariations) {
+      // #22.5: uma chave só. As "variações" eram, medidas sobre os 4629
+      // caminhos reais, a mesma string repetida mais duas formas sem origem que
+      // `new Request` resolvia contra a página — nunca contra uma chave gravada.
+      const url = PdfPathManager.createRequestUrl(pdfPath, window.location.origin);
+      if (url) {
         try {
-          const request = new Request(url);
-          const response = await cache.match(request);
+          const response = await cache.match(new Request(url));
           if (response) {
-            // Cache successful result
             this._variationCache.set(normalizedPath, {
               found: true,
               url: url,
               timestamp: Date.now()
             });
-            logger.debug('CacheStorageAdapter', `PDF found in cache: ${normalizedPath}`);
+            logger.debug('CacheStorageAdapter', `PDF encontrado no cache: ${normalizedPath}`);
             return response;
           }
-        } catch (e) {
-          // Continue to next variation
+        } catch {
+          // URL malformada: trata como miss.
         }
       }
 
-      // Last resort: Try additional variations with different UTF-8 encodings
-      const fallbackVariations = [
-        PdfPathManager.createRequestUrl(normalizedPath, window.location.origin),
-        // Try with encodeUrlComponentUtf8 (more aggressive UTF-8 encoding)
-        PdfPathManager.createRequestUrl(encodeUrlComponentUtf8(normalizedPath), window.location.origin),
-        // Try filename-only matching as last resort (less reliable)
-        normalizedPath.split('/').pop()
-      ].filter(Boolean);
-
-      for (const url of fallbackVariations) {
-        try {
-          const request = new Request(url);
-          const response = await cache.match(request);
-          if (response) {
-            // Cache successful result
-            this._variationCache.set(normalizedPath, {
-              found: true,
-              url: url,
-              timestamp: Date.now()
-            });
-            logger.debug('CacheStorageAdapter', `PDF found in cache (fallback): ${normalizedPath}`);
-            return response;
-          }
-        } catch (e) {
-          // Continue to next variation
-        }
-      }
+      // #22.4: o bloco de fallback saiu. Suas três tentativas eram, medidas
+      // sobre os 4629 caminhos reais: a chave canônica de novo (4629/4629
+      // idêntica), a mesma chave depois de um encodeURIComponent que
+      // `normalizeForStorage` desfaz (4629/4629 idêntica), e o nome do arquivo
+      // nu — que `new Request` resolve contra o diretório da página, nunca
+      // contra /assets/, e que só poderia acertar outro PDF: 1036 arquivos do
+      // acervo se chamam `Cifra I.pdf`.
 
       // Not found - cache the miss to avoid repeated attempts
       this._missCache.add(normalizedPath);
@@ -275,7 +249,11 @@ export class CacheStorageAdapter extends CacheRepository {
    * @param {boolean} [options.emitEvents=true] - Whether to emit events
    * @param {boolean} [options.notifyServiceWorker=true] - Whether to notify service worker
    * @returns {Promise<{normalizedPath: string, requestUrl: string}>} Storage result
-   * @private
+   *
+   * Não é privado de fato: `PackageDownloader.storePdfsInCache` chama isto
+   * entre módulos de propósito (armazenamento em lote, sem eventos/SW por
+   * item). O `_` já sinaliza "uso interno com cuidado"; `@private` aqui
+   * seria uma anotação que não bate com o uso real.
    */
   async _putPdfInternal(pdfPath, pdfData, options = {}) {
     const { emitEvents = true, notifyServiceWorker = true } = options;
@@ -482,20 +460,15 @@ export class CacheStorageAdapter extends CacheRepository {
       }
 
       const cache = await this._openCache();
-      
-      // Use PdfPathManager to generate search variations for deletion
-      const urlVariations = PdfPathManager.createSearchVariations(pdfPath, window.location.origin);
 
+      // #22.5: apaga a chave canônica — a mesma que `_putPdfInternal` grava.
+      const url = PdfPathManager.createRequestUrl(pdfPath, window.location.origin);
       let deleted = false;
-      for (const url of urlVariations) {
+      if (url) {
         try {
-          const request = new Request(url);
-          const result = await cache.delete(request);
-          if (result) {
-            deleted = true;
-          }
-        } catch (e) {
-          // Continue to next variation
+          deleted = await cache.delete(new Request(url));
+        } catch {
+          deleted = false;
         }
       }
 

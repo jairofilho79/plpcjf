@@ -23,32 +23,49 @@ import {
   fetchWithRetry,
   excludeSkippedPartFromBytesTotal
 } from '$lib/offline/download/partProgress.js';
+import { verifyCompletedPart } from '$lib/offline/download/partVerification.js';
 import { louvores } from './louvores';
 import { validateManifestsIntegrity } from '$lib/utils/manifestValidation';
 import { CATEGORY_OPTIONS } from './filters';
-import { atobUTF8, getPdfRelPath } from '$lib/utils/pathUtils';
-import { findMissingPdfs, findRequiredPackages } from '$lib/utils/pdfValidation';
-import { getConfig } from '$lib/offline/core/OfflineConfig.js';
-import { 
-  encodeUrlUtf8, 
-  decodeUrlUtf8, 
-  encodeUrlComponentUtf8, 
-  decodeUrlComponentUtf8, 
+import { getPdfRelPath } from '$lib/utils/pathUtils';
+import PdfPathManager from '$lib/offline/utils/PdfPathManager.js';
+import {
+  encodeUrlUtf8,
+  decodeUrlUtf8,
+  encodeUrlComponentUtf8,
+  decodeUrlComponentUtf8,
   createUrlUtf8,
   decodeUrlUtf8Multiple
 } from '$lib/utils/urlEncoding.js';
+import {
+  normalizeCategory,
+  getCategoryVariants,
+  openPdfCache,
+  getPdfUrl,
+  getSavedCategories,
+  saveCategories,
+  getDownloadedCategories,
+  saveDownloadedCategories,
+  isCategoryCompletelyDownloaded,
+  getCompletelyDownloadedCategories,
+  SELECTED_CATEGORIES_KEY,
+  DOWNLOADED_CATEGORIES_KEY,
+  OFFLINE_CATEGORIAS_SALVAS
+} from './offlineDownloadedCategories.js';
+import {
+  identifyMissingPdfs,
+  findRequiredPackagesForMissing,
+  clearStatsCalculationCache,
+  getCategoryAvailabilityStats,
+  getRequiredPackagesInfo
+} from './offlineStats.js';
 
 const ALLOW_OFFLINE_KEY = 'ALLOW_OFFLINE';
 const CACHED_PDFS_KEY = 'cachedPdfsList';
 const LAST_MANIFEST_HASH_KEY = 'lastManifestHash';
-const SELECTED_CATEGORIES_KEY = 'selectedCategoriesForDownload';
-const DOWNLOADED_CATEGORIES_KEY = 'downloadedCategories';
-const OFFLINE_CATEGORIAS_SALVAS = 'OFFLINE_CATEGORIAS_SALVAS';
 const OFFLINE_MANIFEST_KEY = 'offlineManifest';
 
 const PACKAGES_BASE_PATH = '/packages';
-// Use centralized cache name from OfflineConfig - ensures consistency across all code
-const DEFAULT_PDF_CACHE_FALLBACK = getConfig('PDF_CACHE_NAME') || 'plpc-pdfs';
 /**
  * @type {AbortController | null}
  */
@@ -94,32 +111,6 @@ function normalizePackageUrl(url, filename) {
   
   // Otherwise, treat as filename and add base path
   return `${PACKAGES_BASE_PATH}/${url}`;
-}
-
-/**
- * Normalize category name - aggregates subcategories into main category
- * Maps "Cifra nível I" and "Cifra nível II" to "Cifra"
- * @param {string} category - Category name to normalize
- * @returns {string} Normalized category name
- */
-function normalizeCategory(category) {
-  if (!category) return category;
-  if (category === 'Cifra nível I' || category === 'Cifra nível II') {
-    return 'Cifra';
-  }
-  return category;
-}
-
-/**
- * Get all categories that should be aggregated into a normalized category
- * @param {string} normalizedCategory - Normalized category name
- * @returns {string[]} Array of category names that map to this normalized category
- */
-function getCategoryVariants(normalizedCategory) {
-  if (normalizedCategory === 'Cifra') {
-    return ['Cifra', 'Cifra nível I', 'Cifra nível II'];
-  }
-  return [normalizedCategory];
 }
 
 // Offline state
@@ -492,16 +483,6 @@ function getManifestHash(louvoresData) {
   return sortedPdfs;
 }
 
-async function openPdfCache() {
-  if (!browser || typeof caches === 'undefined') {
-    throw new Error('Caches API nao esta disponivel neste ambiente');
-  }
-
-  // Always use the configured cache name to ensure consistency
-  // Don't search for any cache ending with '-pdfs' as this can cause mismatches
-  return caches.open(DEFAULT_PDF_CACHE_FALLBACK);
-}
-
 /**
  * Remove arquivo ZIP do cache após descompactação
  * @param {RequestInfo | URL} zipUrl
@@ -525,47 +506,6 @@ async function removeZipFromCache(zipUrl) {
   } catch (error) {
     console.warn(`[Offline Store] Failed to remove ZIP from cache: ${zipUrl}`, error);
   }
-}
-
-/**
- * Prepare ZIP entry name for cache storage (preserves case and accents)
- * CRITICAL: Does NOT normalize (no lowercase, no accent removal) - only prepares path format
- * @param {string} entryName
- */
-function normalizeZipEntryName(entryName) {
-  if (!entryName) {
-    return '';
-  }
-
-  // Prepare path preserving original case and accents
-  // Only do basic preparation: remove protocol, trim slashes, decode URI, normalize separators, ensure assets/ prefix
-  let prepared = entryName.replace(/^https?:\/\/[^/]+/, '');
-  prepared = prepared.replace(/^\/+/, '').replace(/\/+$/, '');
-  
-  // Decode URI encoding (handle multiple encodings) but preserve case and accents
-  // Use UTF-8 explicit decoding
-  try {
-    if (prepared.includes('%')) {
-      prepared = decodeUrlUtf8Multiple(prepared, 3);
-    }
-  } catch {
-    // If decoding fails, continue with original
-  }
-  
-  // Normalize path separators (Windows vs Unix)
-  prepared = prepared.replace(/\\/g, '/');
-  
-  // Ensure starts with 'assets/' (case-insensitive check, but preserve original case)
-  if (!prepared.toLowerCase().startsWith('assets/')) {
-    prepared = `assets/${prepared}`;
-  }
-  
-  if (!prepared || prepared.endsWith('/')) {
-    return '';
-  }
-
-  // Return with leading slash for consistency with existing cache storage format
-  return `/${prepared}`;
 }
 
 /**
@@ -701,11 +641,20 @@ function fingerprintForCategory(category, manifest, fallbackParts) {
 }
 
 /**
- * Conjunto estrito dos caminhos que já estão no cache de PDFs.
+ * Conjunto dos caminhos que já estão no cache de PDFs.
  *
- * Estrito de propósito: `buildPdfCacheIndex` também casa por nome de arquivo, e
- * como quase toda parte tem um "Coro.pdf" isso daria falso positivo justamente
- * na hora de decidir se uma parte pode ser pulada.
+ * Era "estrito de propósito" porque `buildPdfCacheIndex` casava por nome de
+ * arquivo e daria falso positivo justamente na hora de decidir se uma parte pode
+ * ser pulada. #22.3 removeu esse fallback: o índice agora é tão estrito quanto
+ * este Set, e esta função sobrevive só por ser o caminho mais direto para ler o
+ * cache de uma vez.
+ *
+ * Achado I1: `toComparablePath` desfaz percent-encoding mas não unifica a
+ * forma Unicode. As chaves do cache pós-migração já são NFC (#22.2); sem
+ * normalizar aqui também, os caminhos comparados contra este Set em
+ * `verifyCompletedPart` (ver `getPdfRelPathNormalizado` abaixo) nunca batiam
+ * para os 8 caminhos do acervo que chegam em NFD — a retomada rebaixava até
+ * 3 das 31 partes (~30 MB) já presentes no cache.
  *
  * @param {Cache} cache
  * @returns {Promise<Set<string> | null>} null quando não deu para ler o cache
@@ -716,7 +665,7 @@ async function readCachedPdfPaths(cache) {
     /** @type {Set<string>} */
     const paths = new Set();
     for (const request of keys) {
-      const path = toComparablePath(request.url);
+      const path = PdfPathManager.normalizeForStorage(toComparablePath(request.url));
       if (path) paths.add(path);
     }
     return paths;
@@ -727,40 +676,18 @@ async function readCachedPdfPaths(cache) {
 }
 
 /**
- * Caminhos relativos ("assets/…") dos PDFs declarados em uma parte do manifesto.
- * @param {any} part
- * @returns {string[]}
+ * `getPdfRelPath` devolve o caminho cru decodificado do `pdfId` — NFD para os
+ * 8 caminhos do acervo que chegam assim. `readCachedPdfPaths` acima e o
+ * `remaining` da retomada (mais abaixo, via `prepareForComparison`) já
+ * normalizam para NFC com `PdfPathManager.normalizeForStorage`; sem fazer o
+ * mesmo aqui, `verifyCompletedPart` compara um caminho NFD contra as duas
+ * outras pontas em NFC e nunca marca a parte como pulável (achado I1).
+ * @param {{ pdfId: string }} louvor
+ * @returns {string | null}
  */
-function getPartPdfPaths(part) {
-  const ids = Array.isArray(part?.pdfs) ? part.pdfs : [];
-  /** @type {string[]} */
-  const paths = [];
-  for (const pdfId of ids) {
-    if (typeof pdfId !== 'string') continue;
-    const relPath = getPdfRelPath({ pdfId });
-    if (relPath) paths.push(relPath);
-  }
-  return paths;
-}
-
-/**
- * Decide se uma parte marcada como concluída pode mesmo ser pulada.
- *
- * Só pula se todos os PDFs declarados na parte estiverem de fato no cache: a
- * marca no localStorage sozinha não basta (o usuário pode ter limpado o cache
- * entre as duas tentativas).
- *
- * @param {any} part
- * @param {Set<string> | null} cachedPaths
- * @returns {{ skippable: boolean, paths: string[] }}
- */
-function verifyCompletedPart(part, cachedPaths) {
-  const paths = getPartPdfPaths(part);
-  if (!cachedPaths || paths.length === 0) {
-    return { skippable: false, paths };
-  }
-  const skippable = paths.every((path) => cachedPaths.has(path));
-  return { skippable, paths };
+function getPdfRelPathNormalizado(louvor) {
+  const relPath = getPdfRelPath(louvor);
+  return relPath ? PdfPathManager.normalizeForStorage(relPath) : null;
 }
 
 /**
@@ -801,15 +728,21 @@ async function startZipDownloadWithSpecificParts(categories, pdfUrls, partsByCat
   isZipDownloadActive = true;
 
   const total = pdfUrls.length;
-  // Use original PDF URLs for comparison (no normalization)
-  // Prepare paths for comparison (remove leading slash, preserve case and accents)
-  const prepareForComparison = (/** @type {string} */ url) => {
-    const path = url.replace(/^\/+/, '');
-    return path || '';
-  };
+  // #22.2: os dois lados da comparação passam pelo normalizador canônico, senão
+  // um caminho em NFD vindo do pdfId nunca casa com a entrada de ZIP já em NFC.
+  const prepareForComparison = (/** @type {string} */ url) =>
+    PdfPathManager.normalizeForStorage(url);
   
   // Índice O(1) dos PDFs desejados; `remaining` controla o que ainda falta gravar.
-  const wantedIndex = buildPdfCacheIndex(pdfUrls);
+  // #22.2: sem o `normalize` aqui, `wantedIndex.has(preparedPath)` compara um
+  // `preparedPath` já em NFC (via normalizeForStorage) contra entradas ainda
+  // em NFD (pdfUrls vem do pdfId, sem NFC) — para os 5 dos 8 caminhos NFD cujo
+  // acento está no próprio nome de arquivo, nem o basename bate, e o PDF
+  // deixaria de ser gravado a partir do ZIP, silenciosamente.
+  // #22.3: `buildPdfCacheIndex` perdeu o fallback por nome de arquivo que
+  // disfarçava esse mesmo problema para outros casos — o `normalize` acima
+  // agora é a única guarda contra o PDF em NFD ser pulado em silêncio.
+  const wantedIndex = buildPdfCacheIndex(pdfUrls, { normalize: PdfPathManager.normalizeForStorage });
   const remaining = new Set(pdfUrls.map(prepareForComparison));
   let completed = 0;
 
@@ -879,7 +812,7 @@ async function startZipDownloadWithSpecificParts(categories, pdfUrls, partsByCat
         }));
 
         if (completedParts.has(part.filename)) {
-          const { skippable, paths } = verifyCompletedPart(part, cachedPaths);
+          const { skippable, paths } = verifyCompletedPart(part, cachedPaths, getPdfRelPathNormalizado);
 
           if (skippable) {
             console.info(`[Offline Store] Parte já baixada, pulando: ${part.filename}`);
@@ -968,7 +901,9 @@ async function startZipDownloadWithSpecificParts(categories, pdfUrls, partsByCat
             throw new Error('DOWNLOAD_CANCELLED');
           }
 
-          const preparedPath = normalizeZipEntryName(name);
+          // #22.5: o normalizador canônico direto, sem o invólucro que só
+          // acrescentava a barra inicial.
+          const preparedPath = PdfPathManager.normalizeForStorage(name);
           if (!preparedPath || !preparedPath.endsWith('.pdf')) continue;
 
           const pathForComparison = prepareForComparison(preparedPath);
@@ -978,7 +913,7 @@ async function startZipDownloadWithSpecificParts(categories, pdfUrls, partsByCat
           if (!remaining.has(pathForComparison)) continue;
 
           const pdfBlob = new Blob([data], { type: 'application/pdf' });
-          const requestUrl = createUrlUtf8(preparedPath, location.origin);
+          const requestUrl = PdfPathManager.createRequestUrl(preparedPath, location.origin);
           const pdfResponse = new Response(pdfBlob, {
             headers: { 'Content-Type': 'application/pdf' }
           });
@@ -1130,322 +1065,6 @@ async function startZipDownloadWithSpecificParts(categories, pdfUrls, partsByCat
 }
 
 /**
- * Get saved selected categories from localStorage
- */
-function getSavedCategories() {
-  if (!browser) return [];
-  try {
-    const saved = localStorage.getItem(SELECTED_CATEGORIES_KEY);
-    return saved ? JSON.parse(saved) : [];
-  } catch (e) {
-    return [];
-  }
-}
-
-/**
- * Save selected categories to localStorage
- * @param {any} categories
- */
-function saveCategories(categories) {
-  if (!browser) return;
-  try {
-    localStorage.setItem(SELECTED_CATEGORIES_KEY, JSON.stringify(categories));
-  } catch (e) {
-    console.error('[Offline Store] Failed to save categories:', e);
-  }
-}
-
-/**
- * Get downloaded categories from localStorage
- * Uses OFFLINE_CATEGORIAS_SALVAS flag to store categories that are saved in cache storage
- */
-function getDownloadedCategories() {
-  if (!browser) return [];
-  try {
-    // First try the new flag
-    const saved = localStorage.getItem(OFFLINE_CATEGORIAS_SALVAS);
-    if (saved) {
-      return JSON.parse(saved);
-    }
-    // Fallback to old key for migration
-    const oldSaved = localStorage.getItem(DOWNLOADED_CATEGORIES_KEY);
-    if (oldSaved) {
-      const categories = JSON.parse(oldSaved);
-      // Migrate to new key
-      localStorage.setItem(OFFLINE_CATEGORIAS_SALVAS, oldSaved);
-      return categories;
-    }
-    return [];
-  } catch (e) {
-    console.error('[Offline Store] Failed to get downloaded categories:', e);
-    return [];
-  }
-}
-
-/**
- * Save downloaded categories to localStorage
- * Uses OFFLINE_CATEGORIAS_SALVAS flag to store categories that are saved in cache storage
- * @param {any[]} categories
- */
-function saveDownloadedCategories(categories) {
-  if (!browser) return;
-  try {
-    localStorage.setItem(OFFLINE_CATEGORIAS_SALVAS, JSON.stringify(categories));
-    // Also save to old key for backward compatibility
-    localStorage.setItem(DOWNLOADED_CATEGORIES_KEY, JSON.stringify(categories));
-  } catch (e) {
-    console.error('[Offline Store] Failed to save downloaded categories:', e);
-  }
-}
-
-/**
- * Verify if a PDF actually exists in Cache Storage
- * This performs a real check in the cache, not just in the list
- * @param {string | URL} pdfUrl
- */
-async function verifyPdfInCacheStorage(pdfUrl) {
-  if (!browser || typeof caches === 'undefined') {
-    return false;
-  }
-  
-  try {
-    const cache = await openPdfCache();
-    
-    // CRITICAL: Cache stores with URL encoding (new URL() does automatic encoding)
-    // So we must try with URL encoding FIRST to match what's actually stored
-    // Ensure pdfUrl is a string
-    const pdfUrlStr = typeof pdfUrl === 'string' ? pdfUrl : String(pdfUrl);
-    
-    const urlVariations = [
-      // Try with URL encoding first (as stored in cache by new URL())
-      new URL(pdfUrlStr, location.origin).toString(),
-      // Also try with explicit encoding
-      new URL(encodeURI(pdfUrlStr), location.origin).toString(),
-      // Try path with leading slash and encoding
-      new URL(pdfUrlStr.startsWith('/') ? pdfUrlStr : `/${pdfUrlStr}`, location.origin).toString(),
-      // Fallback: try without encoding (for compatibility)
-      pdfUrlStr.startsWith('/') ? pdfUrlStr : `/${pdfUrlStr}`,
-      pdfUrlStr.replace(/^\/+/, ''),
-      pdfUrlStr
-    ];
-    
-    for (const url of urlVariations) {
-      try {
-        const request = new Request(url);
-        const response = await cache.match(request);
-        if (response) {
-          return true;
-        }
-      } catch (e) {
-        // Continue to next variation
-      }
-    }
-    
-    return false;
-  } catch (error) {
-    console.warn(`[Offline Store] Error verifying PDF in cache: ${pdfUrl}`, error);
-    return false;
-  }
-}
-
-/**
- * Check if a category is completely downloaded (all PDFs are in cache storage)
- * IMPORTANT: This checks PDFs in cache storage, NOT ZIP files.
- * ZIP files are removed from cache after extraction, so we verify PDFs directly.
- * Uses unified normalization function for consistency.
- * 
- * FIX: Added strict validation mode for problematic categories like "Gestos em Gravura"
- * that verifies directly in Cache Storage to avoid false positives from filename matching.
- * FIX: Now handles category normalization - aggregates "Cifra nível I" and "Cifra nível II" into "Cifra"
- * @param {string} category
- * @param {any[]} cachedPdfs
- * @param {any[]} louvoresData
- */
-async function isCategoryCompletelyDownloaded(category, cachedPdfs, louvoresData, strictMode = false) {
-  if (!category || !louvoresData || !cachedPdfs) {
-    return false;
-  }
-
-  // Normalize category name - aggregate subcategories
-  const normalizedCategory = normalizeCategory(category);
-  
-  // Get all PDFs for this category and its variants (e.g., for "Cifra" include "Cifra nível I" and "Cifra nível II")
-  const categoryVariants = getCategoryVariants(normalizedCategory);
-  const categoryLouvores = louvoresData.filter((/** @type {{ categoria: any; }} */ louvor) => 
-    categoryVariants.includes(louvor.categoria)
-  );
-  
-  if (categoryLouvores.length === 0) {
-    return false;
-  }
-
-  // FIX: For "Gestos em Gravura", always use strict mode to avoid false positives
-  // This category has many PDFs with the same filename, causing validation issues
-  if (category === 'Gestos em Gravura') {
-    strictMode = true;
-  }
-
-  // Use original paths for comparison (no normalization)
-  // Create set of cached PDFs using original paths
-  const cachedPdfsSet = new Set(
-    cachedPdfs.map((/** @type {string} */ url) => {
-      // Prepare path (remove leading slash for comparison)
-      const path = url.replace(/^\/+/, '');
-      return path;
-    })
-  );
-
-  // Track unique PDFs found for counting validation
-  const foundPdfs = new Set();
-  let missingCount = 0;
-
-  // Check if all PDFs for this category are in cache
-  for (const louvor of categoryLouvores) {
-    const pdfUrl = getPdfUrl(louvor);
-    if (!pdfUrl) {
-      continue;
-    }
-
-    // Prepare PDF URL for comparison (remove leading slash, preserve original case and accents)
-    const pdfPath = pdfUrl.replace(/^\/+/, '');
-
-    // CRITICAL: Always verify directly in Cache Storage first
-    // The cache stores with URL encoding, so direct verification is most reliable
-    let isCached = false;
-    
-    // Primary strategy: Direct verification in Cache Storage (most reliable)
-    // This handles URL encoding correctly and doesn't use normalization
-    const existsInCache = await verifyPdfInCacheStorage(pdfUrl);
-    if (existsInCache) {
-      isCached = true;
-      foundPdfs.add(pdfPath);
-    }
-    
-    // Fallback strategies: Use original path comparison only if direct verification fails
-    // This provides compatibility with old cache entries or edge cases
-    if (!isCached && !strictMode) {
-      // Strategy 1: Exact match in cached list
-      if (cachedPdfsSet.has(pdfPath)) {
-        isCached = true;
-        foundPdfs.add(pdfPath);
-      }
-      
-      // Strategy 2: Partial match (check if any cached path ends with expected path)
-      if (!isCached) {
-        isCached = Array.from(cachedPdfsSet).some(cached => {
-          // Check if paths match (handling different URL formats)
-          if (cached === pdfPath) return true;
-          // Only accept if cached path ends with expected path (not vice versa)
-          if (cached.endsWith(pdfPath)) return true;
-          
-          // Check filename match only if paths are similar
-          const cachedFilename = cached.split('/').pop();
-          const expectedFilename = pdfPath.split('/').pop();
-          if (cachedFilename && expectedFilename && cachedFilename === expectedFilename) {
-            // Additional check: paths should be similar (same directory structure)
-            const cachedDir = cached.replace(cachedFilename, '');
-            const expectedDir = pdfPath.replace(expectedFilename, '');
-            if (cachedDir && expectedDir && cachedDir.includes(expectedDir)) {
-              return true;
-            }
-          }
-          
-          return false;
-        });
-        
-        if (isCached) {
-          foundPdfs.add(pdfPath);
-        }
-      }
-    }
-
-    if (!isCached) {
-      missingCount++;
-      if (missingCount <= 3) { // Log first 3 missing PDFs to avoid spam
-        console.warn(`[Offline Store] PDF not found in cache: ${pdfUrl}`);
-        if (strictMode) {
-          console.warn(`[Offline Store] Strict mode: verified directly in cache storage - NOT FOUND`);
-        }
-      }
-    }
-  }
-
-  // FIX: Additional validation - count unique PDFs found vs expected
-  const expectedCount = categoryLouvores.filter((/** @type {any} */ l) => getPdfUrl(l)).length;
-  const foundCount = foundPdfs.size;
-  
-  // FIX: Tolerância de 99% - considerar completa se tiver 99% ou mais dos PDFs
-  // Isso evita marcar como incompleta categorias que estão praticamente completas
-  // (ex: 1631/1633 = 99.88% deve ser considerada completa)
-  const COMPLETION_THRESHOLD = 0.99; // 99%
-  const completionPercentage = foundCount / expectedCount;
-  
-  if (completionPercentage < COMPLETION_THRESHOLD) {
-    console.warn(`[Offline Store] Category "${category}": Found ${foundCount}/${expectedCount} PDFs (${(completionPercentage * 100).toFixed(2)}%). Marking as incomplete.`);
-    return false;
-  }
-  
-  // Log success for debugging
-  if (completionPercentage >= COMPLETION_THRESHOLD) {
-    if (foundCount === expectedCount) {
-      console.log(`[Offline Store] Category "${normalizedCategory}": Strict validation passed - ${foundCount} PDFs verified.`);
-    } else {
-      console.log(`[Offline Store] Category "${normalizedCategory}": ${(completionPercentage * 100).toFixed(2)}% complete (${foundCount}/${expectedCount} PDFs). Marking as complete.`);
-    }
-  }
-
-  // Invalidate stats cache for the normalized category after validation completes
-  // This ensures UI updates with fresh stats
-  try {
-    const { invalidateCategory } = await import('$lib/utils/statsCache');
-    invalidateCategory(normalizedCategory);
-    
-    // Also invalidate in StatsCalculator if available
-    try {
-      const { default: statsCalculator } = await import('$lib/offline/stats/StatsCalculator.js');
-      statsCalculator.invalidateCategory(normalizedCategory);
-    } catch (e) {
-      // Ignore if StatsCalculator not available
-    }
-  } catch (e) {
-    // Ignore errors in stats invalidation - not critical
-    console.debug('[Offline Store] Could not invalidate stats cache:', e);
-  }
-
-  return true;
-}
-
-/**
- * Get list of completely downloaded categories
- * FIX: Now normalizes categories - aggregates "Cifra nível I" and "Cifra nível II" into "Cifra"
- * @param {any[]} louvoresData
- * @param {any[]} cachedPdfs
- */
-async function getCompletelyDownloadedCategories(louvoresData, cachedPdfs) {
-  if (!louvoresData || !cachedPdfs || louvoresData.length === 0) {
-    return [];
-  }
-
-  // Get all unique categories and normalize them
-  const allCategories = [...new Set(louvoresData.map((/** @type {{ categoria: any; }} */ l) => l.categoria).filter(Boolean))];
-  const normalizedCategories = [...new Set(allCategories.map(cat => normalizeCategory(cat)))];
-  
-  const downloadedCategories = [];
-
-  // Check each normalized category (this will aggregate subcategories)
-  for (const normalizedCategory of normalizedCategories) {
-    // Check if all variants of this normalized category are downloaded
-    // We check using the normalized category name, which will aggregate subcategories
-    const isDownloaded = await isCategoryCompletelyDownloaded(normalizedCategory, cachedPdfs, louvoresData);
-    if (isDownloaded) {
-      downloadedCategories.push(normalizedCategory);
-    }
-  }
-
-  return downloadedCategories;
-}
-
-/**
  * Check for new PDFs and auto-download if enabled
  */
 async function checkForNewPDFs() {
@@ -1479,20 +1098,28 @@ async function checkForNewPDFs() {
      * @type {any[]}
      */
     const cachedPdfs = state.cachedPdfs;
-    
+
+    const indiceDeCache = buildPdfCacheIndex(cachedPdfs, {
+      normalize: (/** @type {string} */ path) => PdfPathManager.normalizeForStorage(path)
+    });
+
     // Find new PDFs that aren't cached yet AND are in the selected categories
     const newPdfs = louvoresData.filter(louvor => {
       // Only include PDFs from selected categories
       if (!savedCategories.includes(louvor.categoria)) {
         return false;
       }
-      
+
       const pdfUrl = getPdfUrl(louvor);
       if (!pdfUrl) {
         return false;
       }
-      
-      return !cachedPdfs.some(cached => cached.includes(pdfUrl));
+
+      // #22.4: era `cached.includes(pdfUrl)` — substring pura sobre milhares de
+      // URLs. Como a chave gravada é percent-encoded, ela dizia "novo" para os
+      // 2597 caminhos do acervo que têm espaço ou acento, mandando baixar de
+      // novo o que já estava no aparelho a cada mudança de manifesto.
+      return !indiceDeCache.has(pdfUrl);
     });
 
     if (newPdfs.length > 0) {
@@ -1510,58 +1137,6 @@ async function checkForNewPDFs() {
 
   // Save current hash
   localStorage.setItem(LAST_MANIFEST_HASH_KEY, currentHash);
-}
-
-/**
- * Get PDF URL from louvor object
- * @param {{ pdfId: any; }} louvor
- */
-function getPdfUrl(louvor) {
-  if (!louvor || !louvor.pdfId) {
-    return null;
-  }
-  
-  try {
-    // CRÍTICO: Usar atobUTF8 (UTF-8), NÃO atob() (latin-1)
-    // pdfId está codificado em base64 UTF-8, não latin-1
-    const decoded = atobUTF8(louvor.pdfId);
-    // normaliza removendo barras iniciais
-    let path = decoded.replace(/^\/+/, '').trim();
-    
-    if (!path) {
-      return null;
-    }
-    
-    // assegura prefixo assets/
-    if (!path.toLowerCase().startsWith('assets/')) {
-      path = `assets/${path}`;
-    }
-    
-    return `/${path}`;
-  } catch (e) {
-    console.error('[Offline Store] Failed to decode pdfId:', e);
-    return null;
-  }
-}
-
-/**
- * Identifies missing PDFs by comparing louvores-manifest.json with cache
- * @param {Array} louvoresData - Array of louvor objects
- * @param {Array} cachedPdfs - Array of cached PDF URLs
- * @returns {Array} - Array of louvor objects with missing PDFs
- */
-function identifyMissingPdfs(louvoresData, cachedPdfs) {
-  return findMissingPdfs(louvoresData, cachedPdfs);
-}
-
-/**
- * Finds required packages based on missing PDFs and offline manifest
- * @param {Array} missingPdfs - Array of louvor objects with missing PDFs
- * @param {Object} offlineManifest - Offline manifest object
- * @returns {Array} - Array of package parts that need to be downloaded
- */
-function findRequiredPackagesForMissing(missingPdfs, offlineManifest) {
-  return findRequiredPackages(missingPdfs, offlineManifest);
 }
 
 /**
@@ -1618,77 +1193,6 @@ async function downloadMissingPackages(missingPdfs) {
     // Use existing zip download function
     await startZipDownload(categoriesToDownload, pdfUrls);
   }
-}
-
-// FASE 3: Cache de memoização removido - agora usando StatsCalculator
-// Função mantida apenas para compatibilidade com código existente
-function clearStatsCalculationCache() {
-  // StatsCalculator gerencia seu próprio cache
-  // Esta função é mantida para compatibilidade mas não faz nada
-}
-
-/**
- * Get availability statistics for a category
- * FASE 4: Delegado para StatsCalculator
- * @param {string} category - Category name
- * @param {Array} louvoresData - All louvores
- * @param {Array} cachedPdfs - Cached PDF URLs
- * @returns {Promise<{total: number, available: number, missing: number, percentage: number}>}
- */
-async function getCategoryAvailabilityStats(category, louvoresData, cachedPdfs) {
-  // Usar StatsCalculator que já gerencia cache e otimizações
-  const { default: statsCalculator } = await import('$lib/offline/stats/StatsCalculator.js');
-  return await statsCalculator.getCategoryStats(category, {
-    louvoresData,
-    cachedPdfs,
-    useCache: true
-  });
-}
-
-/**
- * Get required packages info for selected categories
- * @param {Array} categories - Selected categories
- * @param {Array} louvoresData - All louvores
- * @param {Array} cachedPdfs - Cached PDF URLs
- * @param {Object} manifest - Offline manifest
- * @returns {Promise<{totalParts: number, totalSize: number, partsByCategory: Object}>}
- */
-async function getRequiredPackagesInfo(categories, louvoresData, cachedPdfs, manifest) {
-  if (!categories || categories.length === 0 || !manifest) {
-    return { totalParts: 0, totalSize: 0, partsByCategory: {} };
-  }
-
-  // Get all category variants (e.g., for "Cifra" include "Cifra nível I" and "Cifra nível II")
-  const categoryVariantsMap = new Map();
-  categories.forEach(cat => {
-    const normalized = normalizeCategory(cat);
-    const variants = getCategoryVariants(normalized);
-    categoryVariantsMap.set(normalized, variants);
-  });
-  
-  const allCategoryVariants = Array.from(categoryVariantsMap.values()).flat();
-  const filteredLouvores = louvoresData.filter(l => allCategoryVariants.includes(l.categoria));
-  const missingPdfs = identifyMissingPdfs(filteredLouvores, cachedPdfs);
-  const requiredParts = findRequiredPackagesForMissing(missingPdfs, manifest);
-
-  const partsByCategory = {};
-  let totalSize = 0;
-
-  for (const part of requiredParts) {
-    // Normalize category name when grouping parts
-    const normalizedCategory = normalizeCategory(part.category);
-    if (!partsByCategory[normalizedCategory]) {
-      partsByCategory[normalizedCategory] = [];
-    }
-    partsByCategory[normalizedCategory].push(part);
-    totalSize += part.size || 0;
-  }
-
-  return {
-    totalParts: requiredParts.length,
-    totalSize,
-    partsByCategory
-  };
 }
 
 /**
@@ -1780,7 +1284,6 @@ async function startDownload(pdfUrls, selectedCategories = []) {
   }
 }
 
-
 /**
  * Download PDFs by categories
  * @param {any[]} categories
@@ -1802,15 +1305,21 @@ async function startZipDownload(categories, pdfUrls, alreadyDownloadedCategories
   isZipDownloadActive = true;
 
   const total = pdfUrls.length;
-  // Use original PDF URLs for comparison (no normalization)
-  // Prepare paths for comparison (remove leading slash, preserve case and accents)
-  const prepareForComparison = (/** @type {string} */ url) => {
-    const path = url.replace(/^\/+/, '');
-    return path || '';
-  };
+  // #22.2: os dois lados da comparação passam pelo normalizador canônico, senão
+  // um caminho em NFD vindo do pdfId nunca casa com a entrada de ZIP já em NFC.
+  const prepareForComparison = (/** @type {string} */ url) =>
+    PdfPathManager.normalizeForStorage(url);
   
   // Índice O(1) dos PDFs desejados; `remaining` controla o que ainda falta gravar.
-  const wantedIndex = buildPdfCacheIndex(pdfUrls);
+  // #22.2: sem o `normalize` aqui, `wantedIndex.has(preparedPath)` compara um
+  // `preparedPath` já em NFC (via normalizeForStorage) contra entradas ainda
+  // em NFD (pdfUrls vem do pdfId, sem NFC) — para os 5 dos 8 caminhos NFD cujo
+  // acento está no próprio nome de arquivo, nem o basename bate, e o PDF
+  // deixaria de ser gravado a partir do ZIP, silenciosamente.
+  // #22.3: `buildPdfCacheIndex` perdeu o fallback por nome de arquivo que
+  // disfarçava esse mesmo problema para outros casos — o `normalize` acima
+  // agora é a única guarda contra o PDF em NFD ser pulado em silêncio.
+  const wantedIndex = buildPdfCacheIndex(pdfUrls, { normalize: PdfPathManager.normalizeForStorage });
   const remaining = new Set(pdfUrls.map(prepareForComparison));
   let completed = 0;
 
@@ -1900,7 +1409,7 @@ async function startZipDownload(categories, pdfUrls, alreadyDownloadedCategories
         }));
 
         if (completedParts.has(part.filename)) {
-          const { skippable, paths } = verifyCompletedPart(part, cachedPaths);
+          const { skippable, paths } = verifyCompletedPart(part, cachedPaths, getPdfRelPathNormalizado);
 
           if (skippable) {
             console.info(`[Offline Store] Parte já baixada, pulando: ${part.filename}`);
@@ -1989,7 +1498,9 @@ async function startZipDownload(categories, pdfUrls, alreadyDownloadedCategories
             throw new Error('DOWNLOAD_CANCELLED');
           }
 
-          const preparedPath = normalizeZipEntryName(name);
+          // #22.5: o normalizador canônico direto, sem o invólucro que só
+          // acrescentava a barra inicial.
+          const preparedPath = PdfPathManager.normalizeForStorage(name);
           if (!preparedPath || !preparedPath.endsWith('.pdf')) continue;
 
           const pathForComparison = prepareForComparison(preparedPath);
@@ -1999,7 +1510,7 @@ async function startZipDownload(categories, pdfUrls, alreadyDownloadedCategories
           if (!remaining.has(pathForComparison)) continue;
 
           const pdfBlob = new Blob([data], { type: 'application/pdf' });
-          const requestUrl = createUrlUtf8(preparedPath, location.origin);
+          const requestUrl = PdfPathManager.createRequestUrl(preparedPath, location.origin);
           const pdfResponse = new Response(pdfBlob, {
             headers: { 'Content-Type': 'application/pdf' }
           });
@@ -2282,7 +1793,10 @@ async function downloadByCategories(categories) {
   saveCategories(validCategories);
 
   // Check if IS_LEITOR_OFFLINE flag exists, if not open PDF in leitor
-  const isLeitorOffline = localStorage.getItem('IS_LEITOR_OFFLINE');
+  // Via safeStorage(): mesmo motivo da definição de safeStorage() acima — no
+  // Firefox com dados do site bloqueados, o acesso direto a localStorage
+  // aqui lançaria.
+  const isLeitorOffline = safeStorage()?.getItem('IS_LEITOR_OFFLINE');
   if (!isLeitorOffline || isLeitorOffline !== 'true') {
     // Open offline-setup.pdf in leitor to set the flag
     // Use Safari-compatible navigation
@@ -2338,8 +1852,6 @@ async function downloadByCategories(categories) {
   // Usar nova função que baixa apenas os lotes específicos
   await startZipDownloadWithSpecificParts(categoriesToDownload, pdfUrls, partsByCategory, manifest);
 }
-
-
 
 /**
  * Cancel ongoing download
@@ -2588,7 +2100,7 @@ async function validateAndSyncStats() {
     }
     
     // 4. Recalculate downloaded categories
-    // FIX: getCompletelyDownloadedCategories now automatically uses strict mode for Gestos em Gravura
+    // #22.4: getCompletelyDownloadedCategories verifica direto no Cache Storage para todas as categorias
     const downloaded = await getCompletelyDownloadedCategories(louvoresData, cachedPdfs);
     
     // 5. Verify consistency and fix if needed
@@ -2700,7 +2212,7 @@ async function checkAndUpdateDownloadedCategories() {
 
     // Check which categories are completely downloaded (all PDFs are in cache storage)
     // This verifies PDFs, not ZIPs, since ZIPs are removed after extraction
-    // FIX: Uses strict mode for Gestos em Gravura automatically
+    // #22.4: verificação direta no Cache Storage para todas as categorias
     const completelyDownloaded = await getCompletelyDownloadedCategories(louvoresData, cachedPdfs);
     
     // Save to OFFLINE_CATEGORIAS_SALVAS flag
@@ -2716,8 +2228,9 @@ async function checkAndUpdateDownloadedCategories() {
 /**
  * Force revalidation of a specific category
  * This clears the category from the downloaded list and revalidates it
- * Useful for fixing inconsistent states, especially for "Gestos em Gravura"
- * 
+ * Useful for fixing inconsistent states, especially for categories with many
+ * same-named files.
+ *
  * @param {string} category - Category name to revalidate
  * @returns {Promise<boolean>} - true if category is actually downloaded, false otherwise
  */
@@ -2752,8 +2265,9 @@ async function forceRevalidateCategory(category) {
       return false;
     }
     
-    // Revalidate with strict mode (always use strict for revalidation)
-    const isDownloaded = await isCategoryCompletelyDownloaded(category, cachedPdfs, louvoresData, true);
+    // #22.4: revalida com verificação direta no Cache Storage — o modo
+    // estrito é o único modo agora, não há mais quarto argumento.
+    const isDownloaded = await isCategoryCompletelyDownloaded(category, cachedPdfs, louvoresData);
     
     // Update downloaded categories list
     if (isDownloaded) {
@@ -2824,5 +2338,4 @@ export const isDownloading = derived(
   offlineState,
   $state => $state.downloading || $state.autoDownloading
 );
-
 

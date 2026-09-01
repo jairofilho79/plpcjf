@@ -34,6 +34,30 @@ const logger = createLogger('DownloadManager');
  */
 
 /**
+ * Formato do evento passado a `onProgress` durante o download de pacotes.
+ * É um saco solto de campos opcionais porque `_downloadPackages` monta esse
+ * objeto de formas diferentes em pontos diferentes (às vezes espalha
+ * `DownloadProgress.getProgress()`, às vezes monta na mão com `percentage`) —
+ * documentar a união real em vez de inventar uma forma mais estrita.
+ * @typedef {Object} PackageDownloadProgress
+ * @property {number} [total]
+ * @property {number} [completed]
+ * @property {number} [failed]
+ * @property {number} [progress]
+ * @property {number} [percentage]
+ * @property {number} [bytesDownloaded]
+ * @property {number} [bytesTotal]
+ * @property {number | null} [estimatedTimeRemaining]
+ * @property {number} [speed]
+ * @property {string} [storagePhase]
+ * @property {number} [packageProgress]
+ * @property {string} [downloadPhase]
+ * @property {number} [phaseProgress]
+ * @property {number} [currentPackage]
+ * @property {number} [totalPackages]
+ */
+
+/**
  * Download Manager
  * Manages downloads using new architecture modules
  */
@@ -54,7 +78,7 @@ export class DownloadManager {
    * Download categories
    * @param {string[]} categories - Categories to download
    * @param {Object} [options] - Download options
-   * @param {Array} [options.louvoresData] - Louvores data (if not provided, will be fetched)
+   * @param {Array<Object>} [options.louvoresData] - Louvores data (if not provided, will be fetched)
    * @param {Function} [options.onProgress] - Progress callback
    * @returns {Promise<DownloadResult>} Download result
    */
@@ -133,6 +157,7 @@ export class DownloadManager {
       // Get cached PDFs (using getCachedPDFsFast for compatibility)
       // Note: We could use cacheStorageAdapter.listPdfs() but getCachedPDFsFast
       // is faster and already used throughout the codebase
+      /** @type {any[]} */
       let cachedPdfs = [];
       try {
         const { getCachedPDFsFast } = await import('$lib/utils/swRegistration.js');
@@ -158,6 +183,7 @@ export class DownloadManager {
       }
 
       // Get offline manifest
+      /** @type {{ packages?: Record<string, unknown> } | null} */
       const manifest = await manifestRepository.getOfflineManifest();
       if (!manifest || !manifest.packages) {
         throw new Error('Offline manifest not available');
@@ -174,6 +200,7 @@ export class DownloadManager {
       logger.info('DownloadManager', `Identified ${requiredParts.length} package parts needed`);
 
       // Group parts by category
+      /** @type {Record<string, any[]>} */
       const partsByCategory = {};
       for (const part of requiredParts) {
         if (!partsByCategory[part.category]) {
@@ -197,13 +224,15 @@ export class DownloadManager {
         Object.keys(partsByCategory),
         pdfUrls,
         partsByCategory,
+        /** @param {PackageDownloadProgress} progress */
         (progress) => {
           // Call user's progress callback if provided
           if (options.onProgress) {
             options.onProgress(progress);
           }
-          
+
           // Update offline store state for UI with phase information
+          /** @type {PackageDownloadProgress} */
           const stateUpdate = {
             progress: progress.percentage || 0,
             completed: progress.completed || 0,
@@ -251,17 +280,18 @@ export class DownloadManager {
         categories
       };
     } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : undefined;
       logger.error('DownloadManager', 'Error downloading categories', error);
-      
+
       // Update state with error
       this._updateOfflineState({
         downloading: false,
-        error: error.message === 'DOWNLOAD_CANCELLED' 
-          ? 'Download cancelado pelo usuário.' 
-          : error.message || 'Erro ao baixar pacotes ZIP.'
+        error: errorMessage === 'DOWNLOAD_CANCELLED'
+          ? 'Download cancelado pelo usuário.'
+          : errorMessage || 'Erro ao baixar pacotes ZIP.'
       });
-      
-      if (error.message === 'DOWNLOAD_CANCELLED') {
+
+      if (errorMessage === 'DOWNLOAD_CANCELLED') {
         return {
           success: false,
           completed: this.progress?.completed || 0,
@@ -283,7 +313,7 @@ export class DownloadManager {
   /**
    * Download individual PDFs
    * @param {string[]} pdfPaths - PDF paths to download
-   * @param {Function} [onProgress] - Progress callback
+   * @param {Function | null} [onProgress] - Progress callback
    * @returns {Promise<DownloadResult>} Download result
    */
   async downloadPdfs(pdfPaths, onProgress = null) {
@@ -353,7 +383,7 @@ export class DownloadManager {
 
   /**
    * Get current progress
-   * @returns {DownloadProgress|null} Current progress or null
+   * @returns {import('./DownloadProgress.js').DownloadProgress|null} Current progress or null
    */
   getProgress() {
     return this.progress?.getProgress() || null;
@@ -371,8 +401,8 @@ export class DownloadManager {
    * Download packages for categories
    * @param {string[]} categories - Categories to download
    * @param {string[]} pdfUrls - Expected PDF URLs
-   * @param {Object} partsByCategory - Parts grouped by category
-   * @param {Function} [onProgress] - Progress callback
+   * @param {Record<string, any[]>} partsByCategory - Parts grouped by category
+   * @param {((progress: PackageDownloadProgress) => void) | null} [onProgress] - Progress callback
    * @returns {Promise<{completed: number, failed: number}>} Download result
    * @private
    */
@@ -386,6 +416,7 @@ export class DownloadManager {
     let failed = 0;
 
     // Build packagesInfo array to track each package's information
+    /** @type {Array<{ category: string, part: any, estimatedPdfCount: number, completedPdfs: number }>} */
     const packagesInfo = [];
     for (const category of categories) {
       const parts = partsByCategory[category] || [];
@@ -419,7 +450,11 @@ export class DownloadManager {
     try {
       // Process each package using indexed loop to track package info
       for (let packageIndex = 0; packageIndex < packagesInfo.length; packageIndex++) {
-        if (this.abortController?.aborted) {
+        // ACHADO (não corrigido: mudaria comportamento, fora do escopo desta
+        // tarefa de tipos): `AbortController` não tem `.aborted` — isso é
+        // `AbortController.signal.aborted`. Essa checagem de cancelamento no
+        // laço nunca dispara em runtime (sempre undefined); reportado à parte.
+        if (/** @type {any} */ (this.abortController)?.aborted) {
           throw new Error('DOWNLOAD_CANCELLED');
         }
 
@@ -450,6 +485,7 @@ export class DownloadManager {
           // FASE 5: Store PDFs in cache using batch mode with progress callback
           const stored = await packageDownloader.storePdfsInCache(result.pdfs, { 
             batch: true,  // Enable batch mode for performance
+            /** @param {{ phase: string, completed: number, total: number, percentage: number }} progressData */
             onProgress: (progressData) => {
               // Calculate PDFs from previous packages that are already complete
               // Use only completedPdfs (not estimatedPdfCount) to avoid inflating progress
@@ -561,7 +597,7 @@ export class DownloadManager {
             logger.debug('DownloadManager', `Could not remove package ZIP from cache (non-critical): ${part.filename}`, error);
           }
         } catch (error) {
-          if (error.message === 'DOWNLOAD_CANCELLED') {
+          if (error instanceof Error && error.message === 'DOWNLOAD_CANCELLED') {
             throw error;
           }
 
@@ -613,10 +649,10 @@ export class DownloadManager {
 
       return { completed, failed };
     } catch (error) {
-      if (error.message === 'DOWNLOAD_CANCELLED') {
+      if (error instanceof Error && error.message === 'DOWNLOAD_CANCELLED') {
         offlineEvents.emit(EVENTS.DOWNLOAD_ERROR, { error: 'Download cancelled' });
       } else {
-        offlineEvents.emit(EVENTS.DOWNLOAD_ERROR, { error: error.message });
+        offlineEvents.emit(EVENTS.DOWNLOAD_ERROR, { error: /** @type {any} */ (error).message });
       }
       throw error;
     } finally {
@@ -628,7 +664,7 @@ export class DownloadManager {
   /**
    * Download full categories (fallback)
    * @param {string[]} categories - Categories
-   * @param {Array} louvores - Louvores data
+   * @param {Array<Object>} louvores - Louvores data
    * @returns {Promise<DownloadResult>} Download result
    * @private
    */
@@ -735,7 +771,7 @@ export class DownloadManager {
 
   /**
    * Get PDF URL from louvor
-   * @param {Object} louvor - Louvor object
+   * @param {any} louvor - Louvor object
    * @returns {string|null} PDF URL or null
    * @private
    */

@@ -1,13 +1,24 @@
 <script>
+  import { createEventDispatcher } from 'svelte';
   import { bibliotecaSort } from '$lib/stores/bibliotecaSort';
-  
+
+  const dispatch = createEventDispatcher();
+
   const SORT_OPTIONS = [
     { value: 'numero', label: 'Por número' },
     { value: 'nome', label: 'Por nome' }
   ];
-  
+
+  /**
+   * #21: só dispara o evento — quem decide gravar o store e a URL é a página
+   * (`handleSortSelect`, em biblioteca/+page.svelte). Um `bibliotecaSort.set`
+   * direto aqui gravaria o store mas nunca a URL: a sincronização URL↔store
+   * da página é um `page.subscribe` manual que só reage a navegação de
+   * verdade, de propósito — não a um `.set()` de outra store.
+   * @param {string} value
+   */
   function handleOptionClick(value) {
-    bibliotecaSort.set(value);
+    dispatch('select', { value });
   }
 </script>
 

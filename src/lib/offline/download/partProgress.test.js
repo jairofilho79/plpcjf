@@ -16,18 +16,33 @@ import {
   excludeSkippedPartFromBytesTotal
 } from './partProgress.js';
 
+/**
+ * @typedef {Object} FakeStorage
+ * @property {number} length
+ * @property {(i: number) => string | null} key
+ * @property {(k: string) => string | null} getItem
+ * @property {(k: string, v: unknown) => void} setItem
+ * @property {(k: string) => void} removeItem
+ */
+
+/** @returns {FakeStorage} */
 function createStorage() {
   const map = new Map();
   return {
     get length() { return map.size; },
+    /** @param {number} i */
     key(i) { return [...map.keys()][i] ?? null; },
+    /** @param {string} k */
     getItem(k) { return map.has(k) ? map.get(k) : null; },
+    /** @param {string} k @param {unknown} v */
     setItem(k, v) { map.set(k, String(v)); },
+    /** @param {string} k */
     removeItem(k) { map.delete(k); }
   };
 }
 
 describe('partes concluídas', () => {
+  /** @type {FakeStorage} */
   let storage;
   beforeEach(() => { storage = createStorage(); });
 
@@ -76,6 +91,7 @@ describe('partes concluídas', () => {
 });
 
 describe('impressão digital das partes', () => {
+  /** @type {FakeStorage} */
   let storage;
   beforeEach(() => { storage = createStorage(); });
 
@@ -169,13 +185,30 @@ describe('classificação de resposta', () => {
     assert.equal(looksLikeCaptivePortal(zip), false);
     assert.equal(looksLikeCaptivePortal(null), false);
   });
+
+  it('reconhece xhtml+xml também', () => {
+    const xhtml = { headers: { get: () => 'application/xhtml+xml; charset=utf-8' } };
+    assert.equal(looksLikeCaptivePortal(xhtml), true);
+  });
+
+  it('reconhece redirecionamento sem content-type de arquivo', () => {
+    const redirecionado = { redirected: true, headers: { get: () => null } };
+    const zipRedirecionado = { redirected: true, headers: { get: () => 'application/zip' } };
+    assert.equal(looksLikeCaptivePortal(redirecionado), true);
+    assert.equal(looksLikeCaptivePortal(zipRedirecionado), false);
+  });
+
+  it('reconhece resposta sem content-type nenhum', () => {
+    const semHeader = { headers: { get: () => null } };
+    assert.equal(looksLikeCaptivePortal(semHeader), true);
+  });
 });
 
 describe('fetchWithRetry', () => {
   it('devolve na primeira tentativa quando dá certo', async () => {
     let calls = 0;
     const fakeFetch = async () => { calls++; return { ok: true, status: 200 }; };
-    const res = await fetchWithRetry('/x.zip', {}, { fetchImpl: fakeFetch });
+    const res = await fetchWithRetry('/x.zip', {}, { fetchImpl: /** @type {typeof fetch} */ (/** @type {unknown} */ (fakeFetch)) });
     assert.equal(res.ok, true);
     assert.equal(calls, 1);
   });
@@ -187,7 +220,7 @@ describe('fetchWithRetry', () => {
       if (calls < 3) throw new Error('network');
       return { ok: true, status: 200 };
     };
-    const res = await fetchWithRetry('/x.zip', {}, { fetchImpl: fakeFetch, baseDelayMs: 1 });
+    const res = await fetchWithRetry('/x.zip', {}, { fetchImpl: /** @type {typeof fetch} */ (/** @type {unknown} */ (fakeFetch)), baseDelayMs: 1 });
     assert.equal(res.ok, true);
     assert.equal(calls, 3);
   });
@@ -196,7 +229,7 @@ describe('fetchWithRetry', () => {
     let calls = 0;
     const fakeFetch = async () => { calls++; return { ok: false, status: 404 }; };
     await assert.rejects(
-      () => fetchWithRetry('/x.zip', {}, { fetchImpl: fakeFetch, baseDelayMs: 1 }),
+      () => fetchWithRetry('/x.zip', {}, { fetchImpl: /** @type {typeof fetch} */ (/** @type {unknown} */ (fakeFetch)), baseDelayMs: 1 }),
       /404/
     );
     assert.equal(calls, 1);
@@ -206,7 +239,7 @@ describe('fetchWithRetry', () => {
     let calls = 0;
     const fakeFetch = async () => { calls++; return { ok: false, status: 503 }; };
     await assert.rejects(
-      () => fetchWithRetry('/x.zip', {}, { fetchImpl: fakeFetch, attempts: 3, baseDelayMs: 1 }),
+      () => fetchWithRetry('/x.zip', {}, { fetchImpl: /** @type {typeof fetch} */ (/** @type {unknown} */ (fakeFetch)), attempts: 3, baseDelayMs: 1 }),
       /503/
     );
     assert.equal(calls, 3);
@@ -216,7 +249,7 @@ describe('fetchWithRetry', () => {
     let calls = 0;
     const fakeFetch = async () => { calls++; throw new Error('network'); };
     await assert.rejects(
-      () => fetchWithRetry('/x.zip', {}, { fetchImpl: fakeFetch, attempts: 3, baseDelayMs: 1 })
+      () => fetchWithRetry('/x.zip', {}, { fetchImpl: /** @type {typeof fetch} */ (/** @type {unknown} */ (fakeFetch)), attempts: 3, baseDelayMs: 1 })
     );
     assert.equal(calls, 3);
   });
@@ -227,7 +260,7 @@ describe('fetchWithRetry', () => {
       calls++;
       throw new DOMException('abort', 'AbortError');
     };
-    await assert.rejects(() => fetchWithRetry('/x.zip', {}, { fetchImpl: fakeFetch, baseDelayMs: 1 }));
+    await assert.rejects(() => fetchWithRetry('/x.zip', {}, { fetchImpl: /** @type {typeof fetch} */ (/** @type {unknown} */ (fakeFetch)), baseDelayMs: 1 }));
     assert.equal(calls, 1);
   });
 
@@ -244,13 +277,13 @@ describe('fetchWithRetry', () => {
     const started = Date.now();
     await assert.rejects(
       () => fetchWithRetry('/x.zip', {}, {
-        fetchImpl: fakeFetch,
+        fetchImpl: /** @type {typeof fetch} */ (/** @type {unknown} */ (fakeFetch)),
         attempts: 5,
         baseDelayMs: 5000,
         jitter: false,
         signal: controller.signal
       }),
-      (error) => error.name === 'AbortError'
+      (error) => error instanceof Error && error.name === 'AbortError'
     );
     assert.equal(calls, 1);
     // Não esperou os 5 s do backoff.
@@ -263,8 +296,8 @@ describe('fetchWithRetry', () => {
     let calls = 0;
     const fakeFetch = async () => { calls++; return { ok: true, status: 200 }; };
     await assert.rejects(
-      () => fetchWithRetry('/x.zip', {}, { fetchImpl: fakeFetch, signal: controller.signal }),
-      (error) => error.name === 'AbortError'
+      () => fetchWithRetry('/x.zip', {}, { fetchImpl: /** @type {typeof fetch} */ (/** @type {unknown} */ (fakeFetch)), signal: controller.signal }),
+      (error) => error instanceof Error && error.name === 'AbortError'
     );
     assert.equal(calls, 0);
   });
@@ -272,6 +305,10 @@ describe('fetchWithRetry', () => {
   it('trata prazo estourado como retentável', async () => {
     let calls = 0;
     // Conexão pendurada: só termina quando alguém aborta.
+    /**
+     * @param {any} url
+     * @param {any} init
+     */
     const hangingFetch = (url, init) =>
       new Promise((_, reject) => {
         calls++;
@@ -284,7 +321,7 @@ describe('fetchWithRetry', () => {
 
     await assert.rejects(
       () => fetchWithRetry('/x.zip', {}, {
-        fetchImpl: hangingFetch,
+        fetchImpl: /** @type {typeof fetch} */ (/** @type {unknown} */ (hangingFetch)),
         attempts: 3,
         baseDelayMs: 1,
         timeoutMs: 15
@@ -297,6 +334,10 @@ describe('fetchWithRetry', () => {
   it('cancelamento durante um fetch pendurado não vira retentativa', async () => {
     const controller = new AbortController();
     let calls = 0;
+    /**
+     * @param {any} url
+     * @param {any} init
+     */
     const hangingFetch = (url, init) =>
       new Promise((_, reject) => {
         calls++;
@@ -310,13 +351,13 @@ describe('fetchWithRetry', () => {
 
     await assert.rejects(
       () => fetchWithRetry('/x.zip', {}, {
-        fetchImpl: hangingFetch,
+        fetchImpl: /** @type {typeof fetch} */ (/** @type {unknown} */ (hangingFetch)),
         attempts: 3,
         baseDelayMs: 1,
         timeoutMs: 5000,
         signal: controller.signal
       }),
-      (error) => error.name === 'AbortError'
+      (error) => error instanceof Error && error.name === 'AbortError'
     );
     assert.equal(calls, 1);
   });
@@ -324,15 +365,20 @@ describe('fetchWithRetry', () => {
   it('não deixa o prazo matar a leitura do corpo depois dos cabeçalhos', async () => {
     /** @type {AbortSignal | null} */
     let seen = null;
+    /**
+     * @param {any} url
+     * @param {any} init
+     */
     const fakeFetch = async (url, init) => {
       seen = init.signal;
       return { ok: true, status: 200 };
     };
-    const res = await fetchWithRetry('/x.zip', {}, { fetchImpl: fakeFetch, timeoutMs: 10 });
+    const res = await fetchWithRetry('/x.zip', {}, { fetchImpl: /** @type {typeof fetch} */ (/** @type {unknown} */ (fakeFetch)), timeoutMs: 10 });
     assert.equal(res.ok, true);
     await new Promise((resolve) => setTimeout(resolve, 40));
     // O timer foi desarmado ao chegar a resposta: o corpo pode demorar à vontade.
-    assert.equal(seen.aborted, false);
+    // Neste ponto fetchImpl já rodou, então `seen` está preenchido (cast, não narrowing).
+    assert.equal(/** @type {AbortSignal} */ (/** @type {unknown} */ (seen)).aborted, false);
   });
 
   it('respeita o teto de tempo total', async () => {
@@ -341,7 +387,7 @@ describe('fetchWithRetry', () => {
     const started = Date.now();
     await assert.rejects(
       () => fetchWithRetry('/x.zip', {}, {
-        fetchImpl: fakeFetch,
+        fetchImpl: /** @type {typeof fetch} */ (/** @type {unknown} */ (fakeFetch)),
         attempts: 50,
         baseDelayMs: 20,
         maxDelayMs: 20,
@@ -365,7 +411,9 @@ describe('excludeSkippedPartFromBytesTotal', () => {
     const partSize = 17_647_058;
     let bytesTotal = 300_000_000;
     for (let i = 0; i < 12; i++) {
-      bytesTotal = excludeSkippedPartFromBytesTotal(bytesTotal, partSize);
+      // bytesTotal nunca é null aqui, então a função nunca devolve null (ver
+      // sua implementação); cast documenta essa invariante do laço.
+      bytesTotal = /** @type {number} */ (excludeSkippedPartFromBytesTotal(bytesTotal, partSize));
     }
     // Sobra o suficiente para as 5 partes restantes, não os 300 MB originais:
     // sem o ajuste, o download terminaria com bytesDownloaded (~90 MB) bem

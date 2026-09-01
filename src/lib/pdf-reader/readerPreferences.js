@@ -5,6 +5,7 @@
 const KEYS = {
   FIT_MODE: 'pdfPreferredFitMode',
   NAV_MODE: 'pdfNavigationMode',
+  BRIGHTNESS: 'pdfReaderBrightness',
 };
 
 /**
@@ -39,4 +40,25 @@ export function getNavigationMode() {
 export function setNavigationMode(mode) {
   if (typeof window === 'undefined') return;
   localStorage.setItem(KEYS.NAV_MODE, mode);
+}
+
+/** Predefinições de brilho, em % — 100 é o padrão (sem filtro). */
+export const BRIGHTNESS_PRESETS = [100, 60, 130];
+export const DEFAULT_BRIGHTNESS = 100;
+
+/**
+ * @returns {number}
+ */
+export function getBrightness() {
+  if (typeof window === 'undefined') return DEFAULT_BRIGHTNESS;
+  const saved = Number(localStorage.getItem(KEYS.BRIGHTNESS));
+  return BRIGHTNESS_PRESETS.includes(saved) ? saved : DEFAULT_BRIGHTNESS;
+}
+
+/**
+ * @param {number} value
+ */
+export function setBrightness(value) {
+  if (typeof window === 'undefined') return;
+  localStorage.setItem(KEYS.BRIGHTNESS, String(value));
 }

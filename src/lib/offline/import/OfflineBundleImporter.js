@@ -95,7 +95,7 @@ export class OfflineBundleImporter {
   /**
    * @param {File|Blob} file
    * @param {object} [options]
-   * @param {(p: { phase: string, completed: number, total: number, percentage: number, detail?: string }) => void} [options.onProgress]
+   * @param {(p: { phase: string, completed: number, total: number, percentage: number, detail?: string, checklist?: import('./bundleValidation.js').ImportChecklistItem[] }) => void} [options.onProgress]
    * @param {AbortSignal} [options.signal]
    * @returns {Promise<{ success: boolean, pdfsStored: number, categories: string[], cancelled?: boolean, error?: string }>}
    */
@@ -118,7 +118,7 @@ export class OfflineBundleImporter {
     this._importing = true;
     this._abortController = new AbortController();
     const signal = mergeSignals(
-      [options.signal, this._abortController.signal].filter(Boolean)
+      /** @type {AbortSignal[]} */ ([options.signal, this._abortController.signal].filter(Boolean))
     );
 
     const onProgress = options.onProgress || (() => {});
@@ -141,6 +141,11 @@ export class OfflineBundleImporter {
     // ponytail: degrau 0 serial; concurrency>1 reserved for future pool (heuristic already computed)
     void concurrency;
 
+    /**
+     * @param {string} phase
+     * @param {string} [detail]
+     * @param {{ currentPart?: string | null, partInFlight?: boolean, commitCounts?: import('./bundleValidation.js').ImportCommitCounts | null, commitFraction?: number }} [opts]
+     */
     const emitProgress = (
       phase,
       detail,
@@ -212,7 +217,9 @@ export class OfflineBundleImporter {
           if (!path) continue;
           await stagingAdapter._putPdfInternal(
             path,
-            new Blob([fileData], { type: 'application/pdf' }),
+            // Uint8Array é sempre um BlobPart válido em runtime; cast só
+            // contorna a exigência de TS 5.9 de ArrayBuffer (não ArrayBufferLike).
+            new Blob([/** @type {BlobPart} */ (fileData)], { type: 'application/pdf' }),
             { emitEvents: false, notifyServiceWorker: false }
           );
           pdfsStored += 1;
@@ -232,12 +239,10 @@ export class OfflineBundleImporter {
       // ponytail: CD + slice — streaming Unzip breaks on yazl data-descriptors + nested zips
       for await (const entry of iterateZipEntriesCd(file, signal)) {
         throwIfAborted();
-        if (isUnsafeZipPath(entry.name)) {
-          throw new Error(`Entrada ZIP insegura: ${entry.name}`);
-        }
 
+        // #12: nome já filtrado dentro do gerador (isUnsafeZipPath e
+        // dot-files), antes de qualquer inflateSync — não repetir aqui.
         const base = zipEntryBasename(entry.name);
-        if (!base || base.startsWith('.')) continue;
 
         if (base === OFFLINE_MANIFEST_NAME) {
           console.info(`${LOG} ▶ Manifesto Offline`);

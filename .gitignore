@@ -15,7 +15,11 @@ vite.config.ts.timestamp-*
 dist/
 .cache/
 
-/assets/
+# Sem barra final: "/assets/" só casa diretório, e em quem tem `assets` como
+# link simbólico (comum: aponta para o acervo fora do repo) isso não pega —
+# era só o `.git/info/exclude` local (não compartilhado) que cobria o caso,
+# e um clone novo podia acabar commitando os 5305 PDFs por engano.
+/assets
 /packages/
 .plpc-offline-bundle*/
 .offline-bundle-*/

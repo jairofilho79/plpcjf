@@ -8,6 +8,8 @@ import assert from 'node:assert/strict';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
+// @ts-ignore - yazl não tem @types publicados; a tarefa só acrescenta
+// @types/node como devDependency, então documenta-se em vez de instalar mais um pacote.
 import { ZipFile } from 'yazl';
 import {
   findEocdOffset,
@@ -18,7 +20,7 @@ import {
 } from './zipCdReader.js';
 
 /**
- * @param {Array<{ name: string, data: Buffer }>} files
+ * @param {Array<{ name: string, data: Buffer, compress?: boolean }>} files
  * @returns {Promise<Buffer>}
  */
 function buildYazlZip(files) {
@@ -37,7 +39,7 @@ function buildYazlZip(files) {
     out.on('error', reject);
     z.outputStream.on('error', reject);
     for (const f of files) {
-      z.addBuffer(f.data, f.name, { compress: false });
+      z.addBuffer(f.data, f.name, { compress: f.compress ?? false });
     }
     z.end();
   });
@@ -64,7 +66,9 @@ describe('zipCdReader', () => {
       { name: 'Partitura-1.zip', data: innerZip }
     ]);
 
-    const blob = new Blob([mother]);
+    // Buffer é sempre um BlobPart válido em runtime; cast só contorna a
+    // exigência de TS 5.9 de ArrayBuffer (não ArrayBufferLike).
+    const blob = new Blob([/** @type {BlobPart} */ (mother)]);
     const { entries } = await readZipCentralDirectory(blob);
     assert.equal(entries.length, 3);
 
@@ -94,5 +98,49 @@ describe('zipCdReader', () => {
   it('parseCentralDirectory skips corrupt trailing bytes', () => {
     // Empty CD → empty list
     assert.deepEqual(parseCentralDirectory(new Uint8Array(0)), []);
+  });
+});
+
+describe('iterateZipEntriesCd filtra pelo nome antes de inflar (#12)', () => {
+  it('pula um dot-file corrompido sem tentar inflar', async () => {
+    // O `.DS_Store` é comprimido (method 8) e depois corrompido byte a byte:
+    // se o gerador chamar inflateSync nele antes de filtrar pelo nome, o
+    // teste pega o throw. Se filtrar primeiro (o alvo desta correção), o
+    // dot-file nunca chega a ser lido e a iteração termina limpa.
+    const zip = await buildYazlZip([
+      { name: 'assets/a.pdf', data: Buffer.alloc(1000, 7), compress: false },
+      { name: '.DS_Store', data: Buffer.from('x'.repeat(300)), compress: true }
+    ]);
+
+    const { entries } = await readZipCentralDirectory(new Blob([/** @type {BlobPart} */ (zip)]));
+    const dotEntry = entries.find((e) => e.name === '.DS_Store');
+    assert.ok(dotEntry);
+
+    // Corrompe os bytes comprimidos do .DS_Store in-place (mesmo tamanho,
+    // então nenhum offset do central directory se move).
+    const mutable = Buffer.from(zip);
+    const head = mutable.subarray(dotEntry.localHeaderOffset, dotEntry.localHeaderOffset + 30);
+    const extraLen = head.readUInt16LE(28);
+    const dataStart = dotEntry.localHeaderOffset + 30 + dotEntry.name.length + extraLen;
+    for (let i = 0; i < dotEntry.compSize; i++) {
+      mutable[dataStart + i] ^= 0xff;
+    }
+    const blob = new Blob([/** @type {BlobPart} */ (mutable)]);
+
+    // Sanidade: ler a entrada corrompida direto tem que lançar — confirma
+    // que a corrupção funcionou.
+    const { entries: entries2 } = await readZipCentralDirectory(blob);
+    const dotEntry2 = entries2.find((e) => e.name === '.DS_Store');
+    assert.ok(dotEntry2);
+    await assert.rejects(() => readZipEntryData(blob, dotEntry2));
+
+    // O teste real: iterar o zip inteiro não pode lançar, e o dot-file não
+    // pode aparecer — hoje (sem a correção) isto lança "unexpected EOF"
+    // porque `readZipEntryData` roda antes do filtro por nome.
+    const names = [];
+    for await (const entry of iterateZipEntriesCd(blob)) {
+      names.push(entry.name);
+    }
+    assert.deepEqual(names, ['assets/a.pdf']);
   });
 });
