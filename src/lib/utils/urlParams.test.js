@@ -19,6 +19,7 @@ import {
   construirQueryAtualizada,
   podeEscreverNaUrl
 } from './urlParams.js';
+import PdfPathManager from '../offline/utils/PdfPathManager.js';
 
 /** As três categorias de material (src/lib/stores/filters.js:6). */
 const CATEGORIAS = ['Partitura', 'Cifra', 'Gestos em Gravura'];
@@ -279,6 +280,40 @@ describe('§5.5 a fronteira do PDF — não pode quebrar', () => {
       construirQueryAtualizada(queryDoLeitor, { pesquisa: 'amor' }),
       'file=%2Fassets%2FColCIAs%2F001.pdf&titulo=Meu+Deus&validated=true&pesquisa=amor'
     );
+  });
+});
+
+describe('§5.5b a URL que o leitor efetivamente pede (não só o parser)', () => {
+  // Espelha src/routes/leitor/+page.svelte:load() — extração de pdfPath a
+  // partir do `file` recebido, a lista curta dos dois PDFs estáticos
+  // (`pdfs/exemplo.pdf`, `offline-setup.pdf`) e a construção da URL final.
+  // Fixa o regressão do Achado I3: um `?file=` de acervo sem o prefixo
+  // `assets/` (formato legado, ainda em circulação) tem que continuar
+  // passando por PdfPathManager, não ser tratado como arquivo estático.
+  const urlQuePedidoPeloLeitor = (/** @type {string} */ fileParam) => {
+    const urlObj = new URL(fileParam, 'https://plpcg.com');
+    const pdfPath = urlObj.pathname.startsWith('/') ? urlObj.pathname.substring(1) : urlObj.pathname;
+    const isKnownStaticFile =
+      pdfPath.toLowerCase() === 'pdfs/exemplo.pdf' || pdfPath.toLowerCase() === 'offline-setup.pdf';
+    const isCatalogAsset = !isKnownStaticFile;
+    return isCatalogAsset
+      ? PdfPathManager.createRequestUrl(pdfPath, 'https://plpcg.com')
+      : new URL(`/${pdfPath}`, 'https://plpcg.com').toString();
+  };
+
+  it('I3-R1: link de acervo legado sem prefixo assets/ resolve dentro de assets/', () => {
+    assert.equal(
+      urlQuePedidoPeloLeitor('/04112025/Conheçamos e prossigamos/Cifra.pdf'),
+      'https://plpcg.com/assets/04112025/Conhe%C3%A7amos%20e%20prossigamos/Cifra.pdf'
+    );
+  });
+
+  it('I3-R2: /leitor sem params continua abrindo o PDF de exemplo estático', () => {
+    assert.equal(urlQuePedidoPeloLeitor('/pdfs/exemplo.pdf'), 'https://plpcg.com/pdfs/exemplo.pdf');
+  });
+
+  it('I3-R3: ?file=/offline-setup.pdf continua abrindo o estático de configuração', () => {
+    assert.equal(urlQuePedidoPeloLeitor('/offline-setup.pdf'), 'https://plpcg.com/offline-setup.pdf');
   });
 });
 

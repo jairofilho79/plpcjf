@@ -252,18 +252,22 @@
     // O PDF deve ser carregado e validado usando o caminho original (preserva case e acentos)
     const urlObj = new URL(fileUrl, window.location.origin);
     const pdfPath = urlObj.pathname.startsWith('/') ? urlObj.pathname.substring(1) : urlObj.pathname;
-    // Achado I3: dois caminhos que o leitor abre não são do acervo — o
-    // exemplo padrão (`/pdfs/exemplo.pdf`, quando não há `?file=`) e a página
-    // de configuração offline (`/offline-setup.pdf`, aberta por
-    // `stores/offline.js`). Ambos vivem em `static/`, fora de `assets/`.
-    // `PdfPathManager.normalizeForStorage` prefixa `assets/` em qualquer
-    // caminho que não comece assim — é o comportamento certo para o acervo
-    // (carregado por todo o sistema offline, não dá para mudar aqui) mas
-    // quebra a URL desses dois arquivos estáticos. Em vez de tocar em
-    // `PdfPathManager`, o desvio fica aqui: para um caminho fora de
-    // `assets/`, usa-o como está — sem normalizar e sem validar contra o
-    // cache de PDFs do acervo, do qual esses arquivos nunca fizeram parte.
-    const isCatalogAsset = pdfPath.toLowerCase().startsWith('assets/');
+    // Achado I3 (corrigido): dois caminhos que o leitor abre não são do
+    // acervo — o exemplo padrão (`/pdfs/exemplo.pdf`, quando não há
+    // `?file=`) e a página de configuração offline (`/offline-setup.pdf`,
+    // aberta por `stores/offline.js`). Ambos vivem em `static/`, fora de
+    // `assets/`. A tentativa original de distinguir os dois olhando se
+    // `pdfPath` começa com `assets/` inverte o contrato: um link de acervo
+    // legado (`?file=` sem o prefixo `assets/`, formato suportado desde
+    // sempre — ver `urlParams.test.js` §5.5) também não começa com
+    // `assets/`, e passava a ser tratado como estático, pulando a
+    // normalização que o fazia resolver. A lista curta é a única forma
+    // segura: só os dois arquivos estáticos conhecidos usam o caminho como
+    // está; qualquer outro — incluindo formatos de acervo que não previmos —
+    // continua indo por `PdfPathManager`/validação, como sempre foi.
+    const isKnownStaticFile =
+      pdfPath.toLowerCase() === 'pdfs/exemplo.pdf' || pdfPath.toLowerCase() === 'offline-setup.pdf';
+    const isCatalogAsset = !isKnownStaticFile;
     // #22.1: um só codificador. O parser WHATWG deixa `[` e `]` literais e o
     // escritor do cache os escapa — para os 3 PDFs do acervo com colchetes no
     // nome, a URL pedida aqui nunca era a chave gravada.
