@@ -7,7 +7,7 @@
   import { classificationFilters } from '$lib/stores/classificationFilters';
   import { filters, CATEGORY_OPTIONS } from '$lib/stores/filters';
   import { bibliotecaSort } from '$lib/stores/bibliotecaSort';
-  import { bibliotecaItemsPerPage, VALID_OPTIONS } from '$lib/stores/bibliotecaItemsPerPage';
+  import { bibliotecaItemsPerPage } from '$lib/stores/bibliotecaItemsPerPage';
   import { pdfViewer } from '$lib/stores/pdfViewer';
   import { lerEstadoDaUrl, updateUrlParams } from '$lib/utils/urlSync';
   import ClassificationFilters from '$lib/components/ClassificationFilters.svelte';
@@ -16,8 +16,7 @@
   import SortSelector from '$lib/components/SortSelector.svelte';
   import PdfViewerSelector from '$lib/components/PdfViewerSelector.svelte';
   import LouvorCard from '$lib/components/LouvorCard.svelte';
-  import GestureButton from '$lib/components/GestureButton.svelte';
-  import { ChevronLeft, ChevronRight } from 'lucide-svelte';
+  import LouvorPaginationControls from '$lib/components/LouvorPaginationControls.svelte';
   import { groupLouvoresByGroupId, compareLouvorNome } from '$lib/utils/groupLouvores.js';
   import LouvorListSkeleton from '$lib/components/LouvorListSkeleton.svelte';
 
@@ -226,7 +225,6 @@
   
   // Paginação
   let pageInput = '1';
-  let itemsPerPageMenuOpen = false;
   /** @type {HTMLElement | null} */
   let louvoresContainer = null;
   /** Critério de filtro da última execução; mudar de verdade zera a paginação. */
@@ -278,6 +276,29 @@
     if (scroll) {
       scrollToLouvores();
     }
+  }
+
+  /**
+   * Grava o store E a URL juntos, mesma razão do `handleSortSelect` (abaixo):
+   * a cópia inline que este handler substitui (`handleItemsPerPageSelect`)
+   * também gravava os dois — se só desse `.set()`, o clique mudaria a lista
+   * mas a URL nunca chegaria a saber (o `page.subscribe` manual, acima, só
+   * reage a navegação de verdade, não a `.set()` de outra store). Também não
+   * chama `setPage(1, ...)`: a cópia inline não resetava a página ao trocar
+   * o número de itens, e este handler preserva esse comportamento.
+   * @param {CustomEvent<{ value: number }>} e
+   */
+  function handleItemsPerPage(e) {
+    bibliotecaItemsPerPage.set(e.detail.value);
+    updateUrlParams({ itensPorPagina: e.detail.value });
+    scrollToLouvores();
+  }
+
+  /**
+   * @param {CustomEvent<{ page: number; scroll?: boolean }>} e
+   */
+  function handleGotoPage(e) {
+    setPage(e.detail.page, { scroll: e.detail.scroll !== false });
   }
 
   /** Só depois disso faz sentido corrigir a paginação (preserva `?pagina=N`). */
@@ -377,34 +398,7 @@
   function goToPage(page) {
     setPage(page);
   }
-  
-  /**
-     * @param {Event & { currentTarget: EventTarget & HTMLInputElement }} event
-     */
-  function handlePageInput(event) {
-    const value = event.currentTarget.value;
-    pageInput = value;
-    const pageNum = parseInt(value, 10);
-    if (!isNaN(pageNum) && pageNum >= 1 && pageNum <= totalPages) {
-      setPage(pageNum, { scroll: false });
-    }
-  }
-  
-  /**
-     * @param {KeyboardEvent & { currentTarget: EventTarget & HTMLInputElement }} event
-     */
-  function handlePageInputKeydown(event) {
-    if (event.key === 'Enter') {
-      event.currentTarget.blur();
-      const pageNum = parseInt(pageInput, 10);
-      if (!isNaN(pageNum)) {
-        setPage(pageNum);
-      } else {
-        pageInput = currentPage.toString();
-      }
-    }
-  }
-  
+
   function nextPage() {
     if (currentPage < totalPages) {
       setPage(currentPage + 1);
@@ -426,21 +420,6 @@
   function goToLastPage() {
     if (totalPages > 0) {
       setPage(totalPages);
-    }
-  }
-  
-  /**
-   * @type {HTMLElement | null}
-   */
-  let itemsPerPageButtonElement = null;
-  
-  // Close menu when clicking outside
-  /**
-   * @param {MouseEvent} event
-   */
-  function handleClickOutside(event) {
-    if (itemsPerPageButtonElement && event.target instanceof Node && !itemsPerPageButtonElement.contains(event.target)) {
-      itemsPerPageMenuOpen = false;
     }
   }
   
@@ -468,22 +447,47 @@
    * catálogo já sedimentou, e chamar isto fora de qualquer `$:` garante uma
    * passada só dela quando de fato aplica o padrão.
    */
+  /**
+   * Rede de segurança contra um ponto único de falha silencioso (achado da
+   * Tarefa 17): `loadLouvores()` (`src/lib/stores/louvores.js:365-422`) tem
+   * uma guarda de cancelamento por geração — se uma segunda chamada
+   * concorrente começar antes da primeira terminar, o `await loadLouvores()`
+   * do `onMount` abaixo pode resolver sem jamais marcar
+   * `$louvoresLoaded`/`$louvores` (a chamada perdedora só retorna cedo, sem
+   * setá-los). Nessa janela estreita, a chamada direta de
+   * `initializeFiltersIfNeeded()` logo abaixo vira no-op (a guarda dela mesma
+   * checa `$louvoresLoaded`) e nada mais chamaria de novo — o filtro padrão
+   * de arranjos nunca se aplicaria, e nada avisaria.
+   *
+   * Um `.subscribe()` de store NÃO é um bloco `$:`: só reage quando
+   * `$louvoresLoaded` de fato muda de valor (a chamada vencedora terminando),
+   * nunca por causa da escrita em `classificationFilters` que
+   * `initializeFiltersIfNeeded` faz aqui dentro — o mesmo raciocínio que já
+   * protege `sincronizarOrdenarEItensPorPaginaComUrl`, acima. Como
+   * `initializeFiltersIfNeeded` é idempotente, reassinar quando já
+   * inicializou é inofensivo.
+   * @type {(() => void) | null}
+   */
+  let pararDeObservarCargaConcluida = null;
+  if (browser) {
+    pararDeObservarCargaConcluida = louvoresLoaded.subscribe(($carregado) => {
+      if ($carregado) initializeFiltersIfNeeded();
+    });
+  }
+
   onMount(async () => {
     await loadLouvores();
     initializeFiltersIfNeeded();
-    if (browser) {
-      document.addEventListener('click', handleClickOutside);
-    }
   });
 
   // O retorno de um `onMount` async é uma Promise e o Svelte o ignora: o
   // cleanup antigo nunca rodava. Fica só este.
   onDestroy(() => {
-    if (browser) {
-      document.removeEventListener('click', handleClickOutside);
-    }
     if (pararDeSincronizarComUrl) {
       pararDeSincronizarComUrl();
+    }
+    if (pararDeObservarCargaConcluida) {
+      pararDeObservarCargaConcluida();
     }
   });
 
@@ -553,20 +557,9 @@
     updateUrlParams({ ordenar: valor });
   }
 
-  /**
-   * Mesma razão do `handleSortSelect`: grava os dois juntos. Não força
-   * `pagina: 1` aqui — comportamento de sempre na biblioteca é só corrigir a
-   * página se ela ficar inválida com o novo total, e isso já é coberto pelo
-   * bloco genérico de correção de página, acima, que deriva `currentPage` de
-   * `estadoUrl.pagina` limitado a `totalPages`.
-   * @param {number} option
-   */
-  function handleItemsPerPageSelect(option) {
-    bibliotecaItemsPerPage.set(option);
-    updateUrlParams({ itensPorPagina: option });
-    itemsPerPageMenuOpen = false;
-    scrollToLouvores();
-  }
+  // `handleItemsPerPage`, perto de `setPage` acima, substitui
+  // `handleItemsPerPageSelect` — a lógica de "grava os dois juntos, não
+  // força página 1" descrita ali é a mesma.
 </script>
 
 <svelte:head>
@@ -605,203 +598,39 @@
       <div id="louvores" class="louvores-container w-full max-w-4xl" bind:this={louvoresContainer}>
         <span class="container-tag">Louvores</span>
         
-        <!-- Pagination Controls (Top) -->
-        <div class="pagination-controls pagination-controls-top">
-          <div class="pagination-info">
-            Página <strong>{currentPage}</strong> de <strong>{totalPages}</strong>
-          </div>
-          
-          <div class="pagination-controls-right">
-            <div class="items-per-page-selector">
-              <span class="items-per-page-label">Itens por página:</span>
-              <div class="items-per-page-wrapper" bind:this={itemsPerPageButtonElement}>
-                <button
-                  type="button"
-                  class="items-per-page-button"
-                  on:click={(e) => {
-                    e.stopPropagation();
-                    itemsPerPageMenuOpen = !itemsPerPageMenuOpen;
-                  }}
-                  aria-label="Alterar itens por página"
-                >
-                  {$bibliotecaItemsPerPage}
-                </button>
-                {#if itemsPerPageMenuOpen}
-                  <div class="items-per-page-menu">
-                    {#each VALID_OPTIONS as option}
-                      <button
-                        type="button"
-                        class="items-per-page-option"
-                        class:active={$bibliotecaItemsPerPage === option}
-                        on:click={(e) => {
-                          e.stopPropagation();
-                          handleItemsPerPageSelect(option);
-                        }}
-                      >
-                        {option}
-                      </button>
-                    {/each}
-                  </div>
-                {/if}
-              </div>
-            </div>
-            
-            <div class="pagination-input-group">
-              <GestureButton
-                on:click={previousPage}
-                on:longpress={goToFirstPage}
-                longPressDuration={500}
-                hapticFeedback={true}
-                preventDefault={true}
-              >
-                <button
-                  type="button"
-                  class="pagination-button"
-                  disabled={currentPage === 1}
-                  title="Página anterior (long press para primeira página)"
-                >
-                  <ChevronLeft class="w-5 h-5" />
-                </button>
-              </GestureButton>
-              
-              <input
-                type="number"
-                class="pagination-input"
-                bind:value={pageInput}
-                on:input={handlePageInput}
-                on:keydown={handlePageInputKeydown}
-                on:blur={() => {
-                  const pageNum = parseInt(pageInput, 10);
-                  if (isNaN(pageNum) || pageNum < 1 || pageNum > totalPages) {
-                    pageInput = currentPage.toString();
-                  }
-                }}
-                min="1"
-                max={totalPages}
-                aria-label="Número da página"
-              />
-              
-              <GestureButton
-                on:click={nextPage}
-                on:longpress={goToLastPage}
-                longPressDuration={500}
-                hapticFeedback={true}
-                preventDefault={true}
-              >
-                <button
-                  type="button"
-                  class="pagination-button"
-                  disabled={currentPage === totalPages}
-                  title="Próxima página (long press para última página)"
-                >
-                  <ChevronRight class="w-5 h-5" />
-                </button>
-              </GestureButton>
-            </div>
-          </div>
-        </div>
-        
+        <LouvorPaginationControls
+          variant="top"
+          bind:pageInput
+          currentPage={currentPage}
+          totalPages={totalPages}
+          itemsPerPage={itemsPerPage}
+          on:itemsPerPage={handleItemsPerPage}
+          on:gotoPage={handleGotoPage}
+          on:previous={previousPage}
+          on:next={nextPage}
+          on:first={goToFirstPage}
+          on:last={goToLastPage}
+        />
+
         <div class="louvores-list">
           {#each paginatedLouvores as group (getGroupKey(group))}
             <LouvorCard louvor={group.materials[0]} materials={group.materials} />
           {/each}
         </div>
-        
-        <!-- Pagination Controls (Bottom) -->
-        <div class="pagination-controls">
-          <div class="pagination-info">
-            Página <strong>{currentPage}</strong> de <strong>{totalPages}</strong>
-          </div>
-          
-          <div class="pagination-controls-right">
-            <div class="items-per-page-selector">
-              <span class="items-per-page-label">Itens por página:</span>
-              <div class="items-per-page-wrapper" bind:this={itemsPerPageButtonElement}>
-                <button
-                  type="button"
-                  class="items-per-page-button"
-                  on:click={(e) => {
-                    e.stopPropagation();
-                    itemsPerPageMenuOpen = !itemsPerPageMenuOpen;
-                  }}
-                  aria-label="Alterar itens por página"
-                >
-                  {$bibliotecaItemsPerPage}
-                </button>
-                {#if itemsPerPageMenuOpen}
-                  <div class="items-per-page-menu">
-                    {#each VALID_OPTIONS as option}
-                      <button
-                        type="button"
-                        class="items-per-page-option"
-                        class:active={$bibliotecaItemsPerPage === option}
-                        on:click={(e) => {
-                          e.stopPropagation();
-                          handleItemsPerPageSelect(option);
-                        }}
-                      >
-                        {option}
-                      </button>
-                    {/each}
-                  </div>
-                {/if}
-              </div>
-            </div>
-            
-            <div class="pagination-input-group">
-              <GestureButton
-                on:click={previousPage}
-                on:longpress={goToFirstPage}
-                longPressDuration={500}
-                hapticFeedback={true}
-                preventDefault={true}
-              >
-                <button
-                  type="button"
-                  class="pagination-button"
-                  disabled={currentPage === 1}
-                  title="Página anterior (long press para primeira página)"
-                >
-                  <ChevronLeft class="w-5 h-5" />
-                </button>
-              </GestureButton>
-              
-              <input
-                type="number"
-                class="pagination-input"
-                bind:value={pageInput}
-                on:input={handlePageInput}
-                on:keydown={handlePageInputKeydown}
-                on:blur={() => {
-                  const pageNum = parseInt(pageInput, 10);
-                  if (isNaN(pageNum) || pageNum < 1 || pageNum > totalPages) {
-                    pageInput = currentPage.toString();
-                  }
-                }}
-                min="1"
-                max={totalPages}
-                aria-label="Número da página"
-              />
-              
-              <GestureButton
-                on:click={nextPage}
-                on:longpress={goToLastPage}
-                longPressDuration={500}
-                hapticFeedback={true}
-                preventDefault={true}
-              >
-                <button
-                  type="button"
-                  class="pagination-button"
-                  disabled={currentPage === totalPages}
-                  title="Próxima página (long press para última página)"
-                >
-                  <ChevronRight class="w-5 h-5" />
-                </button>
-              </GestureButton>
-            </div>
-          </div>
-        </div>
+
+        <LouvorPaginationControls
+          variant="bottom"
+          bind:pageInput
+          currentPage={currentPage}
+          totalPages={totalPages}
+          itemsPerPage={itemsPerPage}
+          on:itemsPerPage={handleItemsPerPage}
+          on:gotoPage={handleGotoPage}
+          on:previous={previousPage}
+          on:next={nextPage}
+          on:first={goToFirstPage}
+          on:last={goToLastPage}
+        />
 
         <!-- End louvores container -->
       </div>
@@ -841,211 +670,6 @@
     gap: 0.5rem;
     margin-top: 1.5rem;
     margin-bottom: 1.5rem;
-  }
-  
-  .pagination-controls {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding-top: 1rem;
-    border-top: 2px solid var(--gold-color);
-    gap: 1rem;
-    flex-wrap: wrap;
-  }
-  
-  .pagination-controls-top {
-    padding-top: 0;
-    border-top: none;
-    padding-bottom: 1rem;
-    border-bottom: 2px solid var(--gold-color);
-  }
-  
-  .pagination-info {
-    color: var(--text-dark);
-    font-size: 0.875rem;
-  }
-  
-  .pagination-info strong {
-    color: var(--text-dark);
-    font-weight: 700;
-  }
-  
-  .pagination-controls-right {
-    display: flex;
-    align-items: center;
-    gap: 1rem;
-    flex-wrap: wrap;
-  }
-  
-  .items-per-page-selector {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-  }
-  
-  .items-per-page-label {
-    color: var(--text-dark);
-    font-size: 0.875rem;
-    white-space: nowrap;
-  }
-  
-  .items-per-page-wrapper {
-    position: relative;
-  }
-  
-  .items-per-page-button {
-    height: 2.5rem;
-    min-width: 3rem;
-    padding: 0 0.75rem;
-    background-color: var(--card-color);
-    color: var(--text-dark);
-    border: 2px solid var(--gold-color);
-    border-radius: 0.5rem;
-    font-size: 0.875rem;
-    font-weight: 600;
-    cursor: pointer;
-    transition: all 0.2s ease;
-    text-align: center;
-  }
-  
-  .items-per-page-button:hover {
-    border-color: var(--gold-light);
-    background-color: rgba(244, 208, 63, 0.1);
-  }
-  
-  /* :not(:focus-visible) só cobre o clique/toque — o anel de teclado vem
-     do :focus-visible global em app.css, que não é sobrescrito aqui. */
-  .items-per-page-button:focus:not(:focus-visible) {
-    outline: none;
-    border-color: var(--gold-light);
-    box-shadow: 0 0 0 3px rgba(244, 208, 63, 0.25);
-  }
-  
-  .items-per-page-menu {
-    position: absolute;
-    top: calc(100% + 0.25rem);
-    left: 0;
-    background-color: var(--card-color);
-    border: 2px solid var(--gold-color);
-    border-radius: 0.5rem;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
-    z-index: 100;
-    min-width: 100%;
-    overflow: hidden;
-  }
-  
-  .items-per-page-option {
-    display: block;
-    width: 100%;
-    padding: 0.5rem 0.75rem;
-    background-color: transparent;
-    color: var(--text-dark);
-    border: none;
-    font-size: 0.875rem;
-    font-weight: 600;
-    cursor: pointer;
-    transition: all 0.2s ease;
-    text-align: center;
-  }
-  
-  .items-per-page-option:hover {
-    background-color: rgba(244, 208, 63, 0.2);
-  }
-  
-  .items-per-page-option.active {
-    background-color: rgba(244, 208, 63, 0.3);
-    color: var(--text-dark);
-  }
-  
-  .pagination-input-group {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-  }
-  
-  .pagination-button {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 2.5rem;
-    height: 2.5rem;
-    background-color: var(--title-color);
-    color: var(--text-light);
-    border: 2px solid var(--gold-color);
-    border-radius: 0.5rem;
-    cursor: pointer;
-    transition: all 0.2s ease;
-    padding: 0;
-    user-select: none;
-    -webkit-user-select: none;
-    -moz-user-select: none;
-    -ms-user-select: none;
-    -webkit-touch-callout: none;
-    -webkit-tap-highlight-color: transparent;
-  }
-  
-  .pagination-button:hover:not(:disabled) {
-    background-color: var(--gold-light);
-    transform: translateY(-1px);
-    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
-  }
-  
-  .pagination-button:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-    background-color: var(--badge-gray-bg);
-  }
-  
-  .pagination-input {
-    width: 4rem;
-    height: 2.5rem;
-    text-align: center;
-    background-color: var(--card-color);
-    color: var(--text-dark);
-    border: 2px solid var(--gold-color);
-    border-radius: 0.5rem;
-    font-size: 0.875rem;
-    font-weight: 600;
-    padding: 0 0.5rem;
-    transition: all 0.2s ease;
-  }
-  
-  /* :not(:focus-visible) só cobre o clique/toque — o anel de teclado vem
-     do :focus-visible global em app.css, que não é sobrescrito aqui. */
-  .pagination-input:focus:not(:focus-visible) {
-    outline: none;
-    border-color: var(--gold-light);
-    box-shadow: 0 0 0 3px rgba(244, 208, 63, 0.25);
-  }
-  
-  .pagination-input::-webkit-inner-spin-button,
-  .pagination-input::-webkit-outer-spin-button {
-    opacity: 1;
-  }
-  
-  @media (max-width: 640px) {
-    .pagination-controls {
-      flex-direction: column;
-      align-items: stretch;
-    }
-    
-    .pagination-info {
-      text-align: center;
-    }
-    
-    .pagination-controls-right {
-      flex-direction: column;
-      align-items: stretch;
-      gap: 0.75rem;
-    }
-    
-    .items-per-page-selector {
-      justify-content: center;
-    }
-    
-    .pagination-input-group {
-      justify-content: center;
-    }
   }
   
   .no-results-message {
