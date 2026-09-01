@@ -10,7 +10,7 @@
   import { loadPdfJsComplete, loadPdfJsViewer } from '$lib/utils/pdfjsLoader';
   import { clearPdfFromSwCache } from '$lib/utils/swRegistration';
   import { checkEffectiveConnectivity } from '$lib/utils/pdfValidation';
-  import { getFitMode, setFitMode, getNavigationMode, setNavigationMode } from '$lib/pdf-reader/readerPreferences';
+  import { getFitMode, setFitMode, getNavigationMode, setNavigationMode, getBrightness, setBrightness, BRIGHTNESS_PRESETS, DEFAULT_BRIGHTNESS } from '$lib/pdf-reader/readerPreferences';
   import { ZoomController } from '$lib/pdf-reader/zoomController';
   import { resolvePdfSourceUrl as resolveSource } from '$lib/pdf-reader/pdfSourceResolver';
   import { ViewerAdapter } from '$lib/pdf-reader/viewerAdapter';
@@ -111,6 +111,21 @@
   let preferredFitMode: 'page-width' | 'page-fit' = getFitMode();
   // Controlador de zoom: encapsula cache de escala e cálculos de page-width
   const zoomCtrl = new ZoomController();
+
+  // Brilho da página do PDF (não da toolbar) — persistido via readerPreferences
+  let readerBrightness: number = getBrightness();
+
+  function cycleBrightness() {
+    const idx = BRIGHTNESS_PRESETS.indexOf(readerBrightness);
+    const next = BRIGHTNESS_PRESETS[(idx + 1) % BRIGHTNESS_PRESETS.length];
+    readerBrightness = next;
+    setBrightness(next);
+  }
+
+  function resetBrightness() {
+    readerBrightness = DEFAULT_BRIGHTNESS;
+    setBrightness(DEFAULT_BRIGHTNESS);
+  }
   
   // PDF validation states
   type PdfUiState =
@@ -1360,6 +1375,7 @@
   $: showZoomFit = deviceType !== 'mobile' || activeToolbarLayer === 1 || activeToolbarLayer === 3;
   $: showZoomPlus = deviceType !== 'mobile' || activeToolbarLayer === 3;
   $: showLayerToggle = deviceType === 'mobile';
+  $: showBrightness = deviceType !== 'mobile' || activeToolbarLayer === 3;
   // ──────────────────────────────────────────────────────────────────────────────
 
   // Reativo: atualizar altura do container quando a visibilidade da barra mudar
@@ -1667,6 +1683,29 @@
     font-weight: 700;
     font-size: 0.875rem;
     min-width: var(--tbtn-h);
+  }
+
+  /* brightness-toggle: mesma estrutura de zoom-fit — GestureButton preenche a área do .btn */
+  .btn.brightness-toggle {
+    padding: 0;
+    cursor: pointer;
+    position: relative;
+  }
+  .btn.brightness-toggle :global(.gesture-button-wrapper) {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 3px;
+    height: 100%;
+    min-width: var(--tbtn-h);
+    padding: 0 var(--tbtn-px);
+    position: relative;
+    box-sizing: border-box;
+  }
+  .brightness-value {
+    font-size: 0.6875rem;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
   }
 
   /* Indicadores de modo no zoom-fit */
@@ -2007,6 +2046,25 @@
       </button>
     {/if}
 
+    {#if showBrightness}
+      <!-- brightness-toggle: mesma estrutura de zoom-fit — GestureButton preenche o .btn, sem button aninhado -->
+      <div class="btn brightness-toggle">
+        <GestureButton
+          on:click={cycleBrightness}
+          on:longpress={resetBrightness}
+          longPressDuration={500}
+          hapticFeedback={true}
+          preventDefault={true}
+          ariaLabel="Brilho da página: {readerBrightness}% — toque para alternar entre predefinições, toque longo para voltar ao padrão"
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="icon">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M12 3v2.25m6.364.386-1.591 1.591M21 12h-2.25m-.386 6.364-1.591-1.591M12 18.75V21m-4.773-4.227-1.591 1.591M5.25 12H3m4.227-4.773L5.636 5.636M15.75 12a3.75 3.75 0 1 1-7.5 0 3.75 3.75 0 0 1 7.5 0Z" />
+          </svg>
+          <span class="brightness-value">{readerBrightness}%</span>
+        </GestureButton>
+      </div>
+    {/if}
+
     {#if showNavMode}
       <button
         class="btn nav-mode-toggle"
@@ -2081,7 +2139,7 @@
   </div>
 {/if}
 
-<div id="viewerContainer" bind:this={containerEl} class="container {containerClass}" class:vertical-nav={navigationMode === 'vertical'} class:hidden={pdfLoading || pdfError}>
+<div id="viewerContainer" bind:this={containerEl} class="container {containerClass}" class:vertical-nav={navigationMode === 'vertical'} class:hidden={pdfLoading || pdfError} style="filter: brightness({readerBrightness}%);">
   <!-- Elemento focável invisível para ativar sistema de eventos de teclado no iOS -->
   <textarea
     bind:this={keyboardFocusEl}
