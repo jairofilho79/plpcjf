@@ -1,7 +1,7 @@
 import { writable, get } from 'svelte/store';
 import { browser } from '$app/environment';
 import { page } from '$app/stores';
-import { parseUrlParams, updateUrlParams } from '$lib/utils/urlSync';
+import { lerEstadoDaUrl, updateUrlParams } from '$lib/utils/urlSync';
 
 export const CATEGORY_OPTIONS = ['Partitura', 'Cifra', 'Gestos em Gravura'];
 
@@ -48,10 +48,10 @@ function getInitialFilters() {
     const currentPage = get(page);
     if (!currentPage || !currentPage.url) return CATEGORY_OPTIONS;
     
-    const urlParams = parseUrlParams(currentPage.url);
-    if (urlParams.materiais && urlParams.materiais.length > 0) {
+    const estado = lerEstadoDaUrl(currentPage.url);
+    if (estado.temMateriais) {
       // Normalizar a ordem para manter a ordem manual
-      return normalizeCategoryOrder(urlParams.materiais);
+      return normalizeCategoryOrder(estado.materiais);
     }
   } catch (e) {
     console.warn('Erro ao ler filtros da URL:', e);
@@ -62,54 +62,38 @@ function getInitialFilters() {
 
 function createFiltersStore() {
   const { subscribe, set: setStore, update } = writable(getInitialFilters());
-  let isUpdatingFromUrl = false;
-  let isUpdatingUrl = false;
+  let currentValue = getInitialFilters();
 
-  // Reagir a mudanças na URL
+  // #21: leitor puro — a URL manda. Não há flag de "estou atualizando" porque
+  // este bloco nunca escreve; quem escreve é `updateUrl`, abaixo, que também
+  // atualiza `currentValue` antes do goto, então quando este subscribe reagir
+  // à navegação o valor já bate e não há trabalho a refazer.
   if (browser) {
-    let currentValue = getInitialFilters();
     page.subscribe($page => {
-      if (isUpdatingUrl || !$page || !$page.url) return; // Evitar loop
-      
-      const urlParams = parseUrlParams($page.url);
-      const urlHasMateriais = $page.url.search && $page.url.search.includes('materiais=');
-      
-      if (urlHasMateriais) {
-        // URL tem param materiais
-        const rawValue = urlParams.materiais && urlParams.materiais.length > 0 
-          ? urlParams.materiais 
-          : [];
-        // Normalizar a ordem para manter a ordem manual
-        const newValue = normalizeCategoryOrder(rawValue);
-        if (!areCategoriesEqual(newValue, currentValue)) {
-          isUpdatingFromUrl = true;
-          setStore(newValue);
-          currentValue = newValue;
-          isUpdatingFromUrl = false;
-        }
-      } else {
-        // URL não tem param materiais, usar default se necessário
-        if (!areCategoriesEqual(currentValue, CATEGORY_OPTIONS)) {
-          isUpdatingFromUrl = true;
-          setStore(CATEGORY_OPTIONS);
-          currentValue = CATEGORY_OPTIONS;
-          isUpdatingFromUrl = false;
-        }
+      if (!$page || !$page.url) return;
+
+      const estado = lerEstadoDaUrl($page.url);
+      // `estado.temMateriais` vem de `URLSearchParams.has`, não de um
+      // `search.includes('materiais=')` — a substring dava falso-positivo
+      // quando outro param continha esse texto no valor (D3).
+      const newValue = estado.temMateriais
+        ? normalizeCategoryOrder(estado.materiais)
+        : CATEGORY_OPTIONS;
+
+      if (!areCategoriesEqual(newValue, currentValue)) {
+        setStore(newValue);
+        currentValue = newValue;
       }
     });
   }
 
   function updateUrl(categories) {
-    if (!browser || isUpdatingFromUrl) return;
-    
-    isUpdatingUrl = true;
+    if (!browser) return;
+
     // Normalizar a ordem antes de salvar na URL para manter consistência
     const normalizedCategories = normalizeCategoryOrder(categories);
+    currentValue = normalizedCategories;
     updateUrlParams({ materiais: normalizedCategories }, { defaultMateriais: CATEGORY_OPTIONS });
-    // Usar setTimeout para garantir que a atualização da URL aconteça após o estado
-    setTimeout(() => {
-      isUpdatingUrl = false;
-    }, 0);
   }
 
   return {

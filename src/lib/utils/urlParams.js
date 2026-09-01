@@ -77,10 +77,58 @@ export function parseUrlParams(url) {
   };
 }
 
+/** Os cinco modos de abertura do leitor (src/lib/stores/pdfViewer.js). */
+export const MODOS_ABERTURA_VALIDOS = ['leitor', 'online', 'newtab', 'share', 'save'];
+export const MODO_ABERTURA_PADRAO = 'leitor';
+export const ORDENACOES_VALIDAS = ['numero', 'nome'];
+export const ORDENACAO_PADRAO = 'numero';
+export const ITENS_POR_PAGINA_VALIDOS = [10, 25, 50];
+export const ITENS_POR_PAGINA_PADRAO = 10;
+
+/**
+ * Normaliza `pagina`: qualquer coisa que não seja um inteiro positivo vira 1.
+ * Fonte única da regra — `parseUrlParams` continua devolvendo o valor cru
+ * (armadilha de NaN preservada para quem já blinda) e `lerEstadoDaUrl`
+ * (urlEstado.js) usa esta função para nunca devolver NaN.
+ * @param {string | number | null} valor
+ * @returns {number}
+ */
+export function normalizarPagina(valor) {
+  const n = typeof valor === 'number' ? valor : parseInt(valor, 10);
+  return Number.isFinite(n) && n > 0 ? n : 1;
+}
+
+/** @param {string | number | null} valor @returns {number} */
+export function normalizarItensPorPagina(valor) {
+  const n = typeof valor === 'number' ? valor : parseInt(valor, 10);
+  return ITENS_POR_PAGINA_VALIDOS.includes(n) ? n : ITENS_POR_PAGINA_PADRAO;
+}
+
+/** @param {string | null} valor @returns {string} */
+export function normalizarOrdenacao(valor) {
+  return ORDENACOES_VALIDAS.includes(valor) ? valor : ORDENACAO_PADRAO;
+}
+
+/** @param {string | null} valor @returns {string} */
+export function normalizarModoAbertura(valor) {
+  return MODOS_ABERTURA_VALIDOS.includes(valor) ? valor : MODO_ABERTURA_PADRAO;
+}
+
 /**
  * Constrói a query nova a partir da atual, mantendo todo param não citado em
  * `newParams` — inclusive os de terceiros (`utm_source`, `fbclid`).
  * Params com valor padrão ou vazio são removidos.
+ *
+ * #21/D-8: `materiais`, `arranjo` e `arranjoEspecial` deixam de ser apagados
+ * quando a lista fica vazia — passam a ser gravados como `chave=` vazio, que é
+ * um estado real e alcançável pela UI ("desmarquei tudo"). A única exceção
+ * continua sendo `materiais` quando a seleção é IGUAL ao padrão: aí sim o
+ * param some, porque ausência de `materiais` já significa "todos".
+ *
+ * #21/D-9: um param conhecido (`comoAbrir`, `ordenar`, `itensPorPagina`,
+ * `pagina`) que sobrou inválido na query atual é normalizado nesta escrita,
+ * mesmo que `newParams` não fale dele — é o que tira o `?comoAbrir=lixo` que
+ * antes ficava pendurado na URL para sempre.
  *
  * @param {string} searchAtual - a query atual, com ou sem o `?` inicial
  * @param {Object} newParams - os params a atualizar
@@ -90,50 +138,39 @@ export function parseUrlParams(url) {
  * @returns {string} a query nova, SEM o `?` inicial
  */
 export function construirQueryAtualizada(searchAtual, newParams, options = {}) {
-  const { defaultMateriais = [], defaultComoAbrir = 'leitor' } = options;
+  const { defaultMateriais = [], defaultComoAbrir = MODO_ABERTURA_PADRAO } = options;
 
   const currentParams = new URLSearchParams(searchAtual || '');
 
   if (newParams.materiais !== undefined) {
     const materiais = Array.isArray(newParams.materiais) ? newParams.materiais : [];
-    // Se todos os materiais estão selecionados, remover o param
+    // Se todos os materiais estão selecionados, remover o param: ausência já
+    // significa "todos". Qualquer outra coisa — inclusive lista vazia — grava.
     const allSelected =
       materiais.length === defaultMateriais.length &&
       defaultMateriais.every((m) => materiais.includes(m));
-    if (allSelected || materiais.length === 0) {
+    if (allSelected) {
       currentParams.delete('materiais');
     } else {
-      const serialized = serializeArrayParam(materiais);
-      if (serialized) currentParams.set('materiais', serialized);
-      else currentParams.delete('materiais');
+      currentParams.set('materiais', serializeArrayParam(materiais));
     }
   }
 
   if (newParams.arranjo !== undefined) {
     const arranjo = Array.isArray(newParams.arranjo) ? newParams.arranjo : [];
-    if (arranjo.length === 0) {
-      currentParams.delete('arranjo');
-    } else {
-      const serialized = serializeArrayParam(arranjo);
-      if (serialized) currentParams.set('arranjo', serialized);
-      else currentParams.delete('arranjo');
-    }
+    // Sem "todos = padrão" aqui: o padrão de arranjo é a AUSÊNCIA do param,
+    // calculada pela página, não uma lista fixa. Grava sempre, mesmo vazio.
+    currentParams.set('arranjo', serializeArrayParam(arranjo));
   }
 
   if (newParams.arranjoEspecial !== undefined) {
     const arranjoEspecial = Array.isArray(newParams.arranjoEspecial) ? newParams.arranjoEspecial : [];
-    if (arranjoEspecial.length === 0) {
-      currentParams.delete('arranjoEspecial');
-    } else {
-      const serialized = serializeArrayParam(arranjoEspecial);
-      if (serialized) currentParams.set('arranjoEspecial', serialized);
-      else currentParams.delete('arranjoEspecial');
-    }
+    currentParams.set('arranjoEspecial', serializeArrayParam(arranjoEspecial));
   }
 
   if (newParams.comoAbrir !== undefined) {
-    const comoAbrir = newParams.comoAbrir || '';
-    if (comoAbrir === defaultComoAbrir || !comoAbrir) {
+    const comoAbrir = normalizarModoAbertura(newParams.comoAbrir || '');
+    if (comoAbrir === defaultComoAbrir) {
       currentParams.delete('comoAbrir');
     } else {
       // URLSearchParams.set já aplica percent-encoding
@@ -148,21 +185,45 @@ export function construirQueryAtualizada(searchAtual, newParams, options = {}) {
   }
 
   if (newParams.ordenar !== undefined) {
-    const ordenar = (newParams.ordenar || '').trim();
-    if (ordenar === 'numero' || !ordenar) currentParams.delete('ordenar');
+    const ordenar = normalizarOrdenacao((newParams.ordenar || '').trim());
+    if (ordenar === ORDENACAO_PADRAO) currentParams.delete('ordenar');
     else currentParams.set('ordenar', ordenar);
   }
 
   if (newParams.itensPorPagina !== undefined) {
-    const itensPorPagina = parseInt(newParams.itensPorPagina, 10);
-    if (isNaN(itensPorPagina) || itensPorPagina === 10) currentParams.delete('itensPorPagina');
+    const itensPorPagina = normalizarItensPorPagina(newParams.itensPorPagina);
+    if (itensPorPagina === ITENS_POR_PAGINA_PADRAO) currentParams.delete('itensPorPagina');
     else currentParams.set('itensPorPagina', itensPorPagina.toString());
   }
 
   if (newParams.pagina !== undefined) {
-    const pagina = parseInt(newParams.pagina, 10);
-    if (isNaN(pagina) || pagina <= 1) currentParams.delete('pagina');
+    const pagina = normalizarPagina(newParams.pagina);
+    if (pagina === 1) currentParams.delete('pagina');
     else currentParams.set('pagina', pagina.toString());
+  }
+
+  // D-9: um param conhecido que sobrou inválido na query (não necessariamente
+  // citado acima) é normalizado agora. Idempotente: um valor já válido passa
+  // por aqui sem mudar nada.
+  if (currentParams.has('comoAbrir')) {
+    const valor = normalizarModoAbertura(currentParams.get('comoAbrir'));
+    if (valor === defaultComoAbrir) currentParams.delete('comoAbrir');
+    else currentParams.set('comoAbrir', valor);
+  }
+  if (currentParams.has('ordenar')) {
+    const valor = normalizarOrdenacao(currentParams.get('ordenar'));
+    if (valor === ORDENACAO_PADRAO) currentParams.delete('ordenar');
+    else currentParams.set('ordenar', valor);
+  }
+  if (currentParams.has('itensPorPagina')) {
+    const valor = normalizarItensPorPagina(currentParams.get('itensPorPagina'));
+    if (valor === ITENS_POR_PAGINA_PADRAO) currentParams.delete('itensPorPagina');
+    else currentParams.set('itensPorPagina', String(valor));
+  }
+  if (currentParams.has('pagina')) {
+    const valor = normalizarPagina(currentParams.get('pagina'));
+    if (valor === 1) currentParams.delete('pagina');
+    else currentParams.set('pagina', String(valor));
   }
 
   return currentParams.toString();

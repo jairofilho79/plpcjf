@@ -79,8 +79,32 @@ describe('§5.2 filtros e busca — links que já circulam', () => {
     assert.deepEqual(parseUrlParams(url('/?materiais=')).materiais, []);
   });
 
+  it('F7 (volta) [#21/D-8]: desmarcar tudo agora GRAVA materiais= vazio, não apaga o param', () => {
+    // Era: `materiais=` vazio só existia na leitura; a escrita de lista vazia
+    // apagava o param, e "nada selecionado" virava "todos" (CATEGORIAS) ao
+    // recarregar. Passa a ser: o estado "nada selecionado" é alcançável pela
+    // UI e sobrevive a um F5 — só a seleção IGUAL ao padrão continua apagando.
+    assert.equal(construirQueryAtualizada('', { materiais: [] }, { defaultMateriais: CATEGORIAS }), 'materiais=');
+    assert.equal(
+      construirQueryAtualizada('?materiais=Cifra', { materiais: CATEGORIAS }, { defaultMateriais: CATEGORIAS }),
+      ''
+    );
+  });
+
   it('F8: arranjo= vazio devolve lista vazia', () => {
     assert.deepEqual(parseUrlParams(url('/?arranjo=')).arranjo, []);
+  });
+
+  it('F8 (volta) [#21/D-8]: arranjo e arranjoEspecial gravam vazio ao invés de apagar', () => {
+    // Era: `arranjo=` vazio era efeito colateral do bloqueio do auto-select-all;
+    // a escrita explícita de lista vazia apagava o param. Passa a ser: o valor
+    // vazio é gravado — ausência do param continua significando "padrão", mas
+    // agora é uma ausência real, não um vazio disfarçado de ausência.
+    assert.equal(construirQueryAtualizada('?arranjo=PES', { arranjo: [] }), 'arranjo=');
+    assert.equal(
+      construirQueryAtualizada('?arranjoEspecial=GLTM', { arranjoEspecial: [] }),
+      'arranjoEspecial='
+    );
   });
 
   it('F9/F10/F11: os cinco modos de comoAbrir sobrevivem ao round-trip', () => {
@@ -92,10 +116,12 @@ describe('§5.2 filtros e busca — links que já circulam', () => {
     assert.equal(construirQueryAtualizada('', { comoAbrir: 'newtab' }, { defaultComoAbrir: 'leitor' }), 'comoAbrir=newtab');
   });
 
-  it('F12: comoAbrir inválido é devolvido cru e permanece na URL', () => {
-    // ⚠︎ D-9 decide normalizar isto na próxima escrita; hoje o param fica pendurado.
+  it('F12: comoAbrir inválido é devolvido cru na leitura, mas normalizado na escrita seguinte (D-9)', () => {
+    // Era: o param ficava pendurado na URL para sempre (parseUrlParams devolve
+    // o valor cru — isso não muda). Passa a ser: qualquer escrita subsequente
+    // apaga um `comoAbrir` inválido, mesmo que a escrita não fale dele.
     assert.equal(parseUrlParams(url('/?comoAbrir=lixo')).comoAbrir, 'lixo');
-    assert.equal(construirQueryAtualizada('?comoAbrir=lixo', { pesquisa: 'x' }), 'comoAbrir=lixo&pesquisa=x');
+    assert.equal(construirQueryAtualizada('?comoAbrir=lixo', { pesquisa: 'x' }), 'pesquisa=x');
   });
 
   it('F13/F14/F15: pesquisa textual, numérica e acentuada', () => {
@@ -156,11 +182,31 @@ describe('§5.3 paginação e ordenação', () => {
     assert.equal(construirQueryAtualizada('', { ordenar: 'nome' }), 'ordenar=nome');
   });
 
+  it('P9 (volta) [#21/D-9]: ordenar inválido some na próxima escrita, mesmo sem falar dele', () => {
+    // Era: `?ordenar=aleatorio` ficava na URL para sempre (P7/P8/P9 acima
+    // documenta a leitura, que continua devolvendo o valor cru). Passa a ser:
+    // qualquer escrita seguinte — mesmo uma que não toque em `ordenar` — o
+    // normaliza para o padrão e, sendo o padrão, apaga o param.
+    assert.equal(construirQueryAtualizada('?ordenar=aleatorio', { pesquisa: 'x' }), 'pesquisa=x');
+  });
+
   it('P10/P11: itensPorPagina inválido vira NaN na leitura; a escrita apaga o default 10', () => {
     assert.equal(parseUrlParams(url('/biblioteca?itensPorPagina=7')).itensPorPagina, 7);
     assert.ok(Number.isNaN(parseUrlParams(url('/?itensPorPagina=xyz')).itensPorPagina));
     assert.equal(construirQueryAtualizada('?itensPorPagina=25', { itensPorPagina: 10 }), '');
     assert.equal(construirQueryAtualizada('', { itensPorPagina: 25 }), 'itensPorPagina=25');
+  });
+
+  it('P11 (volta) [#21/D-9]: itensPorPagina fora da lista válida some na próxima escrita', () => {
+    // Era: a home mantinha `?itensPorPagina=7` para sempre (só a biblioteca já
+    // limpava, via seu próprio VALID_OPTIONS.includes na leitura). Passa a
+    // ser: a mesma função de escrita limpa nas duas rotas — a assimetria
+    // estava na página, não devia estar na URL.
+    assert.equal(construirQueryAtualizada('?itensPorPagina=7', { pesquisa: 'x' }), 'pesquisa=x');
+  });
+
+  it('D-9: pagina inválida (não numérica) some na próxima escrita, mesmo sem falar dela', () => {
+    assert.equal(construirQueryAtualizada('?pagina=abc', { pesquisa: 'x' }), 'pesquisa=x');
   });
 
   it('P12: os sete params simultâneos, o caso de regressão mais denso do app', () => {

@@ -1,7 +1,6 @@
 <script>
-  import { onMount } from 'svelte';
+  import { onDestroy, onMount } from 'svelte';
   import { browser } from '$app/environment';
-  import { get } from 'svelte/store';
   import { page } from '$app/stores';
   import { goto } from '$app/navigation';
   import { louvores, loadLouvores, louvoresLoaded } from '$lib/stores/louvores';
@@ -10,8 +9,8 @@
   import { pdfViewer } from '$lib/stores/pdfViewer';
   import { carousel } from '$lib/stores/carousel';
   import { savedPlaylists } from '$lib/stores/savedPlaylists';
-  import { bibliotecaItemsPerPage, VALID_OPTIONS } from '$lib/stores/bibliotecaItemsPerPage';
-  import { parseUrlParams, updateUrlParams } from '$lib/utils/urlSync';
+  import { bibliotecaItemsPerPage } from '$lib/stores/bibliotecaItemsPerPage';
+  import { lerEstadoDaUrl, updateUrlParams } from '$lib/utils/urlSync';
   import {
     parseSharePdfIds,
     resolveKnownPdfIds,
@@ -29,90 +28,72 @@
 
   /** Em conjunto com `id` em SearchBar.svelte — só esse input bloqueia sync URL → pesquisa */
   const LOUVOR_SEARCH_INPUT_ID = 'louvor-search-input';
-  
-  // Inicializar searchQuery da URL
-  let searchQuery = browser && $page && $page.url ? (parseUrlParams($page.url).pesquisa || '') : '';
-  /**
-     * @type {string | any[]}
-     */
+
+  // #21: a URL é a fonte de verdade. Todo o estado de busca, filtro e
+  // paginação deriva dela por `$:`; a escrita só nasce de evento de usuário ou
+  // de normalização idempotente — depois dela, a condição que a disparou fica
+  // falsa, e o bloco reativo roda de novo sem fazer nada. Por isso não existe
+  // mais nenhuma flag "estou atualizando" nem religamento por `setTimeout`.
+  $: estadoUrl = lerEstadoDaUrl(browser && $page && $page.url ? $page.url : { search: '' });
+  $: naHome = browser && $page?.url?.pathname === '/';
+
+  /** Texto do input. Só é reescrito quando o valor DA URL muda de verdade. */
+  let searchQuery = browser && $page && $page.url ? lerEstadoDaUrl($page.url).pesquisa : '';
+  let ultimaPesquisaDaUrl = searchQuery;
+  $: if (browser && estadoUrl.pesquisa !== ultimaPesquisaDaUrl) {
+    ultimaPesquisaDaUrl = estadoUrl.pesquisa;
+    const el = document.activeElement;
+    const searchInputFocused = el instanceof HTMLInputElement && el.id === LOUVOR_SEARCH_INPUT_ID;
+    if (!searchInputFocused && estadoUrl.pesquisa !== (searchQuery || '').trim()) {
+      searchQuery = estadoUrl.pesquisa;
+    }
+  }
+
+  /** @type {any[]} */
   let filteredResults = [];
-  /**
-     * @type {number | null | undefined}
-     */
+  /** @type {any} */
   let debounceTimer = null;
+  /** @type {any} */
   let searchUrlUpdateTimer = null;
-  let isUpdatingFromUrl = false;
   let sharedLinkProcessed = false;
-
-  let currentPage = 1;
   let pageInput = '1';
-  let isUpdatingPageFromUrl = false;
-  let isUpdatingItemsPerPageFromUrl = false;
-  let homeUrlSyncInitialized = false;
-  /** @type {{ itensPorPagina: number; pagina: number }} */
-  let lastKnownHomeUrl = { itensPorPagina: 10, pagina: 1 };
-  let pageInitializedFromUrl = false;
-
-  /** Última pesquisa aplicada em filterLouvores; mudança explícita de texto zera paginação de deep link. */
-  /** @type {string | null} */
-  let lastSearchAppliedInFilter = null;
-  /** @type {string | null} */
-  let lastFilterCriteriaKey = null;
-  let shouldResetPageOnFilterResult = false;
-
   /** @type {any[]} */
   let paginatedResults = [];
   let filtersExpanded = false;
+
+  /** Vira true quando filterLouvores já rodou com catálogo e arranjos prontos. */
+  let resultadosProntos = false;
+  /** Critério de filtro da última execução real; mudar de verdade zera a paginação. */
+  /** @type {string | null} */
+  let criterioAnterior = null;
+  let filtersInitialized = false;
 
   /**
    * @param {any[]} results
    */
   function finalizeFilteredResults(results) {
     filteredResults = results;
-    const ipp = get(bibliotecaItemsPerPage);
-    const groupCount = groupLouvoresByGroupId(results).length;
-    const maxP = groupCount === 0 ? 1 : Math.max(1, Math.ceil(groupCount / ipp));
-    if (shouldResetPageOnFilterResult) {
-      currentPage = 1;
-      pageInput = '1';
-      shouldResetPageOnFilterResult = false;
-      if (browser && homeUrlSyncInitialized && $page?.url?.pathname === '/' && !isUpdatingFromUrl) {
-        updateUrlParams({ pagina: 1 });
-        lastKnownHomeUrl = { ...lastKnownHomeUrl, pagina: 1 };
-      }
-    } else if (currentPage > maxP) {
-      currentPage = maxP;
-      pageInput = String(maxP);
-      if (browser && homeUrlSyncInitialized && $page?.url?.pathname === '/' && !isUpdatingFromUrl) {
-        updateUrlParams({ pagina: maxP });
-        lastKnownHomeUrl = { ...lastKnownHomeUrl, pagina: maxP };
-      }
+    // Marca que já houve uma filtragem real com os dados prontos. Antes disso,
+    // ajustar a paginação seria apagar o `?pagina=3` de um deep link em aba fria
+    // — a corrida que fazia a mesma URL abrir na página 3 ou na 1 dependendo de
+    // quem chegava primeiro, o auto-select-all dos arranjos ou o debounce (D-3).
+    if ($louvoresLoaded && $louvores.length > 0 && $classificationFilters.length > 0) {
+      resultadosProntos = true;
     }
   }
 
   /**
+   * Única porta de escrita da paginação. Não mexe em estado local: a página
+   * vem da URL, e a URL vem daqui — `currentPage` (abaixo) se recalcula
+   * sozinho quando `estadoUrl.pagina` mudar.
    * @param {number} p
-   * @param {{ scroll?: boolean; skipUrlUpdate?: boolean }} [opts]
+   * @param {{ scroll?: boolean }} [opts]
    */
-  function setPage(p, { scroll = true, skipUrlUpdate = false } = {}) {
-    const ipp = get(bibliotecaItemsPerPage);
-    const groupCount = groupLouvoresByGroupId(filteredResults).length;
-    const tp = groupCount === 0 ? 1 : Math.max(1, Math.ceil(groupCount / ipp));
-    const maxPage = tp > 0 ? tp : 1;
-    const pageNum = Math.max(1, Math.min(maxPage, p));
-    const pageHrefBeforeUpdate = browser && $page?.url ? $page.url.href : '';
-    currentPage = pageNum;
-    pageInput = pageNum.toString();
-    if (browser && !skipUrlUpdate && !isUpdatingPageFromUrl && homeUrlSyncInitialized && $page?.url?.pathname === '/') {
-      isUpdatingPageFromUrl = true;
-      lastKnownHomeUrl = { ...lastKnownHomeUrl, pagina: pageNum };
-      updateUrlParams({ pagina: pageNum });
-      setTimeout(() => {
-        isUpdatingPageFromUrl = false;
-      }, 100);
-    }
-    if (scroll && tp > 0 && browser) {
-      document.getElementById('home-louvores-results')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  function setPage(p, { scroll = true } = {}) {
+    const alvo = Math.max(1, Math.min(totalPagesHome, p));
+    updateUrlParams({ pagina: alvo });
+    if (scroll && browser) {
+      scrollHomeResultsTop();
     }
   }
 
@@ -122,69 +103,38 @@
     }
   }
 
-  /** Mantém `pagina` na URL ao sincronizar pesquisa (evita reset para página 1). */
-  function homeSearchUrlParams(pesquisa) {
-    return currentPage > 1 ? { pesquisa, pagina: currentPage } : { pesquisa };
-  }
-  
-  // Reagir a mudanças na URL para atualizar searchQuery
-  // Só atualiza se o valor da URL for diferente do valor atual (normalizado)
-  // E não atualiza se o campo de pesquisa estiver focado (usuário está digitando)
-  $: if (browser && !isUpdatingFromUrl && $page && $page.url) {
-    const urlParams = parseUrlParams($page.url);
-    const urlPesquisa = (urlParams.pesquisa || '').trim();
-    const currentPesquisa = (searchQuery || '').trim();
-    
-    const el = document.activeElement;
-    const searchInputFocused =
-      el instanceof HTMLInputElement && el.id === LOUVOR_SEARCH_INPUT_ID;
-    
-    if (urlPesquisa !== currentPesquisa && !searchInputFocused) {
-      isUpdatingFromUrl = true;
-      searchQuery = urlParams.pesquisa || '';
-      // Usar setTimeout para garantir que a flag seja resetada após a atualização
-      setTimeout(() => {
-        isUpdatingFromUrl = false;
-      }, 0);
-    }
-  }
-  
-  let filtersInitialized = false;
-  let initTimeout = null;
-  
   // Função para inicializar os filtros
   function initializeFiltersIfNeeded() {
-    if (filtersInitialized || !browser || !$page || !$page.url) return;
-    if (!$louvores.length || !$louvoresLoaded) return;
-    
-    const urlParams = parseUrlParams($page.url);
-    const urlHasArranjo = $page.url.search && $page.url.search.includes('arranjo=');
-    
+    if (filtersInitialized || !browser || !$louvoresLoaded || !$louvores.length) return;
+
     // Calcular classificações únicas
     const classifications = $louvores
       .map(louvor => normalizeClassification(louvor.classificacao))
       .filter(c => c)
       .filter((c, index, arr) => arr.indexOf(c) === index)
       .sort();
-    
+
     if (classifications.length === 0) return; // Ainda não há classificações disponíveis
-    
-    // Se URL não tem arranjo e não há filtros selecionados, selecionar todos
-    if (!urlHasArranjo && $classificationFilters.length === 0) {
-      filtersInitialized = true;
-      classificationFilters.selectAll(classifications);
-    } else if (urlHasArranjo || $classificationFilters.length > 0) {
-      // Já tem parâmetro na URL ou já há filtros selecionados
-      filtersInitialized = true;
+
+    filtersInitialized = true;
+    // #21/D-2: o padrão "todos os arranjos" deixa de ser GRAVADO na barra de
+    // endereços sozinho ~200ms depois de abrir — o link mais copiado do app
+    // não pode se auto-reescrever. `aplicarPadrao` só popula o store; os links
+    // já compartilhados no formato `?arranjo=<5 valores>` continuam sendo
+    // lidos normalmente pelo `page.subscribe` de classificationFilters.js.
+    if (!estadoUrl.temArranjo && $classificationFilters.length === 0) {
+      classificationFilters.aplicarPadrao(classifications);
     }
   }
-  
+
   /**
    * @param {CustomEvent<{ value: number }>} e
    */
   function handleHomeItemsPerPage(e) {
     bibliotecaItemsPerPage.set(e.detail.value);
-    setPage(1, { scroll: false });
+    // As duas escritas entram na mesma query pendente do urlSync e viram um
+    // só goto (§4.9) — nenhuma das duas é descartada pela outra.
+    updateUrlParams({ itensPorPagina: e.detail.value, pagina: 1 });
     scrollHomeResultsTop();
   }
 
@@ -197,62 +147,13 @@
 
   onMount(async () => {
     await loadLouvores();
-    
-    if (browser) {
-      if ($page.url.pathname === '/') {
-        const hp = parseUrlParams($page.url);
-        const urlIpp =
-          hp.itensPorPagina !== null && VALID_OPTIONS.includes(hp.itensPorPagina)
-            ? hp.itensPorPagina
-            : 10;
-        const urlPag = hp.pagina !== null && hp.pagina > 0 ? hp.pagina : 1;
-        lastKnownHomeUrl = { itensPorPagina: urlIpp, pagina: urlPag };
-        if (hp.itensPorPagina !== null && VALID_OPTIONS.includes(hp.itensPorPagina)) {
-          isUpdatingItemsPerPageFromUrl = true;
-          bibliotecaItemsPerPage.set(hp.itensPorPagina);
-          setTimeout(() => {
-            isUpdatingItemsPerPageFromUrl = false;
-          }, 0);
-        }
-        if (urlPag > 1) {
-          pageInitializedFromUrl = true;
-        }
-        currentPage = urlPag;
-        pageInput = String(urlPag);
-      }
-      homeUrlSyncInitialized = true;
+  });
 
-      // Aguardar até que os louvores estejam carregados
-      const checkAndInit = () => {
-        if ($louvoresLoaded && $louvores.length > 0 && !filtersInitialized) {
-          // Aguardar um pouco para garantir que os dados reativos estejam processados
-          if (initTimeout) clearTimeout(initTimeout);
-          initTimeout = setTimeout(() => {
-            initializeFiltersIfNeeded();
-          }, 200);
-        }
-      };
-      
-      // Verificar imediatamente se já está pronto
-      checkAndInit();
-      
-      // Também escutar mudanças
-      const unsubscribeLouvores = louvoresLoaded.subscribe(() => {
-        checkAndInit();
-      });
-      
-      // Limpar timers ao destruir componente
-      return () => {
-        unsubscribeLouvores();
-        if (initTimeout) clearTimeout(initTimeout);
-        if (debounceTimer) {
-          clearTimeout(debounceTimer);
-        }
-        if (searchUrlUpdateTimer) {
-          clearTimeout(searchUrlUpdateTimer);
-        }
-      };
-    }
+  // #21: o retorno de um onMount `async` é uma Promise, e o Svelte a ignora —
+  // o cleanup de timers escrito ali dentro nunca rodava. Fica aqui, de verdade.
+  onDestroy(() => {
+    if (debounceTimer) clearTimeout(debounceTimer);
+    if (searchUrlUpdateTimer) clearTimeout(searchUrlUpdateTimer);
   });
 
   /**
@@ -329,30 +230,19 @@
     .filter((c, index, arr) => arr.indexOf(c) === index)
     .sort();
   
-  function handleSearch() {
-    filterLouvores();
-  }
-  
   /**
    * Ao sair do campo de pesquisa, sincroniza a URL imediatamente.
    * Evita que o bloco reativo URL → searchQuery aplique `pesquisa` vazio da URL
    * enquanto o debounce de 500ms ainda não gravou o texto digitado.
    */
   function flushSearchToUrlOnBlur() {
-    if (!browser || !$page?.url || $page.url.pathname !== '/') return;
+    if (!browser || !naHome) return;
     if (searchUrlUpdateTimer) {
       clearTimeout(searchUrlUpdateTimer);
       searchUrlUpdateTimer = null;
     }
-    const urlParams = parseUrlParams($page.url);
-    const urlPesquisa = (urlParams.pesquisa || '').trim();
-    const currentPesquisa = (searchQuery || '').trim();
-    if (urlPesquisa === currentPesquisa) return;
-    isUpdatingFromUrl = true;
-    updateUrlParams(homeSearchUrlParams(searchQuery));
-    setTimeout(() => {
-      isUpdatingFromUrl = false;
-    }, 0);
+    if (estadoUrl.pesquisa === (searchQuery || '').trim()) return;
+    updateUrlParams({ pesquisa: searchQuery });
   }
 
   function handleClear() {
@@ -367,38 +257,15 @@
     }
     searchQuery = '';
     filteredResults = [];
-    currentPage = 1;
-    pageInput = '1';
-    pageInitializedFromUrl = false;
-    // Atualizar URL imediatamente ao limpar
-    if (browser && !isUpdatingFromUrl) {
-      updateUrlParams({ pesquisa: '', pagina: 1 });
-      lastKnownHomeUrl = { ...lastKnownHomeUrl, pagina: 1 };
-    }
+    updateUrlParams({ pesquisa: '', pagina: 1 });
   }
-  
+
   function filterLouvores() {
-    const qNow = (searchQuery || '').trim();
-    const categoriesKey = [...$filters].sort().join('|');
-    const classificationsKey = [...$classificationFilters].sort().join('|');
-    const criteriaKey = `${qNow}::${categoriesKey}::${classificationsKey}`;
-
-    if (lastFilterCriteriaKey !== null && criteriaKey !== lastFilterCriteriaKey) {
-      shouldResetPageOnFilterResult = true;
-      pageInitializedFromUrl = false;
-    }
-    lastFilterCriteriaKey = criteriaKey;
-
-    if (lastSearchAppliedInFilter !== null && qNow !== lastSearchAppliedInFilter) {
-      pageInitializedFromUrl = false;
-    }
-    lastSearchAppliedInFilter = qNow;
-
     if (!$louvores || $louvores.length === 0) {
       finalizeFilteredResults([]);
       return;
     }
-    
+
     // First, apply category filter (with inclusive logic for Cifra)
     const activeCategories = $filters;
     const allCategoriesSelected = activeCategories.length === CATEGORY_OPTIONS.length;
@@ -467,115 +334,108 @@
   $: itemsPerPageHome = $bibliotecaItemsPerPage;
   $: totalPagesHome =
     groupedResults.length === 0 ? 1 : Math.max(1, Math.ceil(groupedResults.length / itemsPerPageHome));
+
+  /** Página efetiva: a que está na URL, limitada ao que existe de verdade. */
+  $: currentPage = Math.min(Math.max(1, estadoUrl.pagina), totalPagesHome);
   $: paginatedResults = groupedResults.slice(
     (currentPage - 1) * itemsPerPageHome,
     currentPage * itemsPerPageHome
   );
 
-  $: if (
-    browser &&
-    homeUrlSyncInitialized &&
-    !isUpdatingFromUrl &&
-    !isUpdatingItemsPerPageFromUrl &&
-    !isUpdatingPageFromUrl &&
-    $page?.url?.pathname === '/' &&
-    $page?.url
-  ) {
-    const urlParams = parseUrlParams($page.url);
-    const urlIpp =
-      urlParams.itensPorPagina !== null && VALID_OPTIONS.includes(urlParams.itensPorPagina)
-        ? urlParams.itensPorPagina
-        : 10;
-    const urlPag = urlParams.pagina !== null && urlParams.pagina > 0 ? urlParams.pagina : 1;
-    if (lastKnownHomeUrl.itensPorPagina !== urlIpp || lastKnownHomeUrl.pagina !== urlPag) {
-      lastKnownHomeUrl = { itensPorPagina: urlIpp, pagina: urlPag };
-      if (
-        urlParams.itensPorPagina !== null &&
-        VALID_OPTIONS.includes(urlParams.itensPorPagina) &&
-        urlIpp !== get(bibliotecaItemsPerPage)
-      ) {
-        isUpdatingItemsPerPageFromUrl = true;
-        bibliotecaItemsPerPage.set(urlIpp);
-        setTimeout(() => {
-          isUpdatingItemsPerPageFromUrl = false;
-        }, 100);
-      }
-      if (urlPag !== currentPage) {
-        isUpdatingPageFromUrl = true;
-        currentPage = urlPag;
-        pageInput = String(urlPag);
-        setTimeout(() => {
-          isUpdatingPageFromUrl = false;
-        }, 100);
+  /** Espelha a página efetiva no input, sem atropelar quem está digitando nele. */
+  let ultimaPaginaPublicada = null;
+  $: if (currentPage !== ultimaPaginaPublicada) {
+    ultimaPaginaPublicada = currentPage;
+    pageInput = String(currentPage);
+  }
+
+  // Corrige a URL quando a página pedida não existe mais (deep link com
+  // `pagina` grande demais, ou lista que encolheu). Idempotente: depois da
+  // escrita, `estadoUrl.pagina === currentPage` e a condição fica falsa.
+  // `resultadosProntos` é o que evita apagar um `?pagina=3` antes de a lista
+  // real existir — sem ele, essa era a corrida de aba fria x aba quente (D-3).
+  $: if (browser && naHome && resultadosProntos && estadoUrl.pagina !== currentPage) {
+    updateUrlParams({ pagina: currentPage });
+  }
+
+  // itensPorPagina: o param manda quando presente; ausente, publica a
+  // preferência do store (compartilhado com /biblioteca, D-10). Também
+  // idempotente — depois de uma passada as duas pontas coincidem.
+  $: if (browser && naHome && $page?.url) {
+    const temParamItensPorPagina = $page.url.searchParams.has('itensPorPagina');
+    if (temParamItensPorPagina && estadoUrl.itensPorPagina !== $bibliotecaItemsPerPage) {
+      bibliotecaItemsPerPage.set(estadoUrl.itensPorPagina);
+    } else if (!temParamItensPorPagina && $bibliotecaItemsPerPage !== 10) {
+      updateUrlParams({ itensPorPagina: $bibliotecaItemsPerPage });
+    }
+  }
+
+  // D-9: um param conhecido que sobrou inválido é normalizado numa escrita
+  // sem novos params — resolve tanto a assimetria home×biblioteca de
+  // `?itensPorPagina=7` (P10/P11) quanto o `?comoAbrir=lixo` que antes ficava
+  // pendurado para sempre (F12).
+  $: if (browser && naHome && estadoUrl.paramsInvalidos.length > 0) {
+    updateUrlParams({});
+  }
+
+  // Chave de identidade do filtro atual. JSON.stringify evita qualquer
+  // colisão de separador com um valor real de arranjo/material (o `::`/`|`
+  // manual colidiria com um arranjo chamado, por exemplo, "A::B").
+  $: criterioAtual = JSON.stringify([
+    estadoUrl.pesquisa,
+    [...$filters].sort(),
+    [...$classificationFilters].sort()
+  ]);
+
+  // Trocar de filtro de verdade volta para a página 1. A PRIMEIRA chave (a
+  // chegada dos arranjos no load inicial) só é registrada, nunca tratada como
+  // mudança — é o que preserva a página de um deep link (D-3).
+  $: if (browser && naHome && resultadosProntos) {
+    if (criterioAnterior === null) {
+      criterioAnterior = criterioAtual;
+    } else if (criterioAtual !== criterioAnterior) {
+      criterioAnterior = criterioAtual;
+      if (estadoUrl.pagina !== 1) {
+        updateUrlParams({ pagina: 1 });
       }
     }
   }
 
-  $: if (
-    browser &&
-    homeUrlSyncInitialized &&
-    !isUpdatingItemsPerPageFromUrl &&
-    $page?.url?.pathname === '/' &&
-    $page?.url
-  ) {
-    const urlParams = parseUrlParams($page.url);
-    const urlIpp =
-      urlParams.itensPorPagina !== null && VALID_OPTIONS.includes(urlParams.itensPorPagina)
-        ? urlParams.itensPorPagina
-        : 10;
-    if (urlIpp !== $bibliotecaItemsPerPage) {
-      updateUrlParams({ itensPorPagina: $bibliotecaItemsPerPage });
-      lastKnownHomeUrl = { ...lastKnownHomeUrl, itensPorPagina: $bibliotecaItemsPerPage };
-    }
-  }
-  
   // Debounce: Aguarda 300ms após o usuário parar de digitar antes de pesquisar
   // Isso evita que a pesquisa bloqueie a digitação
-  $: if (searchQuery !== undefined && !isUpdatingFromUrl && browser) {
+  $: if (browser && searchQuery !== undefined) {
     $filters;
     $classificationFilters;
-    
+
     // Limpar timer anterior se existir
     if (debounceTimer) {
       clearTimeout(debounceTimer);
     }
-    
+
     // Criar novo timer para executar a pesquisa após 300ms
     debounceTimer = setTimeout(() => {
       filterLouvores();
     }, 300);
-    
+
     // Atualizar URL com debounce também (500ms para evitar muitas atualizações)
     // Só atualiza se o valor for diferente do que está na URL
     if (searchUrlUpdateTimer) {
       clearTimeout(searchUrlUpdateTimer);
     }
     searchUrlUpdateTimer = setTimeout(() => {
-      // #21: o usuário pode ter clicado num louvor e ido para /leitor dentro
-      // dos 500 ms. Sem esta checagem de rota, a escrita da busca dispara já lá
-      // — competindo com a navegação, ou poluindo a URL do PDF. É o único
-      // escritor de URL da home que não conferia o pathname.
-      if (!isUpdatingFromUrl && $page?.url?.pathname === '/') {
-        const urlParams = parseUrlParams($page.url);
-        const urlPesquisa = (urlParams.pesquisa || '').trim();
-        const currentPesquisa = (searchQuery || '').trim();
-        
-        // Só atualiza a URL se o valor realmente mudou
-        if (urlPesquisa !== currentPesquisa) {
-          isUpdatingFromUrl = true;
-          updateUrlParams(homeSearchUrlParams(searchQuery));
-          // Resetar flag após um pequeno delay para permitir que a URL seja atualizada
-          setTimeout(() => {
-            isUpdatingFromUrl = false;
-          }, 100);
-        }
-      }
+      // Digitar é evento de usuário: a escrita nasce daqui, nunca da URL. A
+      // guarda de rota real (o usuário pode ter clicado num louvor e ido para
+      // /leitor dentro dos 500ms) é conferida de novo no flush de urlSync.js,
+      // não aqui — checar só na chamada não bastava (R4).
+      if (!naHome) return;
+      if (estadoUrl.pesquisa === (searchQuery || '').trim()) return;
+      updateUrlParams({ pesquisa: searchQuery });
     }, 500);
   } else if (!browser) {
     // No servidor, executar diretamente
     filterLouvores();
   }
-  
+
   // Initialize filters with all classifications on first load if URL doesn't have arranjo param
   // Esta lógica funciona como backup caso o onMount não execute ou os dados estejam prontos antes
   // Usa flag para garantir que só inicialize uma vez, permitindo que usuário desselecione depois
@@ -583,7 +443,7 @@
     // Usar a mesma função de inicialização para garantir consistência
     initializeFiltersIfNeeded();
   }
-  
+
   /**
    * @param {{ groupId?: string, materials?: { pdfId?: string }[] }} group
    */
