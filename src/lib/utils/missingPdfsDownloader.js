@@ -8,7 +8,7 @@ import { findMissingPdfs } from './pdfValidation.js';
 import { getPdfRelPath } from './pathUtils.js';
 import { getCachedPDFsFast } from './swRegistration.js';
 import { downloadPDFsViaSW } from './swRegistration.js';
-import { createUrlUtf8 } from './urlEncoding.js';
+import PdfPathManager from '$lib/offline/utils/PdfPathManager.js';
 import { louvores } from '$lib/stores/louvores.js';
 import { get } from 'svelte/store';
 import { browser } from '$app/environment';
@@ -108,8 +108,8 @@ export async function downloadMissingPdfs(options = {}) {
           continue;
         }
 
-        // Create full URL using createUrlUtf8 to handle UTF-8 encoding
-        const fullUrl = createUrlUtf8(`/${pdfPath}`, window.location.origin);
+        // #22.1: um só construtor de URL de PDF em todo o cliente.
+        const fullUrl = PdfPathManager.createRequestUrl(pdfPath, window.location.origin);
         pdfUrls.push(fullUrl);
       } catch (error) {
         console.error('[Missing PDFs Downloader] Error extracting PDF URL:', error);

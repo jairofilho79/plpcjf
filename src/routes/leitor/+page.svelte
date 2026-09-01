@@ -14,6 +14,7 @@
   import { ZoomController } from '$lib/pdf-reader/zoomController';
   import { resolvePdfSourceUrl as resolveSource } from '$lib/pdf-reader/pdfSourceResolver';
   import { ViewerAdapter } from '$lib/pdf-reader/viewerAdapter';
+  import PdfPathManager from '$lib/offline/utils/PdfPathManager.js';
 
   // ── Performance Debug ────────────────────────────────────────────────────────
   const _perfEnabled = () =>
@@ -261,7 +262,10 @@
     // O PDF deve ser carregado e validado usando o caminho original (preserva case e acentos)
     const urlObj = new URL(fileUrl, window.location.origin);
     const pdfPath = urlObj.pathname.startsWith('/') ? urlObj.pathname.substring(1) : urlObj.pathname;
-    const originalFullUrl = new URL(`/${pdfPath}`, window.location.origin).href;
+    // #22.1: um só codificador. O parser WHATWG deixa `[` e `]` literais e o
+    // escritor do cache os escapa — para os 3 PDFs do acervo com colchetes no
+    // nome, a URL pedida aqui nunca era a chave gravada.
+    const originalFullUrl = PdfPathManager.createRequestUrl(pdfPath, window.location.origin);
     lastPdfPathForRecovery = pdfPath;
     lastOriginalFullUrlForRecovery = originalFullUrl;
     

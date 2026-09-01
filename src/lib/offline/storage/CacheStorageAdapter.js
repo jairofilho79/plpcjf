@@ -8,7 +8,7 @@ import { getConfig } from '../core/OfflineConfig.js';
 import offlineEvents, { EVENTS } from '../core/OfflineEvents.js';
 import { createLogger } from '../utils/OfflineLogger.js';
 import { browser } from '$app/environment';
-import PdfPathManager from '../utils/PdfPathManager.js';
+import PdfPathManager, { registrarAcertoPdf } from '../utils/PdfPathManager.js';
 import { 
   encodeUrlUtf8, 
   decodeUrlUtf8, 
@@ -210,6 +210,7 @@ export class CacheStorageAdapter extends CacheRepository {
               timestamp: Date.now()
             });
             logger.debug('CacheStorageAdapter', `PDF found in cache: ${normalizedPath}`);
+            registrarAcertoPdf(url === searchVariations[0] ? 'direto' : 'variacao', url);
             return response;
           }
         } catch (e) {

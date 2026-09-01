@@ -23,7 +23,7 @@ import {
   CATALOG_MANIFEST_PATHS,
   PDF_CACHE_NAME
 } from '$lib/offline/sw/swCaches.js';
-import PdfPathManager from '$lib/offline/utils/PdfPathManager.js';
+import PdfPathManager, { registrarAcertoPdf } from '$lib/offline/utils/PdfPathManager.js';
 import { createUrlUtf8 } from '$lib/utils/urlEncoding.js';
 
 /** Cache do app, atrelado ao deploy. Espelhado em OfflineConfig.APP_CACHE_NAME. */
@@ -201,24 +201,32 @@ async function handlePdf(event, url) {
   const cache = await caches.open(PDF_CACHE);
 
   const direct = await cache.match(event.request);
-  if (direct) return direct;
+  if (direct) {
+    registrarAcertoPdf('direto');
+    return direct;
+  }
 
   const variations = PdfPathManager.createSearchVariations(url.pathname, self.location.origin);
   for (const variationUrl of variations) {
     try {
       const cached = await cache.match(new Request(variationUrl));
-      if (cached) return cached;
+      if (cached) {
+        registrarAcertoPdf('variacao', variationUrl);
+        return cached;
+      }
     } catch {
       // Variação malformada: tenta a próxima.
     }
   }
+  registrarAcertoPdf('miss', url.pathname);
 
   try {
     const response = await fetch(event.request);
     if (response && response.status === 200) {
+      // #22.1: a chave de gravação sai do mesmo construtor que o leitor usa.
       const normalizedPath = PdfPathManager.normalizeForStorage(url.pathname);
       const normalizedRequest = new Request(
-        createUrlUtf8(`/${normalizedPath}`, self.location.origin)
+        PdfPathManager.createRequestUrl(url.pathname, self.location.origin)
       );
       await cache.put(normalizedRequest, response.clone());
       debug('PDF gravado (normalizado):', normalizedPath);

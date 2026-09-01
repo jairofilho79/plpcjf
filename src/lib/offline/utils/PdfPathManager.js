@@ -144,5 +144,27 @@ class PdfPathManager {
   }
 }
 
+/**
+ * Instrumentação temporária da Fase 1 (#22.1).
+ *
+ * Conta como cada PDF foi encontrado no cache: pela chave canônica (`direto`),
+ * por alguma das variações difusas de `createSearchVariations` (`variacao`), ou
+ * não encontrado (`miss`). Depois desta tarefa, `variacao` tem de ficar em zero
+ * — é esse zero que autoriza a remoção das estratégias na Tarefa 9.
+ *
+ * A Tarefa 9 apaga este bloco inteiro.
+ */
+export const pdfMatchStats = { direto: 0, variacao: 0, miss: 0 };
+
+/** @param {'direto' | 'variacao' | 'miss'} tipo */
+export function registrarAcertoPdf(tipo, detalhe = '') {
+  if (tipo in pdfMatchStats) pdfMatchStats[tipo] += 1;
+  if (tipo === 'variacao') {
+    console.warn('[F1] acerto por variação:', detalhe);
+  }
+  const escopo = typeof self !== 'undefined' ? self : globalThis;
+  escopo.__plpcPdfMatchStats = pdfMatchStats;
+}
+
 export default PdfPathManager;
 
