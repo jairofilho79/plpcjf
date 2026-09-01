@@ -23,6 +23,7 @@ import {
   fetchWithRetry,
   excludeSkippedPartFromBytesTotal
 } from '$lib/offline/download/partProgress.js';
+import { verifyCompletedPart } from '$lib/offline/download/partVerification.js';
 import { louvores } from './louvores';
 import { validateManifestsIntegrity } from '$lib/utils/manifestValidation';
 import { CATEGORY_OPTIONS } from './filters';
@@ -689,43 +690,6 @@ async function readCachedPdfPaths(cache) {
 }
 
 /**
- * Caminhos relativos ("assets/…") dos PDFs declarados em uma parte do manifesto.
- * @param {any} part
- * @returns {string[]}
- */
-function getPartPdfPaths(part) {
-  const ids = Array.isArray(part?.pdfs) ? part.pdfs : [];
-  /** @type {string[]} */
-  const paths = [];
-  for (const pdfId of ids) {
-    if (typeof pdfId !== 'string') continue;
-    const relPath = getPdfRelPath({ pdfId });
-    if (relPath) paths.push(relPath);
-  }
-  return paths;
-}
-
-/**
- * Decide se uma parte marcada como concluída pode mesmo ser pulada.
- *
- * Só pula se todos os PDFs declarados na parte estiverem de fato no cache: a
- * marca no localStorage sozinha não basta (o usuário pode ter limpado o cache
- * entre as duas tentativas).
- *
- * @param {any} part
- * @param {Set<string> | null} cachedPaths
- * @returns {{ skippable: boolean, paths: string[] }}
- */
-function verifyCompletedPart(part, cachedPaths) {
-  const paths = getPartPdfPaths(part);
-  if (!cachedPaths || paths.length === 0) {
-    return { skippable: false, paths };
-  }
-  const skippable = paths.every((path) => cachedPaths.has(path));
-  return { skippable, paths };
-}
-
-/**
  * Erro traduzido para respostas que chegam OK mas não são um pacote —
  * o caso clássico é o wi-fi de portal cativo devolvendo a página de login.
  * @param {Response} response
@@ -847,7 +811,7 @@ async function startZipDownloadWithSpecificParts(categories, pdfUrls, partsByCat
         }));
 
         if (completedParts.has(part.filename)) {
-          const { skippable, paths } = verifyCompletedPart(part, cachedPaths);
+          const { skippable, paths } = verifyCompletedPart(part, cachedPaths, getPdfRelPath);
 
           if (skippable) {
             console.info(`[Offline Store] Parte já baixada, pulando: ${part.filename}`);
@@ -1813,7 +1777,7 @@ async function startZipDownload(categories, pdfUrls, alreadyDownloadedCategories
         }));
 
         if (completedParts.has(part.filename)) {
-          const { skippable, paths } = verifyCompletedPart(part, cachedPaths);
+          const { skippable, paths } = verifyCompletedPart(part, cachedPaths, getPdfRelPath);
 
           if (skippable) {
             console.info(`[Offline Store] Parte já baixada, pulando: ${part.filename}`);
@@ -2197,7 +2161,10 @@ async function downloadByCategories(categories) {
   saveCategories(validCategories);
 
   // Check if IS_LEITOR_OFFLINE flag exists, if not open PDF in leitor
-  const isLeitorOffline = localStorage.getItem('IS_LEITOR_OFFLINE');
+  // Via safeStorage(): mesmo motivo da definição de safeStorage() acima — no
+  // Firefox com dados do site bloqueados, o acesso direto a localStorage
+  // aqui lançaria.
+  const isLeitorOffline = safeStorage()?.getItem('IS_LEITOR_OFFLINE');
   if (!isLeitorOffline || isLeitorOffline !== 'true') {
     // Open offline-setup.pdf in leitor to set the flag
     // Use Safari-compatible navigation

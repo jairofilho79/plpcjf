@@ -123,12 +123,20 @@
       checkAndFixUrl();
       setTimeout(checkAndFixUrl, 100);
       
+      let disposed = false;
       /** @type {(() => void) | null} */
       let swCleanup = null;
       /** @type {(() => void) | null} */
       let swMessageCleanup = null;
 
       registerServiceWorker().then(({ cleanup }) => {
+        if (disposed) {
+          // O componente já foi desmontado enquanto o registro estava em voo:
+          // não adianta religar listener nenhum, só soltar o que acabou de
+          // ser criado.
+          cleanup?.();
+          return;
+        }
         swCleanup = cleanup;
 
         // Setup Service Worker message listener
@@ -144,6 +152,7 @@
       const removeLouvoresChecksumTriggers = setupLouvoresManifestChecksumTriggers();
 
       return () => {
+        disposed = true;
         removeLouvoresChecksumTriggers();
         removeStaleChunkListeners();
         cancelStaleRecoveryReset();

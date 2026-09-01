@@ -21,7 +21,8 @@ import {
   migrateCatalogManifests,
   CATALOG_CACHE_NAME,
   CATALOG_MANIFEST_PATHS,
-  PDF_CACHE_NAME
+  PDF_CACHE_NAME,
+  PDF_IMPORT_STAGING_CACHE_NAME
 } from '$lib/offline/sw/swCaches.js';
 import PdfPathManager from '$lib/offline/utils/PdfPathManager.js';
 import { createUrlUtf8 } from '$lib/utils/urlEncoding.js';
@@ -37,6 +38,9 @@ const PDF_CACHE = PDF_CACHE_NAME;
  * importa o bundle offline, é a única cópia do acervo no dispositivo.
  */
 const CATALOG_CACHE = CATALOG_CACHE_NAME;
+
+/** Área de espera da importação de bundle offline — também precisa sumir em "Limpar tudo". */
+const PDF_IMPORT_STAGING_CACHE = PDF_IMPORT_STAGING_CACHE_NAME;
 
 // ---------------------------------------------------------------------------
 // Log
@@ -647,6 +651,7 @@ async function handleClearCache(event) {
     await caches.delete(PDF_CACHE);
     await caches.delete(CATALOG_CACHE);
     await caches.delete(APP_CACHE);
+    await caches.delete(PDF_IMPORT_STAGING_CACHE);
     debug('Todos os caches limpos');
     notifyClientsCacheUpdated({ cleared: true });
     event.ports[0].postMessage({ type: 'CACHE_CLEARED' });

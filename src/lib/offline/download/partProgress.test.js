@@ -169,6 +169,23 @@ describe('classificação de resposta', () => {
     assert.equal(looksLikeCaptivePortal(zip), false);
     assert.equal(looksLikeCaptivePortal(null), false);
   });
+
+  it('reconhece xhtml+xml também', () => {
+    const xhtml = { headers: { get: () => 'application/xhtml+xml; charset=utf-8' } };
+    assert.equal(looksLikeCaptivePortal(xhtml), true);
+  });
+
+  it('reconhece redirecionamento sem content-type de arquivo', () => {
+    const redirecionado = { redirected: true, headers: { get: () => null } };
+    const zipRedirecionado = { redirected: true, headers: { get: () => 'application/zip' } };
+    assert.equal(looksLikeCaptivePortal(redirecionado), true);
+    assert.equal(looksLikeCaptivePortal(zipRedirecionado), false);
+  });
+
+  it('reconhece resposta sem content-type nenhum', () => {
+    const semHeader = { headers: { get: () => null } };
+    assert.equal(looksLikeCaptivePortal(semHeader), true);
+  });
 });
 
 describe('fetchWithRetry', () => {

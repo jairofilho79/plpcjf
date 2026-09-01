@@ -336,8 +336,22 @@ export function isRetryableStatus(status) {
  */
 export function looksLikeCaptivePortal(response) {
   try {
-    const contentType = response?.headers?.get?.('content-type') || '';
-    return contentType.toLowerCase().includes('text/html');
+    if (!response) return false;
+    const contentType = (response.headers?.get?.('content-type') || '').toLowerCase();
+    if (contentType.includes('text/html') || contentType.includes('application/xhtml+xml')) {
+      return true;
+    }
+    // Sem content-type nenhum, ou a resposta final não é mais a URL pedida
+    // (redirect): as duas são assinatura de portal cativo devolvendo outra
+    // coisa no lugar do pacote — a não ser que o content-type já diga que é
+    // um arquivo de verdade (pdf/zip). É uma escolha deliberadamente
+    // conservadora: prefere rejeitar uma resposta ambígua a aceitar um
+    // portal como pacote válido.
+    const pareceArquivo = contentType.includes('pdf') || contentType.includes('zip');
+    if (!pareceArquivo && (contentType === '' || response.redirected)) {
+      return true;
+    }
+    return false;
   } catch {
     return false;
   }
