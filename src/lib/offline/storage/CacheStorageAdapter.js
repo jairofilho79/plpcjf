@@ -174,6 +174,9 @@ export class CacheStorageAdapter extends CacheRepository {
             const response = await cache.match(request);
             if (response) {
               logger.debug('CacheStorageAdapter', `PDF found via variation cache: ${normalizedPath}`);
+              // Achado 1 da revisão: este atalho não é `direto` nem `variacao` — é
+              // uma consulta anterior reaproveitada sem repetir a busca.
+              registrarAcertoPdf('reaproveitado', cached.url);
               return response;
             }
           } catch (e) {
@@ -183,6 +186,10 @@ export class CacheStorageAdapter extends CacheRepository {
         } else {
           // We know this path doesn't exist (cached miss)
           logger.debug('CacheStorageAdapter', `PDF not found (cached miss): ${normalizedPath}`);
+          // Extensão além do Achado 1: também é um `miss`, só que memoizado —
+          // sem contá-lo aqui o total de categorias não bateria com o total
+          // de chamadas a getPdf().
+          registrarAcertoPdf('miss', normalizedPath);
           return null;
         }
       }
@@ -190,6 +197,7 @@ export class CacheStorageAdapter extends CacheRepository {
       // Check miss cache (avoid repeated failed attempts)
       if (this._missCache.has(normalizedPath)) {
         logger.debug('CacheStorageAdapter', `PDF in miss cache, skipping: ${normalizedPath}`);
+        registrarAcertoPdf('miss', normalizedPath);
         return null;
       }
 
@@ -239,6 +247,7 @@ export class CacheStorageAdapter extends CacheRepository {
               timestamp: Date.now()
             });
             logger.debug('CacheStorageAdapter', `PDF found in cache (fallback): ${normalizedPath}`);
+            registrarAcertoPdf('variacaoFallback', url);
             return response;
           }
         } catch (e) {
@@ -260,6 +269,7 @@ export class CacheStorageAdapter extends CacheRepository {
       }, this._missCacheTTL);
 
       logger.debug('CacheStorageAdapter', `PDF not found in cache: ${normalizedPath}`);
+      registrarAcertoPdf('miss', normalizedPath);
       return null;
     } catch (error) {
       logger.error('CacheStorageAdapter', `Error getting PDF: ${pdfPath}`, error);

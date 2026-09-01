@@ -67,9 +67,25 @@ class PdfPathManager {
   }
 
   /**
-   * Create Request URL from PDF path
-   * Creates full URL using UTF-8 encoding for Request object
-   * 
+   * #22.1 — o construtor canônico de URL de PDF do cliente.
+   *
+   * `createRequestUrl` é a **única** função que o leitor, o Service Worker
+   * (gravação em `handlePdf`) e os validadores/downloaders devem chamar para
+   * transformar um caminho de PDF em URL. Ela normaliza com
+   * `normalizeForStorage` (preserva caixa e acento) e codifica com
+   * `createUrlUtf8` (equivalente a `encodeURI`, ponto fixo do parser `URL`
+   * sobre os 4629 caminhos reais do acervo — ver
+   * `PdfPathManager.encoder.test.js`). Nenhum outro código deve montar essa
+   * URL de outro jeito: uma segunda forma de codificar é exatamente o defeito
+   * que esta função fecha.
+   *
+   * Verdade de hoje, não aspiração: a extração de pacote ZIP em
+   * `src/lib/stores/offline.js` (`:981`, `:2002`) ainda escreve no cache PDF
+   * chamando `createUrlUtf8` direto, sobre um caminho normalizado por
+   * `normalizeZipEntryName` — uma duplicata de `normalizeForStorage` que hoje
+   * concorda com ela byte a byte, mas não é a mesma função. Unificar esse
+   * quarto caminho de escrita é trabalho da Tarefa 6, não desta.
+   *
    * @param {string} pdfPath - PDF path (will be normalized)
    * @param {string} origin - Base origin URL (defaults to window.location.origin)
    * @returns {string} Full URL string with UTF-8 encoding
@@ -147,20 +163,55 @@ class PdfPathManager {
 /**
  * Instrumentação temporária da Fase 1 (#22.1).
  *
- * Conta como cada PDF foi encontrado no cache: pela chave canônica (`direto`),
- * por alguma das variações difusas de `createSearchVariations` (`variacao`), ou
- * não encontrado (`miss`). Depois desta tarefa, `variacao` tem de ficar em zero
- * — é esse zero que autoriza a remoção das estratégias na Tarefa 9.
+ * Conta como cada PDF foi encontrado, em **todos** os pontos de saída que
+ * existem hoje — tanto no `handlePdf` do Service Worker quanto no `getPdf`
+ * de `CacheStorageAdapter`, que tem duas camadas de estratégia difusa e um
+ * atalho de memoização que os outros dois pontos não têm:
+ *
+ * - `direto`      — bateu na chave canônica, de primeira, sem precisar de
+ *                    nenhuma estratégia difusa.
+ * - `variacao`     — bateu em alguma das variações de `createSearchVariations`
+ *                    (a primeira camada difusa), mas não na canônica.
+ * - `variacaoFallback` — só existe em `CacheStorageAdapter`: bateu na
+ *                    *segunda* camada de variações (`fallbackVariations`),
+ *                    que inclui correspondência só por nome de arquivo — a
+ *                    estratégia mais arriscada de todas, porque dois louvores
+ *                    diferentes podem ter o mesmo nome de arquivo.
+ * - `reaproveitado` — só existe em `CacheStorageAdapter`: o atalho de
+ *                    `_variationCache` (TTL) devolveu uma URL já conhecida de
+ *                    uma consulta anterior, sem repetir a busca. Não é
+ *                    `direto` nem `variacao` porque a consulta original que
+ *                    populou esse atalho pode ter sido qualquer uma das
+ *                    quatro categorias — contá-lo como `direto` esconderia
+ *                    reaproveitamento de um acerto que só existiu graças a
+ *                    uma estratégia difusa (o mesmo falso zero do Achado 1,
+ *                    só que em escala menor).
+ * - `miss`         — não encontrado por nenhuma estratégia.
+ *
+ * O que autoriza a Tarefa 9 a apagar as estratégias difusas é `variacao`,
+ * `variacaoFallback` **e** `reaproveitado` estarem em zero ao mesmo tempo —
+ * um `reaproveitado` maior que zero, mesmo com os outros dois zerados, ainda
+ * pode estar escondendo dependência de um acerto difuso antigo dentro do TTL
+ * de memoização.
  *
  * A Tarefa 9 apaga este bloco inteiro.
  */
-export const pdfMatchStats = { direto: 0, variacao: 0, miss: 0 };
+export const pdfMatchStats = {
+  direto: 0,
+  variacao: 0,
+  variacaoFallback: 0,
+  reaproveitado: 0,
+  miss: 0
+};
 
-/** @param {'direto' | 'variacao' | 'miss'} tipo */
+/** Categorias cujo acerto depende, direta ou indiretamente, de alguma estratégia difusa. */
+const CATEGORIAS_DIFUSAS = new Set(['variacao', 'variacaoFallback', 'reaproveitado']);
+
+/** @param {'direto' | 'variacao' | 'variacaoFallback' | 'reaproveitado' | 'miss'} tipo */
 export function registrarAcertoPdf(tipo, detalhe = '') {
   if (tipo in pdfMatchStats) pdfMatchStats[tipo] += 1;
-  if (tipo === 'variacao') {
-    console.warn('[F1] acerto por variação:', detalhe);
+  if (CATEGORIAS_DIFUSAS.has(tipo)) {
+    console.warn(`[F1] acerto por ${tipo}:`, detalhe);
   }
   const escopo = typeof self !== 'undefined' ? self : globalThis;
   escopo.__plpcPdfMatchStats = pdfMatchStats;

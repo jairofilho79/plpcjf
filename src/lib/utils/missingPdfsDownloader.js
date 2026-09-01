@@ -8,7 +8,7 @@ import { findMissingPdfs } from './pdfValidation.js';
 import { getPdfRelPath } from './pathUtils.js';
 import { getCachedPDFsFast } from './swRegistration.js';
 import { downloadPDFsViaSW } from './swRegistration.js';
-import PdfPathManager from '$lib/offline/utils/PdfPathManager.js';
+import PdfPathManager from '../offline/utils/PdfPathManager.js';
 import { louvores } from '$lib/stores/louvores.js';
 import { get } from 'svelte/store';
 import { browser } from '$app/environment';
