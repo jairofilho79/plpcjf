@@ -1247,14 +1247,16 @@ async function verifyPdfInCacheStorage(pdfUrl) {
  * ZIP files are removed from cache after extraction, so we verify PDFs directly.
  * Uses unified normalization function for consistency.
  * 
- * FIX: Added strict validation mode for problematic categories like "Gestos em Gravura"
- * that verifies directly in Cache Storage to avoid false positives from filename matching.
+ * #22.4: a verificação é sempre direta no Cache Storage. O antigo quarto
+ * parâmetro, que existia para desligar um bloco de fallback difuso numa
+ * categoria com muitos arquivos de mesmo nome, saiu junto com o bloco —
+ * agora todas as categorias usam o modo de verificação estrita.
  * FIX: Now handles category normalization - aggregates "Cifra nível I" and "Cifra nível II" into "Cifra"
  * @param {string} category
- * @param {any[]} cachedPdfs
+ * @param {any[]} cachedPdfs - só sinaliza que a lista de cache já foi carregada
  * @param {any[]} louvoresData
  */
-async function isCategoryCompletelyDownloaded(category, cachedPdfs, louvoresData, strictMode = false) {
+async function isCategoryCompletelyDownloaded(category, cachedPdfs, louvoresData) {
   if (!category || !louvoresData || !cachedPdfs) {
     return false;
   }
@@ -1271,22 +1273,6 @@ async function isCategoryCompletelyDownloaded(category, cachedPdfs, louvoresData
   if (categoryLouvores.length === 0) {
     return false;
   }
-
-  // FIX: For "Gestos em Gravura", always use strict mode to avoid false positives
-  // This category has many PDFs with the same filename, causing validation issues
-  if (category === 'Gestos em Gravura') {
-    strictMode = true;
-  }
-
-  // Use original paths for comparison (no normalization)
-  // Create set of cached PDFs using original paths
-  const cachedPdfsSet = new Set(
-    cachedPdfs.map((/** @type {string} */ url) => {
-      // Prepare path (remove leading slash for comparison)
-      const path = url.replace(/^\/+/, '');
-      return path;
-    })
-  );
 
   // Track unique PDFs found for counting validation
   const foundPdfs = new Set();
@@ -1314,51 +1300,15 @@ async function isCategoryCompletelyDownloaded(category, cachedPdfs, louvoresData
       foundPdfs.add(pdfPath);
     }
     
-    // Fallback strategies: Use original path comparison only if direct verification fails
-    // This provides compatibility with old cache entries or edge cases
-    if (!isCached && !strictMode) {
-      // Strategy 1: Exact match in cached list
-      if (cachedPdfsSet.has(pdfPath)) {
-        isCached = true;
-        foundPdfs.add(pdfPath);
-      }
-      
-      // Strategy 2: Partial match (check if any cached path ends with expected path)
-      if (!isCached) {
-        isCached = Array.from(cachedPdfsSet).some(cached => {
-          // Check if paths match (handling different URL formats)
-          if (cached === pdfPath) return true;
-          // Only accept if cached path ends with expected path (not vice versa)
-          if (cached.endsWith(pdfPath)) return true;
-          
-          // Check filename match only if paths are similar
-          const cachedFilename = cached.split('/').pop();
-          const expectedFilename = pdfPath.split('/').pop();
-          if (cachedFilename && expectedFilename && cachedFilename === expectedFilename) {
-            // Additional check: paths should be similar (same directory structure)
-            const cachedDir = cached.replace(cachedFilename, '');
-            const expectedDir = pdfPath.replace(expectedFilename, '');
-            if (cachedDir && expectedDir && cachedDir.includes(expectedDir)) {
-              return true;
-            }
-          }
-          
-          return false;
-        });
-        
-        if (isCached) {
-          foundPdfs.add(pdfPath);
-        }
-      }
-    }
+    // #22.4: as duas "estratégias de fallback" saíram. Medido sobre o acervo
+    // real: elas não achavam 40 dos 652 PDFs de uma categoria de fato baixada
+    // (a chave gravada é percent-encoded e `pdfPath` não é), e não achavam
+    // nenhum que a verificação direta acima já não achasse.
 
     if (!isCached) {
       missingCount++;
       if (missingCount <= 3) { // Log first 3 missing PDFs to avoid spam
-        console.warn(`[Offline Store] PDF not found in cache: ${pdfUrl}`);
-        if (strictMode) {
-          console.warn(`[Offline Store] Strict mode: verified directly in cache storage - NOT FOUND`);
-        }
+        console.warn(`[Offline Store] PDF não encontrado no cache (verificação direta): ${pdfUrl}`);
       }
     }
   }
@@ -1472,20 +1422,28 @@ async function checkForNewPDFs() {
      * @type {any[]}
      */
     const cachedPdfs = state.cachedPdfs;
-    
+
+    const indiceDeCache = buildPdfCacheIndex(cachedPdfs, {
+      normalize: (/** @type {string} */ path) => PdfPathManager.normalizeForStorage(path)
+    });
+
     // Find new PDFs that aren't cached yet AND are in the selected categories
     const newPdfs = louvoresData.filter(louvor => {
       // Only include PDFs from selected categories
       if (!savedCategories.includes(louvor.categoria)) {
         return false;
       }
-      
+
       const pdfUrl = getPdfUrl(louvor);
       if (!pdfUrl) {
         return false;
       }
-      
-      return !cachedPdfs.some(cached => cached.includes(pdfUrl));
+
+      // #22.4: era `cached.includes(pdfUrl)` — substring pura sobre milhares de
+      // URLs. Como a chave gravada é percent-encoded, ela dizia "novo" para os
+      // 2597 caminhos do acervo que têm espaço ou acento, mandando baixar de
+      // novo o que já estava no aparelho a cada mudança de manifesto.
+      return !indiceDeCache.has(pdfUrl);
     });
 
     if (newPdfs.length > 0) {
@@ -2590,7 +2548,7 @@ async function validateAndSyncStats() {
     }
     
     // 4. Recalculate downloaded categories
-    // FIX: getCompletelyDownloadedCategories now automatically uses strict mode for Gestos em Gravura
+    // #22.4: getCompletelyDownloadedCategories verifica direto no Cache Storage para todas as categorias
     const downloaded = await getCompletelyDownloadedCategories(louvoresData, cachedPdfs);
     
     // 5. Verify consistency and fix if needed
@@ -2702,7 +2660,7 @@ async function checkAndUpdateDownloadedCategories() {
 
     // Check which categories are completely downloaded (all PDFs are in cache storage)
     // This verifies PDFs, not ZIPs, since ZIPs are removed after extraction
-    // FIX: Uses strict mode for Gestos em Gravura automatically
+    // #22.4: verificação direta no Cache Storage para todas as categorias
     const completelyDownloaded = await getCompletelyDownloadedCategories(louvoresData, cachedPdfs);
     
     // Save to OFFLINE_CATEGORIAS_SALVAS flag
@@ -2718,8 +2676,9 @@ async function checkAndUpdateDownloadedCategories() {
 /**
  * Force revalidation of a specific category
  * This clears the category from the downloaded list and revalidates it
- * Useful for fixing inconsistent states, especially for "Gestos em Gravura"
- * 
+ * Useful for fixing inconsistent states, especially for categories with many
+ * same-named files.
+ *
  * @param {string} category - Category name to revalidate
  * @returns {Promise<boolean>} - true if category is actually downloaded, false otherwise
  */
@@ -2754,8 +2713,9 @@ async function forceRevalidateCategory(category) {
       return false;
     }
     
-    // Revalidate with strict mode (always use strict for revalidation)
-    const isDownloaded = await isCategoryCompletelyDownloaded(category, cachedPdfs, louvoresData, true);
+    // #22.4: revalida com verificação direta no Cache Storage — o modo
+    // estrito é o único modo agora, não há mais quarto argumento.
+    const isDownloaded = await isCategoryCompletelyDownloaded(category, cachedPdfs, louvoresData);
     
     // Update downloaded categories list
     if (isDownloaded) {

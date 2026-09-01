@@ -172,49 +172,49 @@ class PdfPathManager {
  *
  * Conta como cada PDF foi encontrado, em **todos** os pontos de saída que
  * existem hoje — tanto no `handlePdf` do Service Worker quanto no `getPdf`
- * de `CacheStorageAdapter`, que tem duas camadas de estratégia difusa e um
- * atalho de memoização que os outros dois pontos não têm:
+ * de `CacheStorageAdapter`.
  *
  * - `direto`      — bateu na chave canônica, de primeira, sem precisar de
  *                    nenhuma estratégia difusa.
  * - `variacao`     — bateu em alguma das variações de `createSearchVariations`
  *                    (a primeira camada difusa), mas não na canônica.
- * - `variacaoFallback` — só existe em `CacheStorageAdapter`: bateu na
- *                    *segunda* camada de variações (`fallbackVariations`),
- *                    que inclui correspondência só por nome de arquivo — a
- *                    estratégia mais arriscada de todas, porque dois louvores
- *                    diferentes podem ter o mesmo nome de arquivo.
  * - `reaproveitado` — só existe em `CacheStorageAdapter`: o atalho de
  *                    `_variationCache` (TTL) devolveu uma URL já conhecida de
  *                    uma consulta anterior, sem repetir a busca. Não é
  *                    `direto` nem `variacao` porque a consulta original que
  *                    populou esse atalho pode ter sido qualquer uma das
- *                    quatro categorias — contá-lo como `direto` esconderia
+ *                    categorias — contá-lo como `direto` esconderia
  *                    reaproveitamento de um acerto que só existiu graças a
  *                    uma estratégia difusa (o mesmo falso zero do Achado 1,
  *                    só que em escala menor).
  * - `miss`         — não encontrado por nenhuma estratégia.
  *
- * O que autoriza a Tarefa 9 a apagar as estratégias difusas é `variacao`,
- * `variacaoFallback` **e** `reaproveitado` estarem em zero ao mesmo tempo —
- * um `reaproveitado` maior que zero, mesmo com os outros dois zerados, ainda
- * pode estar escondendo dependência de um acerto difuso antigo dentro do TTL
- * de memoização.
+ * #22.4 removeu a categoria `variacaoFallback`: era a segunda camada de
+ * variações de `CacheStorageAdapter.getPdf` (`fallbackVariations`), cujo
+ * único acerto possível — nome de arquivo nu, sem diretório — nunca resolvia
+ * para `/assets/` e só poderia bater no PDF errado. O ponto de chamada que a
+ * incrementava saiu junto com o bloco; manter a categoria no contador seria
+ * um número que aponta para código que não existe mais.
+ *
+ * O que autoriza a Tarefa 9 a apagar as estratégias difusas remanescentes é
+ * `variacao` **e** `reaproveitado` estarem em zero ao mesmo tempo — um
+ * `reaproveitado` maior que zero, mesmo com o outro zerado, ainda pode estar
+ * escondendo dependência de um acerto difuso antigo dentro do TTL de
+ * memoização.
  *
  * A Tarefa 9 apaga este bloco inteiro.
  */
 export const pdfMatchStats = {
   direto: 0,
   variacao: 0,
-  variacaoFallback: 0,
   reaproveitado: 0,
   miss: 0
 };
 
 /** Categorias cujo acerto depende, direta ou indiretamente, de alguma estratégia difusa. */
-const CATEGORIAS_DIFUSAS = new Set(['variacao', 'variacaoFallback', 'reaproveitado']);
+const CATEGORIAS_DIFUSAS = new Set(['variacao', 'reaproveitado']);
 
-/** @param {'direto' | 'variacao' | 'variacaoFallback' | 'reaproveitado' | 'miss'} tipo */
+/** @param {'direto' | 'variacao' | 'reaproveitado' | 'miss'} tipo */
 export function registrarAcertoPdf(tipo, detalhe = '') {
   if (tipo in pdfMatchStats) pdfMatchStats[tipo] += 1;
   if (CATEGORIAS_DIFUSAS.has(tipo)) {

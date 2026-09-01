@@ -9,12 +9,7 @@ import offlineEvents, { EVENTS } from '../core/OfflineEvents.js';
 import { createLogger } from '../utils/OfflineLogger.js';
 import { browser } from '$app/environment';
 import PdfPathManager, { registrarAcertoPdf } from '../utils/PdfPathManager.js';
-import { 
-  encodeUrlUtf8, 
-  decodeUrlUtf8, 
-  encodeUrlComponentUtf8, 
-  decodeUrlComponentUtf8
-} from '$lib/utils/urlEncoding.js';
+import { decodeUrlUtf8 } from '$lib/utils/urlEncoding.js';
 
 const logger = createLogger('CacheStorageAdapter');
 
@@ -226,34 +221,13 @@ export class CacheStorageAdapter extends CacheRepository {
         }
       }
 
-      // Last resort: Try additional variations with different UTF-8 encodings
-      const fallbackVariations = [
-        PdfPathManager.createRequestUrl(normalizedPath, window.location.origin),
-        // Try with encodeUrlComponentUtf8 (more aggressive UTF-8 encoding)
-        PdfPathManager.createRequestUrl(encodeUrlComponentUtf8(normalizedPath), window.location.origin),
-        // Try filename-only matching as last resort (less reliable)
-        normalizedPath.split('/').pop()
-      ].filter(Boolean);
-
-      for (const url of fallbackVariations) {
-        try {
-          const request = new Request(url);
-          const response = await cache.match(request);
-          if (response) {
-            // Cache successful result
-            this._variationCache.set(normalizedPath, {
-              found: true,
-              url: url,
-              timestamp: Date.now()
-            });
-            logger.debug('CacheStorageAdapter', `PDF found in cache (fallback): ${normalizedPath}`);
-            registrarAcertoPdf('variacaoFallback', url);
-            return response;
-          }
-        } catch (e) {
-          // Continue to next variation
-        }
-      }
+      // #22.4: o bloco de fallback saiu. Suas três tentativas eram, medidas
+      // sobre os 4629 caminhos reais: a chave canônica de novo (4629/4629
+      // idêntica), a mesma chave depois de um encodeURIComponent que
+      // `normalizeForStorage` desfaz (4629/4629 idêntica), e o nome do arquivo
+      // nu — que `new Request` resolve contra o diretório da página, nunca
+      // contra /assets/, e que só poderia acertar outro PDF: 1036 arquivos do
+      // acervo se chamam `Cifra I.pdf`.
 
       // Not found - cache the miss to avoid repeated attempts
       this._missCache.add(normalizedPath);
