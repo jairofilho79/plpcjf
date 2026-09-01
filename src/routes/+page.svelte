@@ -1,5 +1,6 @@
 <script>
   import { onDestroy, onMount } from 'svelte';
+  import { get } from 'svelte/store';
   import { browser } from '$app/environment';
   import { page } from '$app/stores';
   import { goto } from '$app/navigation';
@@ -188,6 +189,9 @@
   onDestroy(() => {
     if (debounceTimer) clearTimeout(debounceTimer);
     if (searchUrlUpdateTimer) clearTimeout(searchUrlUpdateTimer);
+    if (pararDeSincronizarItensPorPaginaComUrl) {
+      pararDeSincronizarItensPorPaginaComUrl();
+    }
   });
 
   /**
@@ -392,16 +396,47 @@
     updateUrlParams({ pagina: currentPage });
   }
 
-  // itensPorPagina: o param manda quando presente; ausente, publica a
-  // preferência do store (compartilhado com /biblioteca, D-10). Também
-  // idempotente — depois de uma passada as duas pontas coincidem.
-  $: if (browser && naHome && $page?.url) {
-    const temParamItensPorPagina = $page.url.searchParams.has('itensPorPagina');
-    if (temParamItensPorPagina && estadoUrl.itensPorPagina !== $bibliotecaItemsPerPage) {
-      bibliotecaItemsPerPage.set(estadoUrl.itensPorPagina);
-    } else if (!temParamItensPorPagina && $bibliotecaItemsPerPage !== 10) {
-      updateUrlParams({ itensPorPagina: $bibliotecaItemsPerPage });
+  /**
+   * itensPorPagina: sincronização com a URL feita por um `page.subscribe`
+   * MANUAL — mesmo padrão de `../biblioteca/+page.svelte`
+   * (`sincronizarOrdenarEItensPorPaginaComUrl`, onde o motivo está
+   * documentado em detalhe).
+   *
+   * A versão anterior era um `$: if (browser && naHome && $page?.url) {
+   * ...lendo $bibliotecaItemsPerPage... }`. Provado em navegador (não pego
+   * pela revisão de código): esse `$:` LÊ `$bibliotecaItemsPerPage` no
+   * próprio corpo, então ganha essa store como dependência automática — o
+   * `.set()` de `handleHomeItemsPerPage` (um clique, não uma navegação) já
+   * dispara este bloco de novo antes de o `goto` do `updateUrlParams` do
+   * mesmo clique resolver. O bloco lê `$page.url` ainda com o valor VELHO,
+   * conclui que a store está errada e a reverte. Quando chega a navegação
+   * real — com o param default removido da URL — o ramo `else` republica o
+   * valor revertido de volta. Resultado visível: clicar em "10" com
+   * `?itensPorPagina=25` na URL não fazia nada. `get()` em vez de `$store`
+   * tira essa dependência automática; o `page.subscribe` só reage quando
+   * `$page` de fato muda (navegação real terminando), nunca por causa do
+   * `.set()` de outra store.
+   * @param {import('@sveltejs/kit').Page | null} $p
+   */
+  function sincronizarItensPorPaginaComUrl($p) {
+    if (!$p || !$p.url || $p.url.pathname !== '/') return;
+
+    const estado = lerEstadoDaUrl($p.url);
+    const temParamItensPorPagina = $p.url.searchParams.has('itensPorPagina');
+
+    if (temParamItensPorPagina) {
+      if (estado.itensPorPagina !== get(bibliotecaItemsPerPage)) {
+        bibliotecaItemsPerPage.set(estado.itensPorPagina);
+      }
+    } else if (get(bibliotecaItemsPerPage) !== 10) {
+      updateUrlParams({ itensPorPagina: get(bibliotecaItemsPerPage) });
     }
+  }
+
+  /** @type {(() => void) | null} */
+  let pararDeSincronizarItensPorPaginaComUrl = null;
+  if (browser) {
+    pararDeSincronizarItensPorPaginaComUrl = page.subscribe(sincronizarItensPorPaginaComUrl);
   }
 
   // D-9: um param conhecido que sobrou inválido é normalizado numa escrita
