@@ -19,6 +19,9 @@ import { louvores } from '$lib/stores/louvores.js';
 import { get } from 'svelte/store';
 import { cacheAppPages } from '../utils/AppPagesCache.js';
 import offlineBundleImporter from '../import/OfflineBundleImporter.js';
+import PdfPathManager from '../utils/PdfPathManager.js';
+import { migrarChavesPdfParaNfc, NFC_MIGRATION_FLAG } from '../storage/pdfCacheNfcMigration.js';
+import { getConfig } from './OfflineConfig.js';
 
 const logger = createLogger('OfflineManager');
 
@@ -112,6 +115,22 @@ class OfflineManager {
           }
         } catch (error) {
           logger.warn('OfflineManager', 'Cache migration V2 failed (non-critical)', error);
+        }
+
+        // #22.2: converte para NFC as chaves de PDF gravadas em NFD antes desta
+        // versão. Uma vez por aparelho, sem rede, no máximo oito entradas.
+        try {
+          if (localStorage.getItem(NFC_MIGRATION_FLAG) !== 'true') {
+            const cachePdfs = await caches.open(getConfig('PDF_CACHE_NAME') || 'plpc-pdfs');
+            const r = await migrarChavesPdfParaNfc(cachePdfs, (url) => {
+              const u = new URL(url);
+              return PdfPathManager.createRequestUrl(decodeURIComponent(u.pathname), u.origin);
+            });
+            logger.info('OfflineManager', `Migração NFC: ${r.migradas} migradas, ${r.mantidas} mantidas, ${r.erros} erros`);
+            if (r.erros === 0) localStorage.setItem(NFC_MIGRATION_FLAG, 'true');
+          }
+        } catch (error) {
+          logger.warn('OfflineManager', 'Migração NFC falhou (não crítico)', error);
         }
 
         // Sync cache on initialization

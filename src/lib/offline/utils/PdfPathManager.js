@@ -43,7 +43,13 @@ class PdfPathManager {
       } catch {
         // If decoding fails, continue with original
       }
-      
+
+      // #22.2: unifica a forma Unicode DEPOIS de decodificar — um acento pode
+      // chegar como um code point (NFC) ou dois (NFD), e o `cache.match` trata
+      // as duas formas como chaves diferentes. Oito caminhos do acervo chegam
+      // em NFD. Alinha o cliente com normalizeR2Key, que já passa por NFD.
+      normalized = normalized.normalize('NFC');
+
       // Normalize path separators (Windows vs Unix)
       normalized = normalized.replace(/\\/g, '/');
       
@@ -57,7 +63,7 @@ class PdfPathManager {
       return normalized.replace(/^\/+/, '');
     } catch {
       // Fallback: simple preparation
-      let fallback = pdfPath.replace(/^\/+/, '').replace(/\\/g, '/');
+      let fallback = pdfPath.normalize('NFC').replace(/^\/+/, '').replace(/\\/g, '/');
       const lowerFallback = fallback.toLowerCase();
       if (!lowerFallback.startsWith('assets/')) {
         fallback = `assets/${fallback}`;

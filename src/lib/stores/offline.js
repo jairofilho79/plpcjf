@@ -29,7 +29,8 @@ import { CATEGORY_OPTIONS } from './filters';
 import { atobUTF8, getPdfRelPath } from '$lib/utils/pathUtils';
 import { findMissingPdfs, findRequiredPackages } from '$lib/utils/pdfValidation';
 import { getConfig } from '$lib/offline/core/OfflineConfig.js';
-import { 
+import PdfPathManager from '$lib/offline/utils/PdfPathManager.js';
+import {
   encodeUrlUtf8, 
   decodeUrlUtf8, 
   encodeUrlComponentUtf8, 
@@ -537,34 +538,15 @@ function normalizeZipEntryName(entryName) {
     return '';
   }
 
-  // Prepare path preserving original case and accents
-  // Only do basic preparation: remove protocol, trim slashes, decode URI, normalize separators, ensure assets/ prefix
-  let prepared = entryName.replace(/^https?:\/\/[^/]+/, '');
-  prepared = prepared.replace(/^\/+/, '').replace(/\/+$/, '');
-  
-  // Decode URI encoding (handle multiple encodings) but preserve case and accents
-  // Use UTF-8 explicit decoding
-  try {
-    if (prepared.includes('%')) {
-      prepared = decodeUrlUtf8Multiple(prepared, 3);
-    }
-  } catch {
-    // If decoding fails, continue with original
-  }
-  
-  // Normalize path separators (Windows vs Unix)
-  prepared = prepared.replace(/\\/g, '/');
-  
-  // Ensure starts with 'assets/' (case-insensitive check, but preserve original case)
-  if (!prepared.toLowerCase().startsWith('assets/')) {
-    prepared = `assets/${prepared}`;
-  }
-  
+  // #22.2: delega ao normalizador canônico — era uma cópia literal dele, e uma
+  // cópia não recebe as correções do original. A única diferença de contrato é
+  // a barra inicial, que o Cache Storage espera aqui.
+  const prepared = PdfPathManager.normalizeForStorage(entryName);
+
   if (!prepared || prepared.endsWith('/')) {
     return '';
   }
 
-  // Return with leading slash for consistency with existing cache storage format
   return `/${prepared}`;
 }
 
@@ -801,15 +783,18 @@ async function startZipDownloadWithSpecificParts(categories, pdfUrls, partsByCat
   isZipDownloadActive = true;
 
   const total = pdfUrls.length;
-  // Use original PDF URLs for comparison (no normalization)
-  // Prepare paths for comparison (remove leading slash, preserve case and accents)
-  const prepareForComparison = (/** @type {string} */ url) => {
-    const path = url.replace(/^\/+/, '');
-    return path || '';
-  };
+  // #22.2: os dois lados da comparação passam pelo normalizador canônico, senão
+  // um caminho em NFD vindo do pdfId nunca casa com a entrada de ZIP já em NFC.
+  const prepareForComparison = (/** @type {string} */ url) =>
+    PdfPathManager.normalizeForStorage(url);
   
   // Índice O(1) dos PDFs desejados; `remaining` controla o que ainda falta gravar.
-  const wantedIndex = buildPdfCacheIndex(pdfUrls);
+  // #22.2: sem o `normalize` aqui, `wantedIndex.has(preparedPath)` compara um
+  // `preparedPath` já em NFC (via normalizeZipEntryName) contra entradas ainda
+  // em NFD (pdfUrls vem do pdfId, sem NFC) — para os 5 dos 8 caminhos NFD cujo
+  // acento está no próprio nome de arquivo, nem o basename bate, e o PDF
+  // deixaria de ser gravado a partir do ZIP, silenciosamente.
+  const wantedIndex = buildPdfCacheIndex(pdfUrls, { normalize: PdfPathManager.normalizeForStorage });
   const remaining = new Set(pdfUrls.map(prepareForComparison));
   let completed = 0;
 
@@ -1802,15 +1787,18 @@ async function startZipDownload(categories, pdfUrls, alreadyDownloadedCategories
   isZipDownloadActive = true;
 
   const total = pdfUrls.length;
-  // Use original PDF URLs for comparison (no normalization)
-  // Prepare paths for comparison (remove leading slash, preserve case and accents)
-  const prepareForComparison = (/** @type {string} */ url) => {
-    const path = url.replace(/^\/+/, '');
-    return path || '';
-  };
+  // #22.2: os dois lados da comparação passam pelo normalizador canônico, senão
+  // um caminho em NFD vindo do pdfId nunca casa com a entrada de ZIP já em NFC.
+  const prepareForComparison = (/** @type {string} */ url) =>
+    PdfPathManager.normalizeForStorage(url);
   
   // Índice O(1) dos PDFs desejados; `remaining` controla o que ainda falta gravar.
-  const wantedIndex = buildPdfCacheIndex(pdfUrls);
+  // #22.2: sem o `normalize` aqui, `wantedIndex.has(preparedPath)` compara um
+  // `preparedPath` já em NFC (via normalizeZipEntryName) contra entradas ainda
+  // em NFD (pdfUrls vem do pdfId, sem NFC) — para os 5 dos 8 caminhos NFD cujo
+  // acento está no próprio nome de arquivo, nem o basename bate, e o PDF
+  // deixaria de ser gravado a partir do ZIP, silenciosamente.
+  const wantedIndex = buildPdfCacheIndex(pdfUrls, { normalize: PdfPathManager.normalizeForStorage });
   const remaining = new Set(pdfUrls.map(prepareForComparison));
   let completed = 0;
 

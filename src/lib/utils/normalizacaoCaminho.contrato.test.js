@@ -52,13 +52,18 @@ describe('as duas normalizações são espaços de nomes disjuntos', () => {
 });
 
 describe('normalizeForStorage — a normalização vencedora', () => {
-  it('devolve o caminho do acervo inalterado', () => {
+  it('devolve o caminho do acervo inalterado, exceto os 8 em NFD que saem em NFC', () => {
     // Todo caminho do manifesto já está na forma canônica desta função. É por
     // isso que unificar nesta direção não invalida nenhuma chave já gravada.
-    // ⚠︎ Tarefa 6 muda isto para o grupo `nfd`: com .normalize('NFC'), os oito
-    // caminhos decompostos passam a sair recompostos, diferentes da entrada.
+    // Tarefa 6 mudou isto para o grupo `nfd`: com .normalize('NFC'), os oito
+    // caminhos decompostos saem recompostos — diferentes da entrada em bytes,
+    // idênticos ao usuário e agora também iguais à forma NFC do mesmo caminho.
     for (const p of TODOS) {
-      assert.equal(paraArmazenamento(p), p, `mudou: ${p}`);
+      if (G.nfd.includes(p)) {
+        assert.equal(paraArmazenamento(p), p.normalize('NFC'), `não convergiu para NFC: ${p}`);
+      } else {
+        assert.equal(paraArmazenamento(p), p, `mudou: ${p}`);
+      }
     }
   });
 
@@ -70,10 +75,11 @@ describe('normalizeForStorage — a normalização vencedora', () => {
     );
   });
 
-  it('hoje NÃO unifica as duas formas Unicode do mesmo acento', () => {
-    // ⚠︎ Tarefa 6 muda isto: depois dela as duas formas dão a mesma chave.
+  it('agora unifica as duas formas Unicode do mesmo acento (#22.2)', () => {
+    // Antes da Tarefa 6, as duas formas divergiam (era o bug documentado
+    // aqui). Depois de .normalize('NFC'), convergem para a mesma chave.
     for (const nfd of G.nfd) {
-      assert.notEqual(paraArmazenamento(nfd), paraArmazenamento(nfd.normalize('NFC')));
+      assert.equal(paraArmazenamento(nfd), paraArmazenamento(nfd.normalize('NFC')));
     }
   });
 
