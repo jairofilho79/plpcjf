@@ -16,7 +16,8 @@ import {
   serializeArrayParam,
   deserializeArrayParam,
   parseUrlParams,
-  construirQueryAtualizada
+  construirQueryAtualizada,
+  podeEscreverNaUrl
 } from './urlParams.js';
 
 /** As três categorias de material (src/lib/stores/filters.js:6). */
@@ -291,5 +292,58 @@ describe('serialização de array', () => {
     assert.deepEqual(deserializeArrayParam(' PES ,,PES CIAs '), ['PES', 'PES CIAs']);
     assert.deepEqual(deserializeArrayParam(''), []);
     assert.deepEqual(deserializeArrayParam(null), []);
+  });
+});
+
+describe('R5: nenhuma escrita de URL em /leitor', () => {
+  it('as rotas de navegação normal podem escrever', () => {
+    for (const rota of ['/', '/biblioteca', '/listas', '/offline', '/sobre']) {
+      assert.equal(podeEscreverNaUrl(rota), true, `deveria poder escrever em ${rota}`);
+    }
+  });
+
+  it('/leitor não pode, em nenhuma forma', () => {
+    assert.equal(podeEscreverNaUrl('/leitor'), false);
+    assert.equal(podeEscreverNaUrl('/leitor/'), false);
+    assert.equal(podeEscreverNaUrl('/leitor/qualquer-coisa'), false);
+  });
+
+  it('uma rota que só começa com as mesmas letras não é bloqueada', () => {
+    // /leitores não existe hoje, mas a guarda não pode bloquear por prefixo solto.
+    assert.equal(podeEscreverNaUrl('/leitores'), true);
+  });
+
+  it('entrada inválida é tratada como bloqueada — na dúvida, não escreve', () => {
+    assert.equal(podeEscreverNaUrl(''), false);
+    assert.equal(podeEscreverNaUrl(null), false);
+    assert.equal(podeEscreverNaUrl(undefined), false);
+  });
+});
+
+describe('§4.10 duplo decode — o valor já vem decodificado de URLSearchParams', () => {
+  it('um %20 literal digitado pelo usuário sobrevive na busca', () => {
+    // URLSearchParams.get() já decodifica uma vez: '?pesquisa=a%2520b' devolve
+    // 'a%20b'. Decodificar de novo transformava isso em 'a b' — texto do
+    // usuário corrompido em silêncio.
+    assert.equal(parseUrlParams(url('/?pesquisa=a%2520b')).pesquisa, 'a%20b');
+  });
+
+  it('um %20 literal sobrevive dentro de um item de array', () => {
+    assert.deepEqual(parseUrlParams(url('/?arranjo=a%2520b,c')).arranjo, ['a%20b', 'c']);
+    assert.deepEqual(deserializeArrayParam('a%20b,c'), ['a%20b', 'c']);
+  });
+
+  it('o comportamento tolerante de deserializeArrayParam é preservado', () => {
+    // trim() por item e filter(Boolean) continuam valendo — é o caso F3.
+    assert.deepEqual(deserializeArrayParam(' PES ,,PES CIAs '), ['PES', 'PES CIAs']);
+    assert.deepEqual(deserializeArrayParam('  ,  ,  '), []);
+    assert.deepEqual(deserializeArrayParam('PES'), ['PES']);
+  });
+
+  it('um % solto não lança em nenhum dos params', () => {
+    assert.equal(parseUrlParams(url('/?pesquisa=100%25')).pesquisa, '100%');
+    assert.deepEqual(parseUrlParams(url('/?arranjo=100%25,x')).arranjo, ['100%', 'x']);
+    assert.equal(parseUrlParams(url('/?comoAbrir=100%25')).comoAbrir, '100%');
+    assert.equal(parseUrlParams(url('/?ordenar=100%25')).ordenar, '100%');
   });
 });

@@ -11,7 +11,7 @@
 import { goto } from '$app/navigation';
 import { page } from '$app/stores';
 import { get } from 'svelte/store';
-import { construirQueryAtualizada } from './urlParams.js';
+import { construirQueryAtualizada, podeEscreverNaUrl } from './urlParams.js';
 
 export { serializeArrayParam, deserializeArrayParam, parseUrlParams } from './urlParams.js';
 
@@ -33,8 +33,17 @@ export function updateUrlParams(newParams, options = {}) {
     return;
   }
 
-  const newSearch = construirQueryAtualizada(currentUrl.url.search || '', newParams, options);
   const pathname = currentUrl.url.pathname || '/';
+
+  // #21: nenhuma escrita de URL em /leitor. A guarda mora aqui, e não só nos
+  // chamadores, porque as stores globais (filters, classificationFilters,
+  // pdfViewer) escrevem a partir de um page.subscribe de módulo, que roda em
+  // qualquer rota.
+  if (!podeEscreverNaUrl(pathname)) {
+    return;
+  }
+
+  const newSearch = construirQueryAtualizada(currentUrl.url.search || '', newParams, options);
   const newUrl = pathname + (newSearch ? `?${newSearch}` : '');
 
   // replaceState para não empilhar cada filtro no histórico do navegador.

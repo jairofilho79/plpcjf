@@ -544,7 +544,11 @@
       clearTimeout(searchUrlUpdateTimer);
     }
     searchUrlUpdateTimer = setTimeout(() => {
-      if (!isUpdatingFromUrl) {
+      // #21: o usuário pode ter clicado num louvor e ido para /leitor dentro
+      // dos 500 ms. Sem esta checagem de rota, a escrita da busca dispara já lá
+      // — competindo com a navegação, ou poluindo a URL do PDF. É o único
+      // escritor de URL da home que não conferia o pathname.
+      if (!isUpdatingFromUrl && $page?.url?.pathname === '/') {
         const urlParams = parseUrlParams($page.url);
         const urlPesquisa = (urlParams.pesquisa || '').trim();
         const currentPesquisa = (searchQuery || '').trim();

@@ -27,22 +27,15 @@ export function serializeArrayParam(array) {
 }
 
 /**
- * @param {string | null | undefined} value
- * @returns {string}
- */
-function safeDecodeURIComponent(value) {
-  if (value == null || value === '') return '';
-  try {
-    return decodeURIComponent(value);
-  } catch {
-    return value;
-  }
-}
-
-/**
  * Deserializa uma string de URL param em array.
+ *
+ * O valor que chega aqui vem de `URLSearchParams.get()`, que JÁ decodificou o
+ * percent-encoding uma vez. Decodificar de novo corrompia qualquer `%XX` que o
+ * usuário tivesse digitado de verdade (`a%20b` virava `a b`).
+ *
  * Tolerante de propósito: `trim()` por item e descarte de vazios, para aceitar
- * `?arranjo= PES , ,PES CIAs ` digitado à mão.
+ * `?arranjo= PES , ,PES CIAs ` digitado à mão. Isso é contrato (caso F3) e não
+ * pode sair.
  * @param {string} param
  * @returns {string[]}
  */
@@ -50,7 +43,7 @@ export function deserializeArrayParam(param) {
   if (!param || typeof param !== 'string') {
     return [];
   }
-  return param.split(',').map((item) => safeDecodeURIComponent(item.trim())).filter(Boolean);
+  return param.split(',').map((item) => item.trim()).filter(Boolean);
 }
 
 /**
@@ -75,9 +68,10 @@ export function parseUrlParams(url) {
     materiais: deserializeArrayParam(params.get('materiais') || ''),
     arranjo: deserializeArrayParam(params.get('arranjo') || ''),
     arranjoEspecial: deserializeArrayParam(params.get('arranjoEspecial') || ''),
-    comoAbrir: safeDecodeURIComponent(comoAbrirParam || ''),
-    pesquisa: safeDecodeURIComponent(pesquisaParam || ''),
-    ordenar: safeDecodeURIComponent(ordenarParam || ''),
+    // Sem decode extra: URLSearchParams.get() já decodificou uma vez.
+    comoAbrir: comoAbrirParam || '',
+    pesquisa: pesquisaParam || '',
+    ordenar: ordenarParam || '',
     itensPorPagina: itensPorPaginaParam ? parseInt(itensPorPaginaParam, 10) : null,
     pagina: paginaParam ? parseInt(paginaParam, 10) : null
   };
@@ -172,4 +166,31 @@ export function construirQueryAtualizada(searchAtual, newParams, options = {}) {
   }
 
   return currentParams.toString();
+}
+
+/**
+ * Rotas em que NENHUMA escrita de URL pode ocorrer.
+ *
+ * O `/leitor` recebe o PDF exclusivamente pelo query param `?file=`, que é
+ * também um link público e compartilhável — existem links assim em conversas de
+ * WhatsApp e um está hard-coded em src/routes/offline/+page.svelte:1117.
+ * Qualquer reescrita de query nessa rota pode competir com a navegação que está
+ * abrindo o PDF ou sobrescrever o histórico. Hoje isso é evitado por acidente
+ * (nenhum componente que escreve filtro é montado lá); esta lista torna a
+ * garantia explícita.
+ */
+const ROTAS_SEM_ESCRITA_DE_URL = ['/leitor'];
+
+/**
+ * A rota corrente aceita escrita de URL?
+ * Na dúvida (pathname vazio ou não-string), devolve false: não escrever é
+ * sempre mais seguro que escrever no lugar errado.
+ * @param {string} pathname
+ * @returns {boolean}
+ */
+export function podeEscreverNaUrl(pathname) {
+  if (!pathname || typeof pathname !== 'string') return false;
+  return !ROTAS_SEM_ESCRITA_DE_URL.some(
+    (rota) => pathname === rota || pathname.startsWith(`${rota}/`)
+  );
 }
