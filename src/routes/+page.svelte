@@ -25,6 +25,7 @@
   import LouvorCard from '$lib/components/LouvorCard.svelte';
   import CarouselChips from '$lib/components/CarouselChips.svelte';
   import LouvorPaginationControls from '$lib/components/LouvorPaginationControls.svelte';
+  import LouvorListSkeleton from '$lib/components/LouvorListSkeleton.svelte';
   import { groupLouvoresByGroupId } from '$lib/utils/groupLouvores.js';
 
   /** Em conjunto com `id` em SearchBar.svelte — só esse input bloqueia sync URL → pesquisa */
@@ -380,6 +381,25 @@
     currentPage * itemsPerPageHome
   );
 
+  /**
+   * Por que `groupedResults` está vazio, para a Task 13 (#27). `null` quando
+   * há resultados a mostrar, ou quando os louvores ainda não carregaram (aí
+   * quem decide o que aparece é o skeleton da Task 14). A ordem dos `if`
+   * é a prioridade: um filtro zerado explica o vazio antes de "nada
+   * encontrado" e antes do estado inicial.
+   * @type {'materiais-vazios' | 'arranjos-vazios' | 'sem-resultado' | 'inicial' | null}
+   */
+  $: homeEmptyState =
+    !$louvoresLoaded || groupedResults.length > 0
+      ? null
+      : $filters.length === 0
+        ? 'materiais-vazios'
+        : filtersInitialized && $classificationFilters.length === 0
+          ? 'arranjos-vazios'
+          : searchQuery.trim()
+            ? 'sem-resultado'
+            : 'inicial';
+
   /** Espelha a página efetiva no input, sem atropelar quem está digitando nele. */
   let ultimaPaginaPublicada = null;
   $: if (currentPage !== ultimaPaginaPublicada) {
@@ -556,7 +576,12 @@
   </div>
   
   <div id="home-louvores-results" class="mt-8 flex justify-center">
-    {#if groupedResults.length > 0}
+    {#if !$louvoresLoaded}
+      <div class="louvores-container w-full max-w-4xl">
+        <span class="container-tag">Louvores</span>
+        <LouvorListSkeleton count={itemsPerPageHome} />
+      </div>
+    {:else if groupedResults.length > 0}
       <div class="louvores-container w-full max-w-4xl">
         <span class="container-tag">Louvores</span>
 
@@ -594,8 +619,42 @@
           on:last={() => setPage(totalPagesHome)}
         />
       </div>
-    {:else if searchQuery}
-      <p class="text-center mt-8 no-results-message">Nenhum resultado encontrado.</p>
+    {:else if homeEmptyState === 'materiais-vazios'}
+      <div class="empty-state-message">
+        <p>Você desmarcou todos os materiais (Partitura, Cifra, Gestos em Gravura).</p>
+        <button type="button" class="empty-state-action" on:click={() => filters.selectAll()}>
+          Selecionar todos os materiais
+        </button>
+      </div>
+    {:else if homeEmptyState === 'arranjos-vazios'}
+      <div class="empty-state-message">
+        <p>Você desmarcou todos os arranjos.</p>
+        <button
+          type="button"
+          class="empty-state-action"
+          on:click={() => classificationFilters.selectAll(uniqueNormalizedClassifications)}
+        >
+          Selecionar todos os arranjos
+        </button>
+      </div>
+    {:else if homeEmptyState === 'sem-resultado'}
+      <div class="empty-state-message">
+        <p>Nenhum resultado encontrado para "{searchQuery}".</p>
+        <button type="button" class="empty-state-action" on:click={handleClear}>
+          Limpar busca
+        </button>
+      </div>
+    {:else if homeEmptyState === 'inicial'}
+      <div class="empty-state-message">
+        <p>Digite algo na busca para encontrar um louvor.</p>
+        <button
+          type="button"
+          class="empty-state-action"
+          on:click={() => document.getElementById(LOUVOR_SEARCH_INPUT_ID)?.focus()}
+        >
+          Ir para a busca
+        </button>
+      </div>
     {/if}
   </div>
 </div>
@@ -635,6 +694,34 @@
   .no-results-message {
     color: var(--text-light);
     opacity: 0.9;
+  }
+
+  .empty-state-message {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.75rem;
+    text-align: center;
+    margin-top: 2rem;
+    color: var(--text-light);
+    opacity: 0.9;
+  }
+
+  .empty-state-action {
+    padding: 0.5rem 1rem;
+    background-color: var(--card-color);
+    color: var(--text-dark);
+    border: 2px solid var(--gold-color);
+    border-radius: 0.5rem;
+    font-size: 0.875rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s ease;
+  }
+
+  .empty-state-action:hover {
+    border-color: var(--gold-light);
+    background-color: rgba(244, 208, 63, 0.1);
   }
 
   /* Mesmo padrão visual de PdfViewerSelector (tag + área interna estilo select) */

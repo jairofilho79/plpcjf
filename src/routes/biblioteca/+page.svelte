@@ -19,6 +19,7 @@
   import GestureButton from '$lib/components/GestureButton.svelte';
   import { ChevronLeft, ChevronRight } from 'lucide-svelte';
   import { groupLouvoresByGroupId, compareLouvorNome } from '$lib/utils/groupLouvores.js';
+  import LouvorListSkeleton from '$lib/components/LouvorListSkeleton.svelte';
 
   // Normalize classification by removing content in parentheses
   /**
@@ -595,7 +596,12 @@
   </div>
   
   <div class="mt-8 flex justify-center">
-    {#if paginatedLouvores.length > 0}
+    {#if !$louvoresLoaded}
+      <div class="louvores-container w-full max-w-4xl">
+        <span class="container-tag">Louvores</span>
+        <LouvorListSkeleton count={itemsPerPage} />
+      </div>
+    {:else if paginatedLouvores.length > 0}
       <div id="louvores" class="louvores-container w-full max-w-4xl" bind:this={louvoresContainer}>
         <span class="container-tag">Louvores</span>
         
