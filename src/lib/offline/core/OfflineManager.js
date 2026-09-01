@@ -12,13 +12,15 @@ import compositeValidator from '../validation/CompositeValidator.js';
 import offlineEvents, { EVENTS } from './OfflineEvents.js';
 import cacheSync from '../storage/CacheSync.js';
 import cacheMigration from '../storage/CacheMigration.js';
-import cacheMigrationV2 from '../storage/CacheMigrationV2.js';
 import { createLogger } from '../utils/OfflineLogger.js';
 import { browser } from '$app/environment';
 import { louvores } from '$lib/stores/louvores.js';
 import { get } from 'svelte/store';
 import { cacheAppPages } from '../utils/AppPagesCache.js';
 import offlineBundleImporter from '../import/OfflineBundleImporter.js';
+import PdfPathManager from '../utils/PdfPathManager.js';
+import { migrarChavesPdfParaNfc, NFC_MIGRATION_FLAG } from '../storage/pdfCacheNfcMigration.js';
+import { getConfig } from './OfflineConfig.js';
 
 const logger = createLogger('OfflineManager');
 
@@ -67,6 +69,52 @@ class OfflineManager {
   constructor() {
     this.initialized = false;
     this.initializationPromise = null;
+    this._nfcMigrationPromise = null;
+  }
+
+  /**
+   * Migração de chaves de PDF em cache para a forma Unicode NFC (#22.2).
+   *
+   * Extraída de `initialize()` de propósito: precisa rodar em toda visita à
+   * aplicação — inclusive em `/leitor`, que nunca chama `initialize()` — e
+   * não pode depender do resto do bootstrap (migração V1/V2, `cacheSync`),
+   * que é mais caro e desnecessário para este passo. Sem rede, no máximo
+   * oito reescritas por aparelho, e sai numa leitura de `localStorage`
+   * depois da primeira execução sem erros — idempotente e barata o
+   * bastante para chamar sem gate de categoria selecionada.
+   *
+   * `initialize()` também chama este método (não duplica a lógica), então
+   * quem já depende de `ensureInitialized()` continua coberto.
+   *
+   * @returns {Promise<void>}
+   */
+  async ensureNfcMigration() {
+    if (!browser) return;
+
+    if (this._nfcMigrationPromise) {
+      return this._nfcMigrationPromise;
+    }
+
+    this._nfcMigrationPromise = (async () => {
+      try {
+        if (localStorage.getItem(NFC_MIGRATION_FLAG) === 'true') {
+          return;
+        }
+        const cachePdfs = await caches.open(getConfig('PDF_CACHE_NAME') || 'plpc-pdfs');
+        const r = await migrarChavesPdfParaNfc(cachePdfs, (url) => {
+          const u = new URL(url);
+          return PdfPathManager.createRequestUrl(decodeURIComponent(u.pathname), u.origin);
+        });
+        logger.info('OfflineManager', `Migração NFC: ${r.migradas} migradas, ${r.mantidas} mantidas, ${r.erros} erros`);
+        if (r.erros === 0) localStorage.setItem(NFC_MIGRATION_FLAG, 'true');
+      } catch (error) {
+        logger.warn('OfflineManager', 'Migração NFC falhou (não crítico)', error);
+      } finally {
+        this._nfcMigrationPromise = null;
+      }
+    })();
+
+    return this._nfcMigrationPromise;
   }
 
   /**
@@ -100,19 +148,16 @@ class OfflineManager {
           logger.warn('OfflineManager', 'Cache migration V1 failed (non-critical)', error);
         }
 
-        // Run cache migration V2 if needed (unified normalization)
-        try {
-          const migrationV2Completed = await cacheMigrationV2.isMigrationCompleted();
-          if (!migrationV2Completed) {
-            logger.info('OfflineManager', 'Running cache migration V2...');
-            const migrationResult = await cacheMigrationV2.migrate();
-            logger.info('OfflineManager', `Cache migration V2 completed: ${migrationResult.migrated} migrated, ${migrationResult.skipped} skipped, ${migrationResult.errors} errors`);
-          } else {
-            logger.debug('OfflineManager', 'Cache migration V2 already completed');
-          }
-        } catch (error) {
-          logger.warn('OfflineManager', 'Cache migration V2 failed (non-critical)', error);
-        }
+        // #22.5 / D-12: a segunda migração de cache foi aposentada. Ela
+        // reescrevia entradas do cache por heurística de string
+        // (`includes('cifra') && includes('nivel')`) e apagava a antiga. Com a
+        // chave unificada não há o que migrar, e a migração NFC de #22.2, logo
+        // abaixo, cobre o único caso real de chave divergente.
+
+        // #22.2/correção: migração NFC extraída para `ensureNfcMigration()` —
+        // ver o método acima. Chamada aqui também para cobrir quem depende
+        // só de `ensureInitialized()`.
+        await this.ensureNfcMigration();
 
         // Sync cache on initialization
         try {

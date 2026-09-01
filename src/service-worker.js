@@ -189,9 +189,9 @@ async function networkFirst(event) {
 }
 
 /**
- * PDFs do acervo: cache primeiro, com as variações de URL do PdfPathManager,
- * porque o mesmo PDF pode ter sido gravado com acentuação codificada de formas
- * diferentes. É o conteúdo que o modo offline existe para servir.
+ * PDFs do acervo: cache primeiro, por chave exata. Desde #22.1/#22.2 há um só
+ * codificador e uma só forma Unicode, então a chave que se procura é sempre a
+ * chave que foi gravada. É o conteúdo que o modo offline existe para servir.
  *
  * @param {FetchEvent} event
  * @param {URL} url
@@ -200,25 +200,21 @@ async function networkFirst(event) {
 async function handlePdf(event, url) {
   const cache = await caches.open(PDF_CACHE);
 
-  const direct = await cache.match(event.request);
-  if (direct) return direct;
-
-  const variations = PdfPathManager.createSearchVariations(url.pathname, self.location.origin);
-  for (const variationUrl of variations) {
-    try {
-      const cached = await cache.match(new Request(variationUrl));
-      if (cached) return cached;
-    } catch {
-      // Variação malformada: tenta a próxima.
-    }
-  }
+  // #22.5: uma chave só, a canônica. O `event.request` já chega nela — a
+  // instrumentação da Tarefa 5 mediu zero acertos por variação num navegador
+  // real —, mas derivar a chave do pathname garante que uma query string
+  // acidental não vire um miss (`cache.match` compara a URL inteira).
+  const chave = PdfPathManager.createRequestUrl(url.pathname, self.location.origin);
+  const cached = await cache.match(chave || event.request);
+  if (cached) return cached;
 
   try {
     const response = await fetch(event.request);
     if (response && response.status === 200) {
+      // #22.1: a chave de gravação sai do mesmo construtor que o leitor usa.
       const normalizedPath = PdfPathManager.normalizeForStorage(url.pathname);
       const normalizedRequest = new Request(
-        createUrlUtf8(`/${normalizedPath}`, self.location.origin)
+        PdfPathManager.createRequestUrl(url.pathname, self.location.origin)
       );
       await cache.put(normalizedRequest, response.clone());
       debug('PDF gravado (normalizado):', normalizedPath);

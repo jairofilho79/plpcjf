@@ -4,7 +4,6 @@
  */
 
 import cacheStorageAdapter from './CacheStorageAdapter.js';
-import urlNormalizer from '../normalization/UrlNormalizer.js';
 import { createLogger } from '../utils/OfflineLogger.js';
 import { browser } from '$app/environment';
 import { getConfig } from '../core/OfflineConfig.js';
@@ -49,6 +48,17 @@ export class CacheMigration {
    */
   async migrate() {
     if (!browser) {
+      return { migrated: 0, errors: 0 };
+    }
+
+    // #22.5: esta migração nunca checava sua própria flag e reescaneava o
+    // cache de PDF inteiro em toda chamada a initialize() — inclusive a cada
+    // visita, já que `initialized` é só de memória. Segue o padrão de
+    // `pdfCacheNfcMigration.js`: sai cedo se já concluída, e só marca a flag
+    // numa saída limpa (abaixo), para que um erro deixe a próxima chamada
+    // tentar de novo em vez de desistir silenciosamente.
+    if (localStorage.getItem(MIGRATION_COMPLETE_KEY) === 'true') {
+      logger.debug('CacheMigration', 'Migração já concluída, pulando nova varredura.');
       return { migrated: 0, errors: 0 };
     }
 
@@ -115,8 +125,12 @@ export class CacheMigration {
         }
       }
 
-      // Mark migration as complete
-      localStorage.setItem(MIGRATION_COMPLETE_KEY, 'true');
+      // Só marca como concluída numa saída limpa (0 erros) — como
+      // pdfCacheNfcMigration.js faz. Com erros, a flag fica ausente e a
+      // próxima chamada tenta de novo, em vez de desistir para sempre.
+      if (errors === 0) {
+        localStorage.setItem(MIGRATION_COMPLETE_KEY, 'true');
+      }
 
       logger.info('CacheMigration', `Migration complete: ${migrated} migrated, ${errors} errors`);
 

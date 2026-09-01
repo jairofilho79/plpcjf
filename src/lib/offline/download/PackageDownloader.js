@@ -4,7 +4,6 @@
  */
 
 import { unzip } from 'fflate';
-import urlNormalizer from '../normalization/UrlNormalizer.js';
 import cacheStorageAdapter from '../storage/CacheStorageAdapter.js';
 import offlineEvents, { EVENTS } from '../core/OfflineEvents.js';
 import { createLogger } from '../utils/OfflineLogger.js';
@@ -150,27 +149,14 @@ export class PackageDownloader {
 
       logger.debug('PackageDownloader', `ZIP contains ${entryNames.length} entries`);
 
-      // Normalize expected PDFs for comparison
-      // Use PdfPathManager to preserve case and accents (consistent with extraction)
-      const expectedSet = new Set();
-      const expectedSetOriginal = new Set(expectedPdfs);
-      
-      for (const pdf of expectedPdfs) {
-        // Normalize using PdfPathManager (preserves case and accents)
-        const normalized = PdfPathManager.normalizeForStorage(pdf);
-        if (normalized) {
-          expectedSet.add(`/${normalized}`);
-          expectedSet.add(normalized);
-        }
-        // Also add original variations
-        expectedSet.add(pdf);
-        expectedSet.add(pdf.replace(/^\/+/, ''));
-        // Add normalized variations for comparison
-        const normalizedForComparison = PdfPathManager.normalizeForStorage(pdf);
-        if (normalizedForComparison) {
-          expectedSet.add(normalizedForComparison);
-        }
-      }
+      // #22.5: um Set canônico. Eram seis formas de cada caminho esperado, e
+      // depois `endsWith` nas duas direções contra cada entrada do ZIP — O(n·m)
+      // e ambíguo. `_normalizeZipEntryName` devolve exatamente esta mesma forma.
+      const esperados = new Set(
+        expectedPdfs
+          .map((/** @type {string} */ pdf) => PdfPathManager.normalizeForStorage(pdf))
+          .filter(Boolean)
+      );
 
       const extractedPdfs = [];
 
@@ -183,30 +169,10 @@ export class PackageDownloader {
           continue;
         }
 
-        // Check if this PDF is expected (if expectedPdfs provided)
-        if (expectedPdfs.length > 0) {
-          const normalizedForComparison = `/${normalizedPath}`;
-          // Also normalize originalName for comparison (preserves case and accents)
-          const originalNormalized = PdfPathManager.normalizeForStorage(entryName);
-          const isExpected = expectedSet.has(normalizedForComparison) ||
-                            expectedSet.has(normalizedPath) ||
-                            expectedSet.has(originalNormalized) ||
-                            expectedSetOriginal.has(normalizedPath) ||
-                            expectedSetOriginal.has(normalizedPath.replace(/^\/+/, '')) ||
-                            expectedSetOriginal.has(entryName) ||
-                            Array.from(expectedSetOriginal).some(url => {
-                              // Use PdfPathManager for consistent normalization
-                              const urlNormalized = PdfPathManager.normalizeForStorage(url);
-                              return urlNormalized === normalizedPath ||
-                                     urlNormalized === originalNormalized ||
-                                     urlNormalized.endsWith(normalizedPath) ||
-                                     normalizedPath.endsWith(urlNormalized);
-                            });
-
-          if (!isExpected) {
-            logger.debug('PackageDownloader', `Skipping unexpected PDF: ${normalizedPath} (original: ${entryName})`);
-            continue;
-          }
+        // #22.5: uma consulta O(1) sobre a forma canônica.
+        if (expectedPdfs.length > 0 && !esperados.has(normalizedPath)) {
+          logger.debug('PackageDownloader', `Ignorando PDF não esperado: ${normalizedPath} (entrada: ${entryName})`);
+          continue;
         }
 
         const fileData = entries[entryName];

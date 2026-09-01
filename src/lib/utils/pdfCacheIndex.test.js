@@ -4,7 +4,8 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { toComparablePath, basenameOf, buildPdfCacheIndex } from './pdfCacheIndex.js';
+import { toComparablePath, buildPdfCacheIndex } from './pdfCacheIndex.js';
+import PdfPathManager from '../offline/utils/PdfPathManager.js';
 
 describe('toComparablePath', () => {
   it('extrai o pathname de uma URL completa e remove a barra inicial', () => {
@@ -37,13 +38,6 @@ describe('toComparablePath', () => {
   });
 });
 
-describe('basenameOf', () => {
-  it('devolve o último segmento', () => {
-    assert.equal(basenameOf('assets/ColAdultos/001.pdf'), '001.pdf');
-    assert.equal(basenameOf('001.pdf'), '001.pdf');
-  });
-});
-
 describe('buildPdfCacheIndex', () => {
   const cached = [
     'https://plpcg.com/assets/ColAdultos/001.pdf',
@@ -56,9 +50,11 @@ describe('buildPdfCacheIndex', () => {
     assert.equal(index.has('/assets/ColAdultos/001.pdf'), true);
   });
 
-  it('acerta por nome de arquivo quando o diretório difere', () => {
+  it('NÃO acerta por nome de arquivo quando o diretório difere (#22.3)', () => {
+    // Era o fallback F6. Com 3311 dos 4629 caminhos do acervo partilhando
+    // basename, ele fazia o índice mentir para milhares de louvores.
     const index = buildPdfCacheIndex(cached);
-    assert.equal(index.has('assets/OutraPasta/001.pdf'), true);
+    assert.equal(index.has('assets/OutraPasta/001.pdf'), false);
   });
 
   it('acerta com acento após decodificação', () => {
@@ -83,9 +79,27 @@ describe('buildPdfCacheIndex', () => {
     assert.equal(index.has('assets/coladultos/001.pdf'), true);
   });
 
-  it('substitui a antiga Estratégia 3: sufixo com mesmo nome de arquivo', () => {
-    // cached tem prefixo extra; a comparação por basename cobre o caso.
+  it('a antiga Estratégia 3 (sufixo) também sai: só caminho exato conta', () => {
     const index = buildPdfCacheIndex(['/prefixo/extra/assets/ColAdultos/001.pdf']);
-    assert.equal(index.has('assets/ColAdultos/001.pdf'), true);
+    assert.equal(index.has('assets/ColAdultos/001.pdf'), false);
+  });
+
+  it('o caso real: 1036 louvores se chamam Cifra I.pdf e não são o mesmo PDF', () => {
+    const emCache = ['https://plpcg.com/assets/Coletanea/001 - Louvor A/Cifra I.pdf'];
+    const index = buildPdfCacheIndex(emCache);
+    assert.equal(index.has('assets/Coletanea/001 - Louvor A/Cifra I.pdf'), true);
+    assert.equal(index.has('assets/Coletanea/002 - Louvor B/Cifra I.pdf'), false);
+    assert.equal(index.has('assets/PES/Cifra I.pdf'), false);
+  });
+
+  it('com normalizeForStorage nos dois lados, NFD e NFC casam', () => {
+    // É esta a régua que os quatro consumidores passam a usar. Sem ela, os 8
+    // caminhos NFD do acervo (Tarefa 6, Step 1) deixariam de casar assim que o
+    // fallback por basename saísse.
+    const normalize = (/** @type {string} */ p) => PdfPathManager.normalizeForStorage(p);
+    const nfd = 'assets/PES/Alto preço - CIFRA.pdf'.normalize('NFD');
+    const nfc = 'assets/PES/Alto preço - CIFRA.pdf'.normalize('NFC');
+    const index = buildPdfCacheIndex([`https://plpcg.com/${nfd}`], { normalize });
+    assert.equal(index.has(nfc), true);
   });
 });

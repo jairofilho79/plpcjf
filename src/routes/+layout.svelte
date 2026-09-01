@@ -10,6 +10,7 @@
   import { registerServiceWorker, setupServiceWorkerMessageListener } from '$lib/utils/swRegistration';
   import { setupLouvoresManifestChecksumTriggers } from '$lib/stores/louvores';
   import { setupCacheSync } from '$lib/utils/cacheSync';
+  import offlineManager from '$lib/offline/core/OfflineManager.js';
   import {
     installStaleChunkRecoveryListeners,
     scheduleStaleRecoveryCounterReset
@@ -85,6 +86,16 @@
     if (browser) {
       const removeStaleChunkListeners = installStaleChunkRecoveryListeners();
       const cancelStaleRecoveryReset = scheduleStaleRecoveryCounterReset();
+
+      // Correção (defeito 1): a migração de chaves NFD→NFC do cache de PDFs
+      // vivia só dentro de `OfflineManager.initialize()`, que a página
+      // /offline só chama quando há categoria selecionada — num aparelho
+      // limpo, nunca roda. Aqui ela dispara em toda visita à aplicação
+      // (inclusive /leitor, que nunca toca OfflineManager), sem bloquear o
+      // carregamento da página: sai cedo se já rodou (flag em localStorage).
+      offlineManager.ensureNfcMigration().catch((err) => {
+        console.warn('[Layout] Migração NFC de PDFs falhou (não crítico):', err);
+      });
 
       // CORREÇÃO PARA STANDALONE: Garantir que o SvelteKit router processe a URL correta
       // Quando o Service Worker serve o shell root ('/'), o SvelteKit pode não ter

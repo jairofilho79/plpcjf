@@ -25,7 +25,6 @@
   import offlineEvents, { EVENTS as OFFLINE_EVENTS } from '$lib/offline/core/OfflineEvents.js';
   import { getConfig } from '$lib/offline/core/OfflineConfig.js';
   import offlineManager from '$lib/offline/core/OfflineManager.js';
-  import cacheMigrationV2 from '$lib/offline/storage/CacheMigrationV2.js';
   import { browser } from '$app/environment';
 
   // Offline available flag from localStorage
@@ -91,11 +90,6 @@
   let isSyncing = false;
   let lastSyncTime = null;
   
-  // Migration V2 state
-  let isMigrating = false;
-  let migrationProgress = null;
-  let migrationResult = null;
-  let migrationNeeded = false;
   /** @type {(() => void) | null} */
   let syncUnsubscribe = null;
   
@@ -553,46 +547,6 @@
       console.error('[Offline Page] Sync error:', error);
     } finally {
       isSyncing = false;
-    }
-  }
-
-  /**
-   * Run cache migration V2 manually
-   */
-  async function runMigration() {
-    if (isMigrating) return;
-    
-    isMigrating = true;
-    migrationProgress = null;
-    migrationResult = null;
-    
-    try {
-      console.log('[Offline Page] Starting cache migration V2...');
-      
-      const result = await cacheMigrationV2.migrate({
-        force: false,
-        onProgress: (progress) => {
-          migrationProgress = progress;
-        }
-      });
-      
-      migrationResult = result;
-      migrationNeeded = false;
-      
-      // Reload stats after migration
-      await loadCategoryStats(true);
-      
-      console.log('[Offline Page] Migration completed:', result);
-    } catch (error) {
-      console.error('[Offline Page] Migration error:', error);
-      migrationResult = {
-        migrated: 0,
-        skipped: 0,
-        errors: 1,
-        errorDetails: [error.message || 'Migration failed']
-      };
-    } finally {
-      isMigrating = false;
     }
   }
 
@@ -1355,46 +1309,6 @@
 <div class="max-w-4xl mx-auto">
   <!-- Body -->
   <div class="page-body">
-
-      <!-- Migration progress -->
-      {#if isMigrating && migrationProgress}
-        <div class="migration-progress">
-          <div class="migration-progress-header">
-            <span>Migrando cache: {migrationProgress.current} / {migrationProgress.total}</span>
-            <span class="migration-stats">
-              {migrationProgress.migrated} migrados, {migrationProgress.skipped} ignorados, {migrationProgress.errors} erros
-            </span>
-          </div>
-          <div class="migration-progress-bar">
-            <div 
-              class="migration-progress-fill" 
-              style="width: {Math.round((migrationProgress.current / migrationProgress.total) * 100)}%"
-            ></div>
-          </div>
-        </div>
-      {/if}
-
-      <!-- Migration result -->
-      {#if migrationResult && !isMigrating}
-        <div class="migration-result" class:success={migrationResult.errors === 0} class:error={migrationResult.errors > 0}>
-          <div class="migration-result-content">
-            {#if migrationResult.errors === 0}
-              <CheckCircle class="w-5 h-5" />
-              <div class="migration-result-text">
-                <strong>Migração concluída com sucesso!</strong>
-                <span>{migrationResult.migrated} PDFs migrados, {migrationResult.skipped} ignorados</span>
-              </div>
-            {:else}
-              <AlertCircle class="w-5 h-5" />
-              <div class="migration-result-text">
-                <strong>Migração concluída com erros</strong>
-                <span>{migrationResult.migrated} migrados, {migrationResult.errors} erros</span>
-              </div>
-            {/if}
-            <button class="migration-close" on:click={() => migrationResult = null}>×</button>
-          </div>
-        </div>
-      {/if}
 
       {#if downloading}
       <!-- Download / import progress -->
@@ -2747,101 +2661,6 @@
   @keyframes spin {
     from { transform: rotate(0deg); }
     to { transform: rotate(360deg); }
-  }
-
-  /* Migration V2 Styles */
-  .migration-banner {
-    background: linear-gradient(135deg, rgba(59, 130, 246, 0.1) 0%, rgba(147, 51, 234, 0.1) 100%);
-    border-left: 4px solid #3b82f6;
-  }
-
-  .migration-progress {
-    background: var(--background-color);
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    border-radius: 0.5rem;
-    padding: 1rem;
-    margin-bottom: 1.5rem;
-  }
-
-  .migration-progress-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 0.5rem;
-    font-size: 0.875rem;
-  }
-
-  .migration-stats {
-    opacity: 0.7;
-    font-size: 0.75rem;
-  }
-
-  .migration-progress-bar {
-    width: 100%;
-    height: 0.5rem;
-    background: rgba(255, 255, 255, 0.1);
-    border-radius: 0.25rem;
-    overflow: hidden;
-  }
-
-  .migration-progress-fill {
-    height: 100%;
-    background: linear-gradient(90deg, #3b82f6, #8b5cf6);
-    transition: width 0.3s ease;
-  }
-
-  .migration-result {
-    background: var(--background-color);
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    border-radius: 0.5rem;
-    padding: 1rem;
-    margin-bottom: 1.5rem;
-  }
-
-  .migration-result.success {
-    border-left: 4px solid #10b981;
-  }
-
-  .migration-result.error {
-    border-left: 4px solid #ef4444;
-  }
-
-  .migration-result-content {
-    display: flex;
-    align-items: center;
-    gap: 0.75rem;
-  }
-
-  .migration-result-text {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    gap: 0.25rem;
-  }
-
-  .migration-result-text strong {
-    font-weight: 600;
-  }
-
-  .migration-result-text span {
-    font-size: 0.875rem;
-    opacity: 0.8;
-  }
-
-  .migration-close {
-    background: transparent;
-    border: none;
-    color: var(--text-light);
-    font-size: 1.5rem;
-    line-height: 1;
-    cursor: pointer;
-    padding: 0.25rem;
-    opacity: 0.7;
-    transition: opacity 0.2s;
-  }
-
-  .migration-close:hover {
-    opacity: 1;
   }
 
   /* Responsive */

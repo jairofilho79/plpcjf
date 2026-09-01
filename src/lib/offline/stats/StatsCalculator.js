@@ -5,7 +5,6 @@
  */
 
 import cacheStorageAdapter from '../storage/CacheStorageAdapter.js';
-import urlNormalizer from '../normalization/UrlNormalizer.js';
 import { findMissingPdfs } from '$lib/utils/pdfValidation.js';
 import { getCachedStats, cacheStats, invalidateCategory, invalidateCategories, getAllCachedStats } from '$lib/utils/statsCache.js';
 import { createLogger } from '../utils/OfflineLogger.js';

@@ -83,33 +83,3 @@ describe('PdfPathManager.createRequestUrl', () => {
   });
 });
 
-describe('PdfPathManager.createSearchVariations', () => {
-  it('gera pelo menos uma variação, todas string', () => {
-    const variacoes = PdfPathManager.createSearchVariations(
-      'assets/Categoria/arquivo.pdf',
-      'https://example.com'
-    );
-    assert.ok(variacoes.length > 0);
-    assert.ok(variacoes.every((v) => typeof v === 'string'));
-  });
-
-  it('as variações incluem o caminho normalizado', () => {
-    const variacoes = PdfPathManager.createSearchVariations(
-      'Categoria/arquivo.pdf',
-      'https://example.com'
-    );
-    assert.ok(variacoes.some((v) => v.includes('assets/Categoria/arquivo.pdf')));
-  });
-
-  it('não repete variações', () => {
-    const variacoes = PdfPathManager.createSearchVariations(
-      'assets/Categoria/arquivo.pdf',
-      'https://example.com'
-    );
-    assert.equal(variacoes.length, new Set(variacoes).size);
-  });
-
-  it('devolve lista vazia para caminho vazio', () => {
-    assert.deepEqual(PdfPathManager.createSearchVariations(''), []);
-  });
-});
