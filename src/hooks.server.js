@@ -1,5 +1,5 @@
 import { error } from '@sveltejs/kit';
-import { findExactKeyMatch } from '$lib/server/r2KeyMatch.js';
+import { resolvePdfKey } from '$lib/server/pdfKeyResolution.js';
 
 /** @type {import('@sveltejs/kit').Handle} */
 export async function handle({ event, resolve }) {
@@ -49,60 +49,20 @@ async function servePdf(pathname, platform) {
     }
 
     // pathname will be like "/assets/ColAdultos/001.pdf"
-    // May contain URL-encoded characters like %20 for spaces, %5C for backslashes
-    // Need to decode it before getting from R2 with key "assets/ColAdultos/001.pdf" (no leading slash)
-    let r2Key = decodeURIComponent(pathname.substring(1)); // Remove leading "/" and decode URI encoding
-    
-    // Try to get the object
-    let object = await platform.env.LOUVORES_BUCKET.get(r2Key);
-    
-    // If not found, try decoding multiple times (handles double/triple encoding)
-    if (!object) {
-      let decodedKey = r2Key;
-      for (let i = 0; i < 5; i++) {
-        try {
-          decodedKey = decodeURIComponent(decodedKey);
-          object = await platform.env.LOUVORES_BUCKET.get(decodedKey);
-          if (object) {
-            r2Key = decodedKey;
-            break;
-          }
-        } catch (e) {
-          // Can't decode further, stop trying
-          break;
-        }
-      }
-    }
-    
-    // Último recurso: a chave real pode diferir só em acento/caixa.
-    // Correspondência exata após normalização — nunca por prefixo (achado #09).
-    if (!object) {
-      const pathParts = r2Key.split('/');
-      const expectedFilename = pathParts.pop();
-      const prefix = pathParts.join('/');
+    // A resolução (decodificação, formas Unicode NFD/NFC e o fallback por
+    // prefixo/normalização) vive em pdfKeyResolution.js — extraída de propósito
+    // para ser testável sob `node --test` sem o alias `$lib` (ver achado C2).
+    const resolved = await resolvePdfKey(pathname, platform.env.LOUVORES_BUCKET);
 
-      const list = await platform.env.LOUVORES_BUCKET.list({ prefix });
-      const matched = findExactKeyMatch(
-        list.objects.map((item) => item.key),
-        `${prefix}/${expectedFilename}`
-      );
-
-      if (matched) {
-        object = await platform.env.LOUVORES_BUCKET.get(matched);
-        if (object) {
-          console.log(`[R2] Chave equivalente encontrada: ${r2Key} -> ${matched}`);
-          r2Key = matched;
-        }
-      }
-    }
-
-    if (!object) {
-      return new Response('PDF not found', { 
-        status: 404, 
-        headers: corsHeaders 
+    if (!resolved) {
+      return new Response('PDF not found', {
+        status: 404,
+        headers: corsHeaders
       });
     }
-    
+
+    const { object } = resolved;
+
     return new Response(object.body, {
       headers: {
         ...corsHeaders,
