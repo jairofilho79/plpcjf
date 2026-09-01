@@ -697,10 +697,20 @@
      Nas 3 repetições, delta < ruído (nunca claramente maior) — o custo
      marginal de ir de 10 para 50 cards não se distingue com confiança do
      ruído da própria medição (que varia mais entre repetições, 1.9–12.0ms,
-     do que o delta varia dentro de cada uma). As listas já paginam em no
-     máximo 50 itens (bibliotecaItemsPerPage.js); não há lista longa de
-     verdade para otimizar hoje. Reabrir só se o limite de paginação subir ou
-     o card ficar bem mais pesado. */
+     do que o delta varia dentro de cada uma). A lista é coluna única
+     (flex-direction: column): com 50 itens, ~49 dos 50 cards ficam fora da
+     viewport inicial mesmo num desktop widescreen (1920×929) — o mecanismo
+     teria bastante conteúdo para pular; a ausência de ganho não é por
+     falta de itens fora de tela. Ressalva importante: medido em hardware
+     real sem CPU throttle (a automação de navegador desta sessão não
+     expôs o painel de throttling do DevTools) — o resultado é informativo
+     sobre aparelhos rápidos e genuinamente silencioso sobre o aparelho
+     modesto que a auditoria original tinha em mente; não assuma que a
+     conclusão vale lá sem medir de novo com throttle real. As listas já
+     paginam em no máximo 50 itens (bibliotecaItemsPerPage.js); não há
+     lista longa de verdade para otimizar hoje nos aparelhos medidos.
+     Reabrir com throttle real se o limite de paginação subir, o card
+     ficar bem mais pesado, ou surgir relato de jank em aparelho modesto. */
   .louvores-list {
     display: flex;
     flex-direction: column;
