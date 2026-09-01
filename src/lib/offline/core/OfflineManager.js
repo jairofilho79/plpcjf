@@ -70,6 +70,52 @@ class OfflineManager {
   constructor() {
     this.initialized = false;
     this.initializationPromise = null;
+    this._nfcMigrationPromise = null;
+  }
+
+  /**
+   * Migração de chaves de PDF em cache para a forma Unicode NFC (#22.2).
+   *
+   * Extraída de `initialize()` de propósito: precisa rodar em toda visita à
+   * aplicação — inclusive em `/leitor`, que nunca chama `initialize()` — e
+   * não pode depender do resto do bootstrap (migração V1/V2, `cacheSync`),
+   * que é mais caro e desnecessário para este passo. Sem rede, no máximo
+   * oito reescritas por aparelho, e sai numa leitura de `localStorage`
+   * depois da primeira execução sem erros — idempotente e barata o
+   * bastante para chamar sem gate de categoria selecionada.
+   *
+   * `initialize()` também chama este método (não duplica a lógica), então
+   * quem já depende de `ensureInitialized()` continua coberto.
+   *
+   * @returns {Promise<void>}
+   */
+  async ensureNfcMigration() {
+    if (!browser) return;
+
+    if (this._nfcMigrationPromise) {
+      return this._nfcMigrationPromise;
+    }
+
+    this._nfcMigrationPromise = (async () => {
+      try {
+        if (localStorage.getItem(NFC_MIGRATION_FLAG) === 'true') {
+          return;
+        }
+        const cachePdfs = await caches.open(getConfig('PDF_CACHE_NAME') || 'plpc-pdfs');
+        const r = await migrarChavesPdfParaNfc(cachePdfs, (url) => {
+          const u = new URL(url);
+          return PdfPathManager.createRequestUrl(decodeURIComponent(u.pathname), u.origin);
+        });
+        logger.info('OfflineManager', `Migração NFC: ${r.migradas} migradas, ${r.mantidas} mantidas, ${r.erros} erros`);
+        if (r.erros === 0) localStorage.setItem(NFC_MIGRATION_FLAG, 'true');
+      } catch (error) {
+        logger.warn('OfflineManager', 'Migração NFC falhou (não crítico)', error);
+      } finally {
+        this._nfcMigrationPromise = null;
+      }
+    })();
+
+    return this._nfcMigrationPromise;
   }
 
   /**
@@ -117,21 +163,10 @@ class OfflineManager {
           logger.warn('OfflineManager', 'Cache migration V2 failed (non-critical)', error);
         }
 
-        // #22.2: converte para NFC as chaves de PDF gravadas em NFD antes desta
-        // versão. Uma vez por aparelho, sem rede, no máximo oito entradas.
-        try {
-          if (localStorage.getItem(NFC_MIGRATION_FLAG) !== 'true') {
-            const cachePdfs = await caches.open(getConfig('PDF_CACHE_NAME') || 'plpc-pdfs');
-            const r = await migrarChavesPdfParaNfc(cachePdfs, (url) => {
-              const u = new URL(url);
-              return PdfPathManager.createRequestUrl(decodeURIComponent(u.pathname), u.origin);
-            });
-            logger.info('OfflineManager', `Migração NFC: ${r.migradas} migradas, ${r.mantidas} mantidas, ${r.erros} erros`);
-            if (r.erros === 0) localStorage.setItem(NFC_MIGRATION_FLAG, 'true');
-          }
-        } catch (error) {
-          logger.warn('OfflineManager', 'Migração NFC falhou (não crítico)', error);
-        }
+        // #22.2/correção: migração NFC extraída para `ensureNfcMigration()` —
+        // ver o método acima. Chamada aqui também para cobrir quem depende
+        // só de `ensureInitialized()`.
+        await this.ensureNfcMigration();
 
         // Sync cache on initialization
         try {
