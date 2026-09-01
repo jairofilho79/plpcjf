@@ -10,7 +10,6 @@
   import { registerServiceWorker, setupServiceWorkerMessageListener } from '$lib/utils/swRegistration';
   import { setupLouvoresManifestChecksumTriggers } from '$lib/stores/louvores';
   import { setupCacheSync } from '$lib/utils/cacheSync';
-  import offlineManager from '$lib/offline/core/OfflineManager.js';
   import {
     installStaleChunkRecoveryListeners,
     scheduleStaleRecoveryCounterReset
@@ -93,9 +92,18 @@
       // limpo, nunca roda. Aqui ela dispara em toda visita à aplicação
       // (inclusive /leitor, que nunca toca OfflineManager), sem bloquear o
       // carregamento da página: sai cedo se já rodou (flag em localStorage).
-      offlineManager.ensureNfcMigration().catch((err) => {
-        console.warn('[Layout] Migração NFC de PDFs falhou (não crítico):', err);
-      });
+      //
+      // Achado I2: import dinâmico, não estático — `OfflineManager` e o que
+      // ele arrasta (48 KB / 14 KB gzip) não precisam ir no chunk de toda
+      // rota só porque /leitor (que nunca usa OfflineManager para mais nada)
+      // também passa por aqui. A chamada continua incondicional em toda
+      // rota — só a forma de carregar o módulo virou preguiçosa, não a
+      // migração em si.
+      import('$lib/offline/core/OfflineManager.js')
+        .then(({ default: offlineManager }) => offlineManager.ensureNfcMigration())
+        .catch((err) => {
+          console.warn('[Layout] Migração NFC de PDFs falhou (não crítico):', err);
+        });
 
       // CORREÇÃO PARA STANDALONE: Garantir que o SvelteKit router processe a URL correta
       // Quando o Service Worker serve o shell root ('/'), o SvelteKit pode não ter
