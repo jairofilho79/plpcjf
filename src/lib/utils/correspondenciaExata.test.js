@@ -136,6 +136,24 @@ describe('F9 e F10 — dominadas pela chave exata', () => {
   });
 });
 
+describe('#22.5 — sobrou uma normalização só', () => {
+  it('PdfPathManager tem exatamente dois métodos públicos', () => {
+    const metodos = Object.getOwnPropertyNames(PdfPathManager)
+      .filter((n) => typeof (/** @type {any} */ (PdfPathManager))[n] === 'function');
+    assert.deepEqual(metodos.sort(), ['createRequestUrl', 'normalizeForStorage']);
+  });
+
+  it('createSearchVariations não existe mais', () => {
+    assert.equal(/** @type {any} */ (PdfPathManager).createSearchVariations, undefined);
+  });
+
+  it('pathUtils não exporta mais a normalização minúscula', async () => {
+    const pathUtils = await import('./pathUtils.js');
+    assert.equal(/** @type {any} */ (pathUtils).normalizePdfUrl, undefined);
+    assert.equal(/** @type {any} */ (pathUtils).normalizeAccents, undefined);
+  });
+});
+
 /** @param {string} arquivo */
 function caminhosDoManifesto(arquivo) {
   const dados = JSON.parse(fs.readFileSync(arquivo, 'utf8'));

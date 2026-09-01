@@ -8,7 +8,7 @@ import { getConfig } from '../core/OfflineConfig.js';
 import offlineEvents, { EVENTS } from '../core/OfflineEvents.js';
 import { createLogger } from '../utils/OfflineLogger.js';
 import { browser } from '$app/environment';
-import PdfPathManager, { registrarAcertoPdf } from '../utils/PdfPathManager.js';
+import PdfPathManager from '../utils/PdfPathManager.js';
 import { decodeUrlUtf8 } from '$lib/utils/urlEncoding.js';
 
 const logger = createLogger('CacheStorageAdapter');
@@ -169,9 +169,6 @@ export class CacheStorageAdapter extends CacheRepository {
             const response = await cache.match(request);
             if (response) {
               logger.debug('CacheStorageAdapter', `PDF found via variation cache: ${normalizedPath}`);
-              // Achado 1 da revisão: este atalho não é `direto` nem `variacao` — é
-              // uma consulta anterior reaproveitada sem repetir a busca.
-              registrarAcertoPdf('reaproveitado', cached.url);
               return response;
             }
           } catch (e) {
@@ -181,10 +178,6 @@ export class CacheStorageAdapter extends CacheRepository {
         } else {
           // We know this path doesn't exist (cached miss)
           logger.debug('CacheStorageAdapter', `PDF not found (cached miss): ${normalizedPath}`);
-          // Extensão além do Achado 1: também é um `miss`, só que memoizado —
-          // sem contá-lo aqui o total de categorias não bateria com o total
-          // de chamadas a getPdf().
-          registrarAcertoPdf('miss', normalizedPath);
           return null;
         }
       }
@@ -192,32 +185,29 @@ export class CacheStorageAdapter extends CacheRepository {
       // Check miss cache (avoid repeated failed attempts)
       if (this._missCache.has(normalizedPath)) {
         logger.debug('CacheStorageAdapter', `PDF in miss cache, skipping: ${normalizedPath}`);
-        registrarAcertoPdf('miss', normalizedPath);
         return null;
       }
 
       const cache = await this._openCache();
-      
-      // Use PdfPathManager to generate search variations
-      const searchVariations = PdfPathManager.createSearchVariations(pdfPath, window.location.origin);
 
-      for (const url of searchVariations) {
+      // #22.5: uma chave só. As "variações" eram, medidas sobre os 4629
+      // caminhos reais, a mesma string repetida mais duas formas sem origem que
+      // `new Request` resolvia contra a página — nunca contra uma chave gravada.
+      const url = PdfPathManager.createRequestUrl(pdfPath, window.location.origin);
+      if (url) {
         try {
-          const request = new Request(url);
-          const response = await cache.match(request);
+          const response = await cache.match(new Request(url));
           if (response) {
-            // Cache successful result
             this._variationCache.set(normalizedPath, {
               found: true,
               url: url,
               timestamp: Date.now()
             });
-            logger.debug('CacheStorageAdapter', `PDF found in cache: ${normalizedPath}`);
-            registrarAcertoPdf(url === searchVariations[0] ? 'direto' : 'variacao', url);
+            logger.debug('CacheStorageAdapter', `PDF encontrado no cache: ${normalizedPath}`);
             return response;
           }
-        } catch (e) {
-          // Continue to next variation
+        } catch {
+          // URL malformada: trata como miss.
         }
       }
 
@@ -243,7 +233,6 @@ export class CacheStorageAdapter extends CacheRepository {
       }, this._missCacheTTL);
 
       logger.debug('CacheStorageAdapter', `PDF not found in cache: ${normalizedPath}`);
-      registrarAcertoPdf('miss', normalizedPath);
       return null;
     } catch (error) {
       logger.error('CacheStorageAdapter', `Error getting PDF: ${pdfPath}`, error);
@@ -467,20 +456,15 @@ export class CacheStorageAdapter extends CacheRepository {
       }
 
       const cache = await this._openCache();
-      
-      // Use PdfPathManager to generate search variations for deletion
-      const urlVariations = PdfPathManager.createSearchVariations(pdfPath, window.location.origin);
 
+      // #22.5: apaga a chave canônica — a mesma que `_putPdfInternal` grava.
+      const url = PdfPathManager.createRequestUrl(pdfPath, window.location.origin);
       let deleted = false;
-      for (const url of urlVariations) {
+      if (url) {
         try {
-          const request = new Request(url);
-          const result = await cache.delete(request);
-          if (result) {
-            deleted = true;
-          }
-        } catch (e) {
-          // Continue to next variation
+          deleted = await cache.delete(new Request(url));
+        } catch {
+          deleted = false;
         }
       }
 

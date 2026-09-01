@@ -529,28 +529,6 @@ async function removeZipFromCache(zipUrl) {
 }
 
 /**
- * Prepare ZIP entry name for cache storage (preserves case and accents)
- * CRITICAL: Does NOT normalize (no lowercase, no accent removal) - only prepares path format
- * @param {string} entryName
- */
-function normalizeZipEntryName(entryName) {
-  if (!entryName) {
-    return '';
-  }
-
-  // #22.2: delega ao normalizador canônico — era uma cópia literal dele, e uma
-  // cópia não recebe as correções do original. A única diferença de contrato é
-  // a barra inicial, que o Cache Storage espera aqui.
-  const prepared = PdfPathManager.normalizeForStorage(entryName);
-
-  if (!prepared || prepared.endsWith('/')) {
-    return '';
-  }
-
-  return `/${prepared}`;
-}
-
-/**
  * @param {any} packageName
  */
 function getPackageUrl(packageName) {
@@ -792,7 +770,7 @@ async function startZipDownloadWithSpecificParts(categories, pdfUrls, partsByCat
   
   // Índice O(1) dos PDFs desejados; `remaining` controla o que ainda falta gravar.
   // #22.2: sem o `normalize` aqui, `wantedIndex.has(preparedPath)` compara um
-  // `preparedPath` já em NFC (via normalizeZipEntryName) contra entradas ainda
+  // `preparedPath` já em NFC (via normalizeForStorage) contra entradas ainda
   // em NFD (pdfUrls vem do pdfId, sem NFC) — para os 5 dos 8 caminhos NFD cujo
   // acento está no próprio nome de arquivo, nem o basename bate, e o PDF
   // deixaria de ser gravado a partir do ZIP, silenciosamente.
@@ -958,7 +936,9 @@ async function startZipDownloadWithSpecificParts(categories, pdfUrls, partsByCat
             throw new Error('DOWNLOAD_CANCELLED');
           }
 
-          const preparedPath = normalizeZipEntryName(name);
+          // #22.5: o normalizador canônico direto, sem o invólucro que só
+          // acrescentava a barra inicial.
+          const preparedPath = PdfPathManager.normalizeForStorage(name);
           if (!preparedPath || !preparedPath.endsWith('.pdf')) continue;
 
           const pathForComparison = prepareForComparison(preparedPath);
@@ -968,9 +948,6 @@ async function startZipDownloadWithSpecificParts(categories, pdfUrls, partsByCat
           if (!remaining.has(pathForComparison)) continue;
 
           const pdfBlob = new Blob([data], { type: 'application/pdf' });
-          // #22.2: colapsa para o construtor único de URL de PDF (Tarefa 5) —
-          // preparedPath já passou por normalizeForStorage em normalizeZipEntryName,
-          // então isto é idempotente e byte a byte igual ao createUrlUtf8 direto.
           const requestUrl = PdfPathManager.createRequestUrl(preparedPath, location.origin);
           const pdfResponse = new Response(pdfBlob, {
             headers: { 'Content-Type': 'application/pdf' }
@@ -1203,38 +1180,17 @@ async function verifyPdfInCacheStorage(pdfUrl) {
   
   try {
     const cache = await openPdfCache();
-    
-    // CRITICAL: Cache stores with URL encoding (new URL() does automatic encoding)
-    // So we must try with URL encoding FIRST to match what's actually stored
-    // Ensure pdfUrl is a string
+
+    // #22.5: uma chave só, a mesma que os quatro escritores gravam. Eram seis
+    // variações, e duas delas (`new URL(...)` cru e o caminho sem origem)
+    // divergiam da chave gravada exatamente nos caminhos com colchetes que a
+    // Tarefa 5 corrigiu.
     const pdfUrlStr = typeof pdfUrl === 'string' ? pdfUrl : String(pdfUrl);
-    
-    const urlVariations = [
-      // Try with URL encoding first (as stored in cache by new URL())
-      new URL(pdfUrlStr, location.origin).toString(),
-      // Also try with explicit encoding
-      new URL(encodeURI(pdfUrlStr), location.origin).toString(),
-      // Try path with leading slash and encoding
-      new URL(pdfUrlStr.startsWith('/') ? pdfUrlStr : `/${pdfUrlStr}`, location.origin).toString(),
-      // Fallback: try without encoding (for compatibility)
-      pdfUrlStr.startsWith('/') ? pdfUrlStr : `/${pdfUrlStr}`,
-      pdfUrlStr.replace(/^\/+/, ''),
-      pdfUrlStr
-    ];
-    
-    for (const url of urlVariations) {
-      try {
-        const request = new Request(url);
-        const response = await cache.match(request);
-        if (response) {
-          return true;
-        }
-      } catch (e) {
-        // Continue to next variation
-      }
-    }
-    
-    return false;
+    const url = PdfPathManager.createRequestUrl(pdfUrlStr, location.origin);
+    if (!url) return false;
+
+    const response = await cache.match(new Request(url));
+    return !!response;
   } catch (error) {
     console.warn(`[Offline Store] Error verifying PDF in cache: ${pdfUrl}`, error);
     return false;
@@ -1760,7 +1716,7 @@ async function startZipDownload(categories, pdfUrls, alreadyDownloadedCategories
   
   // Índice O(1) dos PDFs desejados; `remaining` controla o que ainda falta gravar.
   // #22.2: sem o `normalize` aqui, `wantedIndex.has(preparedPath)` compara um
-  // `preparedPath` já em NFC (via normalizeZipEntryName) contra entradas ainda
+  // `preparedPath` já em NFC (via normalizeForStorage) contra entradas ainda
   // em NFD (pdfUrls vem do pdfId, sem NFC) — para os 5 dos 8 caminhos NFD cujo
   // acento está no próprio nome de arquivo, nem o basename bate, e o PDF
   // deixaria de ser gravado a partir do ZIP, silenciosamente.
@@ -1946,7 +1902,9 @@ async function startZipDownload(categories, pdfUrls, alreadyDownloadedCategories
             throw new Error('DOWNLOAD_CANCELLED');
           }
 
-          const preparedPath = normalizeZipEntryName(name);
+          // #22.5: o normalizador canônico direto, sem o invólucro que só
+          // acrescentava a barra inicial.
+          const preparedPath = PdfPathManager.normalizeForStorage(name);
           if (!preparedPath || !preparedPath.endsWith('.pdf')) continue;
 
           const pathForComparison = prepareForComparison(preparedPath);
@@ -1956,9 +1914,6 @@ async function startZipDownload(categories, pdfUrls, alreadyDownloadedCategories
           if (!remaining.has(pathForComparison)) continue;
 
           const pdfBlob = new Blob([data], { type: 'application/pdf' });
-          // #22.2: colapsa para o construtor único de URL de PDF (Tarefa 5) —
-          // preparedPath já passou por normalizeForStorage em normalizeZipEntryName,
-          // então isto é idempotente e byte a byte igual ao createUrlUtf8 direto.
           const requestUrl = PdfPathManager.createRequestUrl(preparedPath, location.origin);
           const pdfResponse = new Response(pdfBlob, {
             headers: { 'Content-Type': 'application/pdf' }

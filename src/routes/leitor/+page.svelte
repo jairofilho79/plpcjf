@@ -370,60 +370,26 @@
         }
       }
       
-      // Try fallback variations if original URL failed
-      // Try variations of the URL (all using original path, no normalization)
-      const urlVariations = [
-        originalFullUrl, // Already tried, but keep for reference
-        fileUrl, // Original URL from parameter
-        new URL(`/${pdfPath}`, window.location.origin).href, // Original path with leading slash
-        new URL(pdfPath, window.location.origin).href, // Original path without leading slash
-        pdfPath.startsWith('/') ? pdfPath : `/${pdfPath}`, // Original path with/without slash
-        pdfPath // Original path as-is
-      ];
-      
-      // Remove duplicates and already tried URL
-      const uniqueVariations = [...new Set(urlVariations)].filter(url => url !== originalFullUrl);
-      
-      let loadedSuccessfully = false;
-      for (const variationUrl of uniqueVariations) {
-        try {
-          console.log(`[Leitor] Tentando variação de URL: ${variationUrl}`);
-          const loadingTask = getDocument({ url: variationUrl, withCredentials: false });
-          const pdfDocument = await loadingTask.promise;
-          linkService.setDocument(pdfDocument);
-          viewer.setDocument(pdfDocument);
-          totalPages = pdfDocument.numPages ?? 0;
-          currentPage = 1;
-          lastLoadedFile = variationUrl;
-          retryCount = 0;
-          pdfError = null;
-          loadedSuccessfully = true;
-          console.log(`[Leitor] PDF carregado com sucesso usando variação: ${variationUrl}`);
-          break;
-        } catch (variationError) {
-          // Continue to next variation
-          continue;
-        }
+      // #22.5: não há mais variações a tentar. `originalFullUrl` é a chave
+      // canônica — a mesma string que o escritor do cache grava e que o Service
+      // Worker procura. As seis tentativas do bloco antigo eram a mesma URL em
+      // seis formatos, e cada uma custava um `getDocument` completo.
+      setPdfUi('retryableError', 'Erro ao carregar PDF. Verifique se o arquivo está disponível.');
+
+      // FASE 2: Invalidar cache de validação quando há erro definitivo no leitor
+      // Como não temos pdfId aqui, invalidamos todo o cache para forçar revalidação
+      try {
+        const { clearAllValidationCache } = await import('$lib/utils/pdfValidation');
+        clearAllValidationCache();
+      } catch (err) {
+        console.warn('[Leitor] Erro ao invalidar cache de validação:', err);
       }
-      
-      if (!loadedSuccessfully) {
-        setPdfUi('retryableError', 'Erro ao carregar PDF. Verifique se o arquivo está disponível.');
-        
-        // FASE 2: Invalidar cache de validação quando há erro definitivo no leitor
-        // Como não temos pdfId aqui, invalidamos todo o cache para forçar revalidação
-        try {
-          const { clearAllValidationCache } = await import('$lib/utils/pdfValidation');
-          clearAllValidationCache();
-        } catch (err) {
-          console.warn('[Leitor] Erro ao invalidar cache de validação:', err);
-        }
-        
-        // Try retry if still have attempts
-        if (retryCount < MAX_RETRIES && navigator.onLine) {
-          retryCount++;
-          setTimeout(() => load(fileUrl), 2000);
-          return;
-        }
+
+      // Try retry if still have attempts
+      if (retryCount < MAX_RETRIES && navigator.onLine) {
+        retryCount++;
+        setTimeout(() => load(fileUrl), 2000);
+        return;
       }
     } finally {
       if (pdfUiState === 'loading' || pdfUiState === 'autoDownloading') {

@@ -12,7 +12,6 @@ import compositeValidator from '../validation/CompositeValidator.js';
 import offlineEvents, { EVENTS } from './OfflineEvents.js';
 import cacheSync from '../storage/CacheSync.js';
 import cacheMigration from '../storage/CacheMigration.js';
-import cacheMigrationV2 from '../storage/CacheMigrationV2.js';
 import { createLogger } from '../utils/OfflineLogger.js';
 import { browser } from '$app/environment';
 import { louvores } from '$lib/stores/louvores.js';
@@ -149,19 +148,11 @@ class OfflineManager {
           logger.warn('OfflineManager', 'Cache migration V1 failed (non-critical)', error);
         }
 
-        // Run cache migration V2 if needed (unified normalization)
-        try {
-          const migrationV2Completed = await cacheMigrationV2.isMigrationCompleted();
-          if (!migrationV2Completed) {
-            logger.info('OfflineManager', 'Running cache migration V2...');
-            const migrationResult = await cacheMigrationV2.migrate();
-            logger.info('OfflineManager', `Cache migration V2 completed: ${migrationResult.migrated} migrated, ${migrationResult.skipped} skipped, ${migrationResult.errors} errors`);
-          } else {
-            logger.debug('OfflineManager', 'Cache migration V2 already completed');
-          }
-        } catch (error) {
-          logger.warn('OfflineManager', 'Cache migration V2 failed (non-critical)', error);
-        }
+        // #22.5 / D-12: a segunda migração de cache foi aposentada. Ela
+        // reescrevia entradas do cache por heurística de string
+        // (`includes('cifra') && includes('nivel')`) e apagava a antiga. Com a
+        // chave unificada não há o que migrar, e a migração NFC de #22.2, logo
+        // abaixo, cobre o único caso real de chave divergente.
 
         // #22.2/correção: migração NFC extraída para `ensureNfcMigration()` —
         // ver o método acima. Chamada aqui também para cobrir quem depende

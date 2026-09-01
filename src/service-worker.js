@@ -23,7 +23,7 @@ import {
   CATALOG_MANIFEST_PATHS,
   PDF_CACHE_NAME
 } from '$lib/offline/sw/swCaches.js';
-import PdfPathManager, { registrarAcertoPdf } from '$lib/offline/utils/PdfPathManager.js';
+import PdfPathManager from '$lib/offline/utils/PdfPathManager.js';
 import { createUrlUtf8 } from '$lib/utils/urlEncoding.js';
 
 /** Cache do app, atrelado ao deploy. Espelhado em OfflineConfig.APP_CACHE_NAME. */
@@ -189,9 +189,9 @@ async function networkFirst(event) {
 }
 
 /**
- * PDFs do acervo: cache primeiro, com as variações de URL do PdfPathManager,
- * porque o mesmo PDF pode ter sido gravado com acentuação codificada de formas
- * diferentes. É o conteúdo que o modo offline existe para servir.
+ * PDFs do acervo: cache primeiro, por chave exata. Desde #22.1/#22.2 há um só
+ * codificador e uma só forma Unicode, então a chave que se procura é sempre a
+ * chave que foi gravada. É o conteúdo que o modo offline existe para servir.
  *
  * @param {FetchEvent} event
  * @param {URL} url
@@ -200,25 +200,13 @@ async function networkFirst(event) {
 async function handlePdf(event, url) {
   const cache = await caches.open(PDF_CACHE);
 
-  const direct = await cache.match(event.request);
-  if (direct) {
-    registrarAcertoPdf('direto');
-    return direct;
-  }
-
-  const variations = PdfPathManager.createSearchVariations(url.pathname, self.location.origin);
-  for (const variationUrl of variations) {
-    try {
-      const cached = await cache.match(new Request(variationUrl));
-      if (cached) {
-        registrarAcertoPdf('variacao', variationUrl);
-        return cached;
-      }
-    } catch {
-      // Variação malformada: tenta a próxima.
-    }
-  }
-  registrarAcertoPdf('miss', url.pathname);
+  // #22.5: uma chave só, a canônica. O `event.request` já chega nela — a
+  // instrumentação da Tarefa 5 mediu zero acertos por variação num navegador
+  // real —, mas derivar a chave do pathname garante que uma query string
+  // acidental não vire um miss (`cache.match` compara a URL inteira).
+  const chave = PdfPathManager.createRequestUrl(url.pathname, self.location.origin);
+  const cached = await cache.match(chave || event.request);
+  if (cached) return cached;
 
   try {
     const response = await fetch(event.request);
