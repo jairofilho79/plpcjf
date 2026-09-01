@@ -232,12 +232,10 @@ export class OfflineBundleImporter {
       // ponytail: CD + slice — streaming Unzip breaks on yazl data-descriptors + nested zips
       for await (const entry of iterateZipEntriesCd(file, signal)) {
         throwIfAborted();
-        if (isUnsafeZipPath(entry.name)) {
-          throw new Error(`Entrada ZIP insegura: ${entry.name}`);
-        }
 
+        // #12: nome já filtrado dentro do gerador (isUnsafeZipPath e
+        // dot-files), antes de qualquer inflateSync — não repetir aqui.
         const base = zipEntryBasename(entry.name);
-        if (!base || base.startsWith('.')) continue;
 
         if (base === OFFLINE_MANIFEST_NAME) {
           console.info(`${LOG} ▶ Manifesto Offline`);

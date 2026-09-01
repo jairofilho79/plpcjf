@@ -5,6 +5,7 @@
  */
 
 import { inflateSync } from 'fflate';
+import { isUnsafeZipPath, zipEntryBasename } from './bundleValidation.js';
 
 const SIG_EOCD = 0x06054b50;
 const SIG_ZIP64_EOCD_LOCATOR = 0x07064b50;
@@ -156,6 +157,23 @@ export async function readZipEntryData(file, entry) {
  * @param {Blob} file
  * @param {AbortSignal} [signal]
  * @returns {AsyncGenerator<{ name: string, data: Uint8Array }>}
+ * @throws {Error} `Entrada ZIP insegura: <nome>` — quando `isUnsafeZipPath`
+ *   rejeita o nome de uma entrada (caminho absoluto, `..`, ou letra de unidade
+ *   Windows). Lançado a partir de dentro do laço, antes de inflar os bytes —
+ *   ou seja, no MEIO da iteração, não só na primeira chamada. Todo chamador
+ *   de `for await` sobre este gerador precisa estar pronto para essa exceção
+ *   escapar do laço; hoje há dois consumidores vivos: `OfflineBundleImporter.js`
+ *   (que já trata isto como falha fatal do import) e os dois laços de
+ *   download de pacote individual em `src/lib/stores/offline.js` (linhas
+ *   ~966 e ~1987), que não tinham guarda própria e herdam este contrato —
+ *   antes desta função filtrar por nome, uma entrada insegura simplesmente
+ *   não passava no filtro `.pdf` mais adiante e era ignorada; agora aborta o
+ *   download daquela part. Decisão deliberada: falhar alto é melhor que
+ *   seguir em silêncio, e esses pacotes são gerados pelo build, não por
+ *   input externo — o caso é improvável, mas o contrato mudou e fica
+ *   documentado aqui para quem for chamar esta função no futuro.
+ * @throws {DOMException} `AbortError` — quando `signal` é abortado entre
+ *   duas entradas.
  */
 export async function* iterateZipEntriesCd(file, signal) {
   const { entries } = await readZipCentralDirectory(file);
@@ -164,6 +182,24 @@ export async function* iterateZipEntriesCd(file, signal) {
       throw new DOMException('Import cancelled', 'AbortError');
     }
     if (!entry.name || entry.name.endsWith('/')) continue;
+
+    // Filtra pelo nome ANTES de inflar — o nome já está disponível no central
+    // directory, sem custo de leitura de bytes. Inflar e só depois descartar
+    // (como o consumidor fazia) gasta CPU e memória em toda entrada de um
+    // download parcial que nem ia ser usada.
+    //
+    // Subir esta checagem para dentro do gerador muda o contrato: antes só
+    // `OfflineBundleImporter.js` verificava `isUnsafeZipPath`, depois do
+    // `yield`; agora o próprio gerador lança para QUALQUER consumidor, no
+    // meio do `for await`. Ver o `@throws` no JSDoc desta função — inclui os
+    // dois call sites em `offline.js` que herdam este throw sem guarda
+    // própria.
+    if (isUnsafeZipPath(entry.name)) {
+      throw new Error(`Entrada ZIP insegura: ${entry.name}`);
+    }
+    const base = zipEntryBasename(entry.name);
+    if (!base || base.startsWith('.')) continue;
+
     const data = await readZipEntryData(file, entry);
     yield { name: entry.name, data };
   }

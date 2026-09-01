@@ -107,25 +107,6 @@ export async function registerServiceWorker() {
 }
 
 /**
- * Unregister the service worker
- */
-export async function unregisterServiceWorker() {
-  if (!swRegistration) {
-    return false;
-  }
-
-  try {
-    const success = await swRegistration.unregister();
-    debugLog('[SW Registration] Service worker unregistered:', success);
-    swRegistration = null;
-    return success;
-  } catch (error) {
-    console.error('[SW Registration] Failed to unregister service worker:', error);
-    return false;
-  }
-}
-
-/**
  * Envia mensagem ao Service Worker e aguarda resposta.
  * Cancela o timeout e fecha as portas nos dois caminhos — o de sucesso
  * vazava um timer de 5 min e um par de MessagePort por chamada.

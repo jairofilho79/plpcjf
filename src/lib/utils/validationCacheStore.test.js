@@ -89,6 +89,23 @@ describe('validationCacheStore', () => {
     assert.deepEqual(readValidationEntry(legacy, 'a', NOW), { available: true, url: '/a.pdf' });
   });
 
+  it('não apaga as chaves antigas se a gravação final falhar', () => {
+    const legacy = createStorage({
+      'pdfValidation_a': JSON.stringify({ available: true, url: '/a.pdf', timestamp: NOW })
+    });
+    const originalSetItem = legacy.setItem.bind(legacy);
+    legacy.setItem = (key, value) => {
+      if (key === VALIDATION_CACHE_KEY) {
+        throw new Error('quota estourada');
+      }
+      originalSetItem(key, value);
+    };
+
+    migrateLegacyValidationKeys(legacy);
+
+    assert.notEqual(legacy.getItem('pdfValidation_a'), null);
+  });
+
   it('sobrevive a JSON corrompido no registro', () => {
     storage.setItem(VALIDATION_CACHE_KEY, '{corrompido');
     assert.equal(readValidationEntry(storage, 'a', NOW), null);

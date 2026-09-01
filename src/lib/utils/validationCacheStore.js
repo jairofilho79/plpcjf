@@ -34,10 +34,12 @@ function readAll(storage) {
 /**
  * @param {Storage} storage
  * @param {{ v: number, entries: Record<string, [0|1, string, number]> }} data
+ * @returns {boolean} true se a gravação (ou o fallback de cache vazio) teve sucesso
  */
 function writeAll(storage, data) {
   try {
     storage.setItem(VALIDATION_CACHE_KEY, JSON.stringify(data));
+    return true;
   } catch (error) {
     // Cota estourada: descarta o cache inteiro (é reconstruível) e tenta uma vez.
     try {
@@ -46,6 +48,7 @@ function writeAll(storage, data) {
     } catch {
       // Storage indisponível (modo privado): seguir sem cache.
     }
+    return false;
   }
 }
 
@@ -140,6 +143,15 @@ export function migrateLegacyValidationKeys(storage) {
     } catch {
       // entrada ilegível: apenas descartar
     }
+  }
+
+  // Grava o registro consolidado ANTES de apagar as chaves antigas: se a
+  // gravação falhar (cota estourada, storage bloqueado), aborta sem apagar
+  // nada — o pior caso vira "migra de novo na próxima sessão", nunca "perdeu
+  // o dado porque a chave antiga já tinha sumido antes do registro existir".
+  if (!writeAll(storage, data)) return 0;
+
+  for (const key of legacyKeys) {
     try {
       storage.removeItem(key);
     } catch {
@@ -147,6 +159,5 @@ export function migrateLegacyValidationKeys(storage) {
     }
   }
 
-  writeAll(storage, data);
   return legacyKeys.length;
 }
