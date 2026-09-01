@@ -649,6 +649,13 @@ function fingerprintForCategory(category, manifest, fallbackParts) {
  * este Set, e esta função sobrevive só por ser o caminho mais direto para ler o
  * cache de uma vez.
  *
+ * Achado I1: `toComparablePath` desfaz percent-encoding mas não unifica a
+ * forma Unicode. As chaves do cache pós-migração já são NFC (#22.2); sem
+ * normalizar aqui também, os caminhos comparados contra este Set em
+ * `verifyCompletedPart` (ver `getPdfRelPathNormalizado` abaixo) nunca batiam
+ * para os 8 caminhos do acervo que chegam em NFD — a retomada rebaixava até
+ * 3 das 31 partes (~30 MB) já presentes no cache.
+ *
  * @param {Cache} cache
  * @returns {Promise<Set<string> | null>} null quando não deu para ler o cache
  */
@@ -658,7 +665,7 @@ async function readCachedPdfPaths(cache) {
     /** @type {Set<string>} */
     const paths = new Set();
     for (const request of keys) {
-      const path = toComparablePath(request.url);
+      const path = PdfPathManager.normalizeForStorage(toComparablePath(request.url));
       if (path) paths.add(path);
     }
     return paths;
@@ -666,6 +673,21 @@ async function readCachedPdfPaths(cache) {
     console.warn('[Offline Store] Não foi possível listar o cache de PDFs:', error);
     return null;
   }
+}
+
+/**
+ * `getPdfRelPath` devolve o caminho cru decodificado do `pdfId` — NFD para os
+ * 8 caminhos do acervo que chegam assim. `readCachedPdfPaths` acima e o
+ * `remaining` da retomada (mais abaixo, via `prepareForComparison`) já
+ * normalizam para NFC com `PdfPathManager.normalizeForStorage`; sem fazer o
+ * mesmo aqui, `verifyCompletedPart` compara um caminho NFD contra as duas
+ * outras pontas em NFC e nunca marca a parte como pulável (achado I1).
+ * @param {{ pdfId: string }} louvor
+ * @returns {string | null}
+ */
+function getPdfRelPathNormalizado(louvor) {
+  const relPath = getPdfRelPath(louvor);
+  return relPath ? PdfPathManager.normalizeForStorage(relPath) : null;
 }
 
 /**
@@ -790,7 +812,7 @@ async function startZipDownloadWithSpecificParts(categories, pdfUrls, partsByCat
         }));
 
         if (completedParts.has(part.filename)) {
-          const { skippable, paths } = verifyCompletedPart(part, cachedPaths, getPdfRelPath);
+          const { skippable, paths } = verifyCompletedPart(part, cachedPaths, getPdfRelPathNormalizado);
 
           if (skippable) {
             console.info(`[Offline Store] Parte já baixada, pulando: ${part.filename}`);
@@ -1387,7 +1409,7 @@ async function startZipDownload(categories, pdfUrls, alreadyDownloadedCategories
         }));
 
         if (completedParts.has(part.filename)) {
-          const { skippable, paths } = verifyCompletedPart(part, cachedPaths, getPdfRelPath);
+          const { skippable, paths } = verifyCompletedPart(part, cachedPaths, getPdfRelPathNormalizado);
 
           if (skippable) {
             console.info(`[Offline Store] Parte já baixada, pulando: ${part.filename}`);
