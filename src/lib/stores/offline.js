@@ -60,6 +60,7 @@ import {
   getRequiredPackagesInfo
 } from './offlineStats.js';
 import { safeGet, safeSet, safeRemoveMany } from '$lib/utils/safeStorage.js';
+import { IS_LEITOR_OFFLINE_KEY } from '$lib/utils/storageKeys.js';
 
 const ALLOW_OFFLINE_KEY = 'ALLOW_OFFLINE';
 const CACHED_PDFS_KEY = 'cachedPdfsList';
@@ -1652,7 +1653,7 @@ async function startZipDownload(categories, pdfUrls, alreadyDownloadedCategories
       // Firefox com dados do site bloqueados, um acesso direto a localStorage
       // aqui lançaria e cairia no catch externo, reportando falha depois de
       // todos os PDFs já terem sido gravados no cache com sucesso.
-      const isLeitorOffline = safeStorage()?.getItem('IS_LEITOR_OFFLINE');
+      const isLeitorOffline = safeGet(IS_LEITOR_OFFLINE_KEY);
       if (!isLeitorOffline || isLeitorOffline !== 'true') {
         // Open offline-setup.pdf in leitor to set the flag
         const leitorUrl = '/leitor?file=/offline-setup.pdf&titulo=Configuração Offline&subtitulo=Página de funcionamento';
@@ -1797,7 +1798,7 @@ async function downloadByCategories(categories) {
   // Via safeStorage(): mesmo motivo da definição de safeStorage() acima — no
   // Firefox com dados do site bloqueados, o acesso direto a localStorage
   // aqui lançaria.
-  const isLeitorOffline = safeStorage()?.getItem('IS_LEITOR_OFFLINE');
+  const isLeitorOffline = safeGet(IS_LEITOR_OFFLINE_KEY);
   if (!isLeitorOffline || isLeitorOffline !== 'true') {
     // Open offline-setup.pdf in leitor to set the flag
     // Use Safari-compatible navigation

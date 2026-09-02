@@ -3,8 +3,7 @@
   import { offline } from '$lib/stores/offline';
   import { browser } from '$app/environment';
   import { safeGet } from '$lib/utils/safeStorage.js';
-
-  const IS_LEITOR_OFFLINE_KEY = 'IS_LEITOR_OFFLINE';
+  import { IS_LEITOR_OFFLINE_KEY } from '$lib/utils/storageKeys.js';
 
   $: savedCategories = offline.getSavedCategories();
   $: hasCategoryDownloaded = savedCategories && savedCategories.length > 0;

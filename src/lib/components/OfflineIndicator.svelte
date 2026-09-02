@@ -4,6 +4,7 @@
   import { goto } from '$app/navigation';
   import { browser } from '$app/environment';
   import { safeGet } from '$lib/utils/safeStorage.js';
+  import { IS_LEITOR_OFFLINE_KEY } from '$lib/utils/storageKeys.js';
 
   $: state = $offline;
   $: enabled = $isOfflineEnabled;
@@ -24,7 +25,7 @@
   // `localStorage.getItem` cru lançava mesmo — no Firefox com dados de site
   // bloqueados é o `[[Get]]` da global que lança. `safeGet` devolve `null`, que
   // aqui já significava "o leitor nunca foi aberto online".
-  $: isLeitorOffline = browser ? safeGet('IS_LEITOR_OFFLINE') === 'true' : false;
+  $: isLeitorOffline = browser ? safeGet(IS_LEITOR_OFFLINE_KEY) === 'true' : false;
   $: isOfflineReady = hasCategoryDownloaded && isLeitorOffline;
 
   // Nome acessível do botão (lido quando o elemento recebe foco/é consultado).
