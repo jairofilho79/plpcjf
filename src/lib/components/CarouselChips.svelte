@@ -1,5 +1,5 @@
 <script>
-  import { tick } from 'svelte';
+  import { tick, onDestroy } from 'svelte';
   import { X, Trash2, GripVertical, Share2, Save, Check, ExternalLink, ChevronDown, ChevronUp, FileText } from 'lucide-svelte';
   import { goto } from '$app/navigation';
   import { carousel } from '$lib/stores/carousel';
@@ -18,7 +18,22 @@
   import { sharePlaylistLink, generatePlaylistShareUrl } from '$lib/utils/playlistUtils';
   import { generateFolhetoHtml, generateFolhetoImage, shareFolheto } from '$lib/utils/folhetoUtils';
   import { navigateLouvorToLeitor } from '$lib/utils/navigateLouvorToLeitor';
-  
+  import {
+    resolveTargetIndex,
+    computeKeyboardTarget,
+    computeAutoScrollVelocity,
+    hasPassedDragThreshold,
+    isReorderKey
+  } from '$lib/utils/chipPointerReorder.js';
+
+  /**
+   * Mensagem para um louvor sem caminho de PDF. Fica aqui em constante local
+   * porque, nesta branch, o `navigateLouvorToLeitor.js` ainda não exporta a
+   * sua — é a lane que está a repor o `error` que a traz. Na integração, isto
+   * passa a importar essa constante e esta linha desaparece.
+   */
+  const PDF_INDISPONIVEL = 'Não foi possível abrir este louvor: PDF indisponível.';
+
   /**
    * @type {number | null}
    */
@@ -33,102 +48,312 @@
    * @type {number | null}
    */
   let dragOverIndex = null;
-  let hasDragged = false;
-  let dragStartX = 0;
-  let dragStartY = 0;
+
+  // ── Arrasto por ponteiro ───────────────────────────────────────────────────
+  // O drag-and-drop nativo do HTML5 saiu daqui: no iOS Safari não existe por
+  // toque e no Android depende de um hold que o browser decide — daí as
+  // queixas de "tem que apertar e segurar por muito tempo" e de o menu de
+  // contexto roubar o gesto. Pointer Events unificam rato, dedo e caneta e
+  // arrancam no primeiro movimento, sem espera nenhuma.
+
+  /** Ponteiro que conduz o arrasto atual; null quando não há arrasto. @type {number | null} */
+  let activePointerId = null;
+  /** Alça que capturou o ponteiro, para o largar mesmo que o dedo acabe longe dela. @type {HTMLElement | null} */
+  let capturingEl = null;
+  let pointerStartX = 0;
+  let pointerStartY = 0;
+  /** Já passou o limiar de movimento? Antes disso o gesto ainda pode ser só um toque. */
+  let dragMoved = false;
+  /** Referências aos chips, para medir a geometria no momento do gesto. @type {Array<HTMLElement | null>} */
+  let chipEls = [];
+  /** Referências às alças, para devolver o foco ao chip que se moveu por teclado. @type {Array<HTMLElement | null>} */
+  let dragHandleEls = [];
+  /** A própria lista: dá as fronteiras do gesto e é ela que rola sozinha. @type {HTMLElement | null} */
+  let listEl = null;
+  /** Última posição do ponteiro, para reavaliar o alvo enquanto a lista rola sob um dedo parado. */
+  let lastPointerX = 0;
+  let lastPointerY = 0;
+  /** @type {number | null} */
+  let autoScrollRaf = null;
+  /** Texto lido por leitores de ecrã depois de uma reordenação por teclado. */
+  let reorderAnnouncement = '';
 
   let showClearDialog = false;
   let isExpanded = false;
   let isOpeningTabs = false;
   let isGeneratingFolheto = false;
-  
-  /**
-   * @param {DragEvent & { currentTarget: EventTarget & HTMLDivElement; }} event
-   * @param {number | null} index
-   */
-  function handleDragStart(event, index) {
-    draggedIndex = index;
-    hasDragged = false;
-    dragStartX = event.clientX;
-    dragStartY = event.clientY;
-    // @ts-ignore
-    event.dataTransfer.effectAllowed = 'move';
-    // @ts-ignore
-    event.dataTransfer.setData('text/html', index);
-    event.currentTarget.style.opacity = '0.5';
-  }
-  
-  /**
-   * @param {DragEvent & { currentTarget: EventTarget & HTMLDivElement; }} event
-   */
-  function handleDragEnd(event) {
-    event.currentTarget.style.opacity = '1';
-    setTimeout(() => {
-      draggedIndex = null;
-      dragOverIndex = null;
-      hasDragged = false;
-    }, 0);
-  }
-  
-  /**
-   * @param {DragEvent & { currentTarget: EventTarget & HTMLDivElement; }} event
-   * @param {number} index
-   */
-  function handleDragOver(event, index) {
-    event.preventDefault();
-    // @ts-ignore
-    event.dataTransfer.dropEffect = 'move';
-    if (draggedIndex !== null && draggedIndex !== index) {
-      dragOverIndex = index;
+
+  function triggerDragHaptic() {
+    // Mesma convenção do GestureButton: só vibra onde existe, e curto.
+    if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
+      navigator.vibrate(30);
     }
   }
-  
-  /**
-   * @param {DragEvent & { currentTarget: EventTarget & HTMLDivElement; }} event
-   */
-  function handleDragLeave(event) {
-    // @ts-ignore
-    if (!event.currentTarget.contains(event.relatedTarget)) {
-      dragOverIndex = null;
+
+  /** Retângulo da lista: fronteira do gesto e referência do auto-scroll. */
+  function getListBounds() {
+    return listEl ? listEl.getBoundingClientRect() : null;
+  }
+
+  function stopAutoScroll() {
+    if (autoScrollRaf !== null) {
+      cancelAnimationFrame(autoScrollRaf);
+      autoScrollRaf = null;
     }
   }
-  
+
   /**
-   * @param {DragEvent & { currentTarget: EventTarget & HTMLDivElement; }} event
-   * @param {number} dropIndex
+   * Recalcula o alvo a partir da última posição conhecida do ponteiro. É
+   * preciso um cálculo separado do `pointermove` porque durante o auto-scroll
+   * a lista mexe-se debaixo de um dedo que está parado: sem isto o alvo ficava
+   * congelado no chip que ali estava quando o dedo chegou.
    */
-  function handleDrop(event, dropIndex) {
-    event.preventDefault();
-    event.stopPropagation();
-    
-    if (draggedIndex !== null && draggedIndex !== dropIndex) {
-      hasDragged = true;
-      carousel.reorderCarousel(draggedIndex, dropIndex);
+  function refreshDragTarget() {
+    if (draggedIndex === null) return;
+    const rects = chipEls
+      .slice(0, $carousel.length)
+      .map((el) => (el ? el.getBoundingClientRect() : null));
+    const target = resolveTargetIndex(
+      rects,
+      { x: lastPointerX, y: lastPointerY },
+      isExpanded ? 'y' : 'x',
+      getListBounds()
+    );
+    dragOverIndex = target !== null && target !== draggedIndex ? target : null;
+  }
+
+  /**
+   * Enquanto o ponteiro estiver junto a uma borda, a lista rola sozinha. Sem
+   * isto o arrasto só alcança os chips visíveis, e numa playlist longa o
+   * utilizador teria de largar, rolar e voltar a pegar — que é exatamente a
+   * dificuldade que este trabalho veio resolver.
+   */
+  function tickAutoScroll() {
+    autoScrollRaf = null;
+    if (draggedIndex === null || !dragMoved || !listEl) return;
+
+    const velocity = computeAutoScrollVelocity(
+      { x: lastPointerX, y: lastPointerY },
+      getListBounds(),
+      isExpanded ? 'y' : 'x'
+    );
+
+    if (velocity !== 0) {
+      const antes = isExpanded ? listEl.scrollTop : listEl.scrollLeft;
+      if (isExpanded) {
+        listEl.scrollTop = antes + velocity;
+      } else {
+        listEl.scrollLeft = antes + velocity;
+      }
+      const depois = isExpanded ? listEl.scrollTop : listEl.scrollLeft;
+      // Se a lista já está no fim não vale a pena continuar a pedir frames.
+      if (depois !== antes) refreshDragTarget();
     }
-    
+
+    autoScrollRaf = requestAnimationFrame(tickAutoScroll);
+  }
+
+  function startAutoScrollIfNeeded() {
+    if (autoScrollRaf === null && draggedIndex !== null && dragMoved) {
+      autoScrollRaf = requestAnimationFrame(tickAutoScroll);
+    }
+  }
+
+  // Esvaziar a playlist a meio de um arrasto desmonta o componente com um
+  // frame ainda agendado; sem isto ele acordaria sobre um listEl já morto.
+  onDestroy(stopAutoScroll);
+
+  /**
+   * Larga a captura e apaga o estado do gesto. Chamada tanto no fim normal
+   * como quando o browser cancela o arrasto — nunca reordena por si.
+   */
+  function finishPointerDrag() {
+    stopAutoScroll();
+    if (capturingEl && activePointerId !== null) {
+      try {
+        if (typeof capturingEl.hasPointerCapture === 'function' && capturingEl.hasPointerCapture(activePointerId)) {
+          capturingEl.releasePointerCapture(activePointerId);
+        }
+      } catch (_) {
+        /* a alça já pode ter saído do DOM; não há nada a libertar */
+      }
+    }
+    activePointerId = null;
+    capturingEl = null;
     draggedIndex = null;
     dragOverIndex = null;
+    dragMoved = false;
   }
-  
-  // @ts-ignore
-  function handleDrag(event) {
-    const deltaX = Math.abs(event.clientX - dragStartX);
-    const deltaY = Math.abs(event.clientY - dragStartY);
-    if (deltaX > 5 || deltaY > 5) {
-      hasDragged = true;
+
+  /**
+   * @param {PointerEvent & { currentTarget: EventTarget & HTMLElement }} event
+   * @param {number} index
+   */
+  function handleHandlePointerDown(event, index) {
+    // Só o toque/botão principal arrasta: o segundo dedo de um pinch ou o
+    // botão direito do rato não devem sequestrar a lista.
+    if (event.isPrimary === false) return;
+    if (typeof event.button === 'number' && event.button > 0) return;
+    if (activePointerId !== null) return;
+
+    activePointerId = event.pointerId;
+    draggedIndex = index;
+    dragOverIndex = null;
+    dragMoved = false;
+    pointerStartX = event.clientX;
+    pointerStartY = event.clientY;
+    lastPointerX = event.clientX;
+    lastPointerY = event.clientY;
+
+    capturingEl = event.currentTarget;
+    try {
+      // Sem captura o gesto morria assim que o dedo saísse da alça de 44px.
+      event.currentTarget.setPointerCapture(event.pointerId);
+    } catch (_) {
+      // Se o browser recusar, os handlers na window ainda apanham o gesto.
+      capturingEl = null;
+    }
+
+    // Corta a seleção de texto do rato e o arrasto fantasma; com
+    // touch-action: none na alça, o toque também chega aqui cancelável.
+    if (event.cancelable) event.preventDefault();
+
+    // O preventDefault acima leva à frente os eventos de compatibilidade, e
+    // com eles o foco. Sem isto, quem clica na alça com o rato e conta usar as
+    // setas a seguir teria de lá voltar por Tab.
+    event.currentTarget.focus({ preventScroll: true });
+  }
+
+  /**
+   * @param {PointerEvent} event
+   */
+  function handleWindowPointerMove(event) {
+    if (activePointerId === null || event.pointerId !== activePointerId) return;
+    if (draggedIndex === null) return;
+
+    if (!dragMoved) {
+      if (!hasPassedDragThreshold(event.clientX - pointerStartX, event.clientY - pointerStartY)) return;
+      dragMoved = true;
+      triggerDragHaptic();
+    }
+
+    lastPointerX = event.clientX;
+    lastPointerY = event.clientY;
+
+    // A geometria é medida a cada movimento e não no início: a lista pode ter
+    // rolado entretanto, e um retângulo velho apontaria para o chip errado.
+    refreshDragTarget();
+    startAutoScrollIfNeeded();
+  }
+
+  /**
+   * @param {PointerEvent} event
+   */
+  function handleWindowPointerUp(event) {
+    if (activePointerId === null || event.pointerId !== activePointerId) return;
+
+    const from = draggedIndex;
+    const to = dragOverIndex;
+    const moved = dragMoved;
+    finishPointerDrag();
+
+    // `to` é null quando se largou fora da lista: é a desistência, e o gesto
+    // acaba sem tocar na ordem — como acontecia com o drag-and-drop nativo.
+    if (moved && from !== null && to !== null && from !== to) {
+      carousel.reorderCarousel(from, to);
     }
   }
-  
+
+  /**
+   * @param {PointerEvent} event
+   */
+  function handleWindowPointerCancel(event) {
+    if (activePointerId === null || event.pointerId !== activePointerId) return;
+    // O browser tirou-nos o gesto a meio: desiste sem mexer na ordem.
+    finishPointerDrag();
+  }
+
+  /**
+   * @param {Event} event
+   */
+  function handleWindowContextMenu(event) {
+    // Só enquanto um arrasto está em curso. É este menu que, hoje, aparece a
+    // meio do gesto e o interrompe; fora do arrasto não há razão para o tirar.
+    if (draggedIndex !== null) event.preventDefault();
+  }
+
+  /**
+   * Escape desiste do arrasto. Com o rato, largar fora da lista obriga a
+   * arrastar até lá; a tecla é a saída imediata, e é o que qualquer um tenta
+   * primeiro quando se arrependeu a meio.
+   * @param {KeyboardEvent} event
+   */
+  function handleWindowKeydown(event) {
+    if (draggedIndex === null || event.key !== 'Escape') return;
+    event.preventDefault();
+    // finishPointerDrag limpa activePointerId, por isso o pointerup que vier a
+    // seguir sai logo à entrada e não reordena nada.
+    finishPointerDrag();
+  }
+
+  /**
+   * Reordenação por teclado: a alça é um botão focável e as setas movem o chip.
+   * Sem isto, tirar o `draggable` deixaria a lista sem qualquer forma de
+   * reordenar sem rato nem dedo — e o `draggable` também nunca respondeu ao
+   * teclado, portanto isto é mais do que havia.
+   * @param {KeyboardEvent} event
+   * @param {number} index
+   */
+  async function handleHandleKeydown(event, index) {
+    // Prevenir antes de saber se há movimento possível: uma seta no primeiro
+    // chip não move nada, mas se não for consumida rola a página, e o
+    // utilizador perde de vista a lista que estava a arrumar.
+    if (!isReorderKey(event.key)) return;
+    event.preventDefault();
+
+    const total = $carousel.length;
+    const target = computeKeyboardTarget(index, event.key, total);
+    if (target === null) return;
+
+    const nome = $carousel[index]?.nome || 'Louvor';
+    carousel.reorderCarousel(index, target);
+
+    // O {#each} não é chaveado: os nós ficam onde estão e só o conteúdo troca,
+    // por isso o foco tem de seguir o chip até à nova posição.
+    await tick();
+    dragHandleEls[target]?.focus();
+
+    // O anúncio vem depois do foco de propósito. Escrito antes, vários
+    // leitores de ecrã descartam-no quando o foco muda logo a seguir, e o
+    // aria-label da nova alça passa-lhe por cima.
+    await tick();
+    reorderAnnouncement = `${nome} movido para a posição ${target + 1} de ${total}.`;
+  }
+
   /**
    * @param {{ pdfId: string; nome: any; categoria: any; classificacao: any; pdf: string | undefined; }} louvor
    */
   async function openPdfFromChip(louvor) {
+    // A tranca contra o duplo toque é de estado, e não o `pointer-events:
+    // none` que as classes .checking/.processing traziam — foi esse padrão que
+    // produziu o bug dos dois cliques noutro sítio da app. Aqui vale para
+    // todos os modos, e não só para o `leitor`.
+    if (checkingPdfId !== null || processingPdfId !== null) return;
+
     const pdfPath = getPdfRelPath(louvor);
     const mode = $pdfViewer;
-    
+    pdfError = null;
+
+    // Um pdfId corrompido dava, conforme o modo, uma aba com "/undefined" ou
+    // um download de um ficheiro que não existe. O banner de erro já cá
+    // estava; só lhe faltava quem o escrevesse fora do ramo do leitor.
+    if (!pdfPath) {
+      pdfError = PDF_INDISPONIVEL;
+      return;
+    }
+
     if (mode === 'leitor') {
       checkingPdfId = louvor.pdfId;
-      pdfError = null;
       try {
         const result = await navigateLouvorToLeitor(louvor);
         if (!result.navigated && result.error) {
@@ -182,16 +407,6 @@
     
     // @ts-ignore
     window.location.href = pdfPath;
-  }
-  
-  // @ts-ignore
-  function handleChipClick(event, louvor) {
-    if (event.target.closest('button')) return;
-    if (hasDragged) {
-      hasDragged = false;
-      return;
-    }
-    openPdfFromChip(louvor);
   }
   
   // @ts-ignore
@@ -369,10 +584,8 @@
 
   function handleExpandToggle() {
     isExpanded = !isExpanded;
-    // Cancel any active drag when toggling layout
-    draggedIndex = null;
-    dragOverIndex = null;
-    hasDragged = false;
+    // O eixo da lista muda debaixo dos pés do gesto; mais vale desistir dele.
+    finishPointerDrag();
   }
 
   async function handleFolheto() {
@@ -394,6 +607,19 @@
     }
   }
 </script>
+
+<!--
+  Os handlers de movimento vivem na window e não na alça: a captura de ponteiro
+  já reencaminha os eventos para a alça, mas se o browser recusar a captura o
+  gesto continua a chegar aqui. Todos saem logo à entrada quando não há arrasto.
+-->
+<svelte:window
+  on:pointermove={handleWindowPointerMove}
+  on:pointerup={handleWindowPointerUp}
+  on:pointercancel={handleWindowPointerCancel}
+  on:contextmenu={handleWindowContextMenu}
+  on:keydown={handleWindowKeydown}
+/>
 
 {#if $carousel.length > 0}
   <div class="w-full max-w-4xl mx-auto p-4 bg-card-color rounded-lg border-2 relative carousel-container">
@@ -501,29 +727,41 @@
       </div>
     {/if}
 
-    <div class="carousel-chips-list" class:expanded={isExpanded} role="list" aria-label="Louvores na lista atual">
+    <div
+      bind:this={listEl}
+      class="carousel-chips-list"
+      class:expanded={isExpanded}
+      role="list"
+      aria-label="Louvores na lista atual"
+    >
       {#each $carousel as louvor, index}
         {@const categoryIcon = getCategoryIcon(louvor.categoria)}
         <div
-          draggable="true"
-          on:dragstart={(e) => handleDragStart(e, index)}
-          on:drag={(e) => handleDrag(e)}
-          on:dragend={(e) => handleDragEnd(e)}
-          on:dragover={(e) => handleDragOver(e, index)}
-          on:dragleave={(e) => handleDragLeave(e)}
-          on:drop={(e) => handleDrop(e, index)}
-          on:click={(e) => handleChipClick(e, louvor)}
+          bind:this={chipEls[index]}
           class="carousel-chip"
-          class:dragging={draggedIndex === index}
+          class:dragging={draggedIndex === index && dragMoved}
           class:drag-over={dragOverIndex === index}
           class:checking={checkingPdfId === louvor.pdfId}
           class:processing={processingPdfId === louvor.pdfId}
           role="listitem"
         >
-          <div class="drag-handle" on:mousedown|stopPropagation>
+          <button
+            type="button"
+            bind:this={dragHandleEls[index]}
+            class="drag-handle"
+            on:pointerdown={(e) => handleHandlePointerDown(e, index)}
+            on:keydown={(e) => handleHandleKeydown(e, index)}
+            on:contextmenu|preventDefault
+            title="Arraste para reordenar"
+            aria-label={`Mover ${louvor.nome || 'louvor'}: posição ${index + 1} de ${$carousel.length}. Use as setas para reordenar.`}
+          >
             <GripVertical class="w-4 h-4" />
-          </div>
-          <div class="chip-content">
+          </button>
+          <button
+            type="button"
+            class="chip-content"
+            on:click={() => openPdfFromChip(louvor)}
+          >
             <div class="chip-title">
               <strong>#{louvor.numero || 'N/A'}</strong> - {louvor.nome || 'Sem título'}
               {#if processingPdfId === louvor.pdfId}
@@ -545,7 +783,7 @@
                 <span>{louvor.categoria || 'Sem categoria'}</span>
               </div>
             </div>
-          </div>
+          </button>
           <button
             on:click|stopPropagation={() => carousel.removeLouvor(louvor.pdfId)}
             class="chip-remove-button"
@@ -557,6 +795,12 @@
         </div>
       {/each}
     </div>
+
+    <!--
+      Quem reordena por teclado não vê os chips saltarem; sem este anúncio a
+      única confirmação de que a tecla fez alguma coisa seria o silêncio.
+    -->
+    <div class="visually-hidden" role="status" aria-live="polite">{reorderAnnouncement}</div>
 
     <ConfirmDialog
       show={showClearDialog}
@@ -574,6 +818,20 @@
   .carousel-container {
     position: relative;
     border-color: var(--gold-color);
+  }
+
+  /* Visível só para leitores de ecrã (anúncio da reordenação por teclado). */
+  .visually-hidden {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    clip-path: inset(50%);
+    white-space: nowrap;
+    border: 0;
   }
 
   /* ---- Left label group ---- */
@@ -805,8 +1063,15 @@
     cursor: pointer;
     flex-shrink: 0;
     position: relative;
+    /* Segurar o dedo sobre um chip não pode oferecer "copiar"/"partilhar":
+       esse menu aparecia a meio do arrasto e levava o gesto com ele. Note-se
+       que aqui NÃO há touch-action — o corpo do chip tem de continuar a rolar
+       a lista na horizontal. */
+    -webkit-touch-callout: none;
+    -webkit-user-select: none;
+    user-select: none;
   }
-  
+
   .carousel-chip:hover {
     box-shadow: var(--shadow-lg);
     transform: translateY(-1px);
@@ -839,7 +1104,7 @@
   }
 
   /* ---- Drag handle ---- */
-  
+
   .drag-handle {
     display: flex;
     align-items: center;
@@ -850,16 +1115,58 @@
     flex-shrink: 0;
     padding: 0.125rem;
     transition: opacity 0.2s ease;
+    /* Passou a <button> para ser focável e responder ao teclado; o reset
+       devolve-lhe o aspeto do <div> que era. */
+    background: none;
+    border: none;
+    font: inherit;
+    /* A alça fica com o gesto todo. Só aqui — o corpo do chip mantém o
+       touch-action por omissão para o dedo continuar a rolar a lista. */
+    touch-action: none;
+    /* Sem isto, segurar sobre a alça chama o menu nativo de seleção/partilha,
+       que é exatamente o que rouba o arrasto hoje. */
+    -webkit-touch-callout: none;
+    -webkit-user-select: none;
+    user-select: none;
+    /* Ancora o alvo de toque ampliado abaixo. */
+    position: relative;
+    min-width: 1.75rem;
+    /* Sem isto a alça teria só a altura do ícone (20px) e o alvo de toque
+       ficaria curto; esticada, acompanha a altura do conteúdo do chip. */
+    align-self: stretch;
   }
-  
+
+  /* Alvo de toque de 44x44 sem aumentar o ícone: na largura, os 28px da alça
+     mais 12px para dentro do padding esquerdo do chip e 4px à direita; na
+     altura, os ~32px do conteúdo do chip mais 10px de cada lado, que cabem no
+     padding vertical. */
+  .drag-handle::before {
+    content: '';
+    position: absolute;
+    top: -0.625rem;
+    bottom: -0.625rem;
+    left: -0.75rem;
+    right: -0.25rem;
+  }
+
   .drag-handle:active {
     cursor: grabbing;
   }
-  
+
+  .carousel-chip.dragging .drag-handle {
+    cursor: grabbing;
+  }
+
+  .drag-handle:focus-visible {
+    outline: 2px solid var(--gold-light);
+    outline-offset: 2px;
+    opacity: 1;
+  }
+
   .carousel-chip:hover .drag-handle {
     opacity: 1;
   }
-  
+
   /* ---- Chip content ---- */
 
   .chip-content {
@@ -868,8 +1175,27 @@
     min-width: 0;
     gap: 0.125rem;
     flex: 1;
+    /* Passou a <button> para abrir o louvor com Enter/Espaço — antes o clique
+       vivia num <div> e o teclado não tinha por onde entrar. O reset mantém a
+       herança de tipo de letra e cor que o <div> dava aos filhos. */
+    background: none;
+    border: none;
+    padding: 0;
+    margin: 0;
+    text-align: left;
+    font-family: inherit;
+    font-size: inherit;
+    line-height: inherit;
+    color: inherit;
+    cursor: pointer;
   }
-  
+
+  .chip-content:focus-visible {
+    outline: 2px solid var(--gold-light);
+    outline-offset: 2px;
+    border-radius: 0.25rem;
+  }
+
   .chip-title {
     font-size: 0.875rem;
     font-family: 'Garamond', serif;
@@ -964,14 +1290,18 @@
   }
 
   /* ---- Loading states ---- */
-  
+
+  /* O que saiu daqui foi só o `pointer-events: none` — o padrão que produziu o
+     bug dos dois cliques noutro sítio da app. O feedback fica: abrir no leitor
+     pode ir à rede, e um chip que não muda nada durante a espera parece um
+     toque que se perdeu. A proteção contra o duplo toque passou a ser um
+     guarda de estado em openPdfFromChip, que tranca sem ser armadilha. */
   .carousel-chip.checking,
   .carousel-chip.processing {
     opacity: 0.6;
     cursor: wait;
-    pointer-events: none;
   }
-  
+
   .processing-indicator {
     display: inline-block;
     margin-left: 0.5rem;
