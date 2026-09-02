@@ -783,15 +783,24 @@
         
         // Este bloco corre 1 s depois da MESMA conclusão de download que os
         // fluxos de import e de PDFs faltando já podem ter usado para
-        // recalcular explicitamente segundos atrás. Pular aqui quando isso
-        // já aconteceu dentro de MIN_STATS_LOAD_INTERVAL é seguro: o
-        // recálculo explícito sempre deixa `statsStale` em false ao terminar,
-        // então os números já estão corretos e recalcular de novo só
-        // duplicaria a varredura completa do Cache Storage. Quando os dois
-        // realmente coincidem no tempo (recálculo explícito ainda em curso),
-        // a guarda `isLoadingStats` de loadCategoryStatsForCategories
-        // colapsa o caso concorrente numa varredura só.
-        if (statsRequested && Date.now() - lastStatsLoadTime >= MIN_STATS_LOAD_INTERVAL) {
+        // recalcular explicitamente segundos atrás. Pular quando essa
+        // varredura explícita já terminou dentro de MIN_STATS_LOAD_INTERVAL é
+        // seguro: ela deixa `statsStale` em false com números reais, e
+        // recalcular de novo só duplicaria a varredura completa do Cache
+        // Storage. Mas também é preciso pular quando essa varredura ainda
+        // está em curso (`isLoadingStats` true): `lastStatsLoadTime` só é
+        // escrito quando `loadCategoryStats` termina, então enquanto a
+        // varredura roda o timestamp continua com o valor antigo e a conta
+        // acima passaria — chamando `loadCategoryStats(true)` de novo. Essa
+        // segunda chamada não repete a varredura (a guarda `isLoadingStats`
+        // de dentro de `loadCategoryStatsForCategories` já a barra), mas
+        // `loadCategoryStats` some e faz `statsStale = false`
+        // incondicionalmente ao retornar, mesmo sem ter feito nada — isso
+        // levantaria a capa "dados em cache" com os números antigos antes da
+        // varredura de verdade terminar. Por isso a checagem de
+        // `isLoadingStats` tem de estar aqui, no sítio da chamada: delegar o
+        // corte para a guarda interna não evita esse efeito colateral.
+        if (statsRequested && !isLoadingStats && Date.now() - lastStatsLoadTime >= MIN_STATS_LOAD_INTERVAL) {
           await loadCategoryStats(true);
         }
         

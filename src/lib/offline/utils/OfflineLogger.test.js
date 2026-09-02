@@ -111,13 +111,17 @@ describe('conformidade dos sítios de chamada', () => {
     // sítio usa aspas simples.
     const padraoVinculo = /createLogger\(\s*(['"])([^'"]+)\1\s*\)/g;
 
-    for (const caminho of arquivosJs(raiz)) {
+    const arquivos = arquivosJs(raiz);
+    let totalVinculos = 0;
+
+    for (const caminho of arquivos) {
       const fonte = readFileSync(caminho, 'utf8');
       /** @type {Set<string>} */
       const modulos = new Set();
       for (const vinculo of fonte.matchAll(padraoVinculo)) {
         modulos.add(vinculo[2]);
       }
+      totalVinculos += modulos.size;
       if (modulos.size === 0) continue;
 
       for (const modulo of modulos) {
@@ -132,6 +136,21 @@ describe('conformidade dos sítios de chamada', () => {
         }
       }
     }
+
+    // Pisos conservadores (bem abaixo dos números reais de hoje: 36 arquivos,
+    // 22 vínculos) só para pegar uma varredura que degenerou — se `arquivosJs`
+    // parasse de achar arquivo nenhum, ou `padraoVinculo` parasse de casar com
+    // `createLogger(...)`, a lista de ofensores continuaria vazia e o teste
+    // acima passaria mesmo sem provar coisa alguma sobre os 239 sítios de
+    // chamada reescritos.
+    assert.ok(
+      arquivos.length >= 15,
+      `a varredura achou só ${arquivos.length} arquivo(s) .js — se a varredura não achar nada, o teste fica vazio de sentido`
+    );
+    assert.ok(
+      totalVinculos >= 10,
+      `a varredura achou só ${totalVinculos} vínculo(s) de createLogger — se a varredura não achar nada, o teste fica vazio de sentido`
+    );
 
     assert.deepEqual(
       ofensores,
