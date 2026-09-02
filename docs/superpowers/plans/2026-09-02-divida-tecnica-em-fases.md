@@ -38,7 +38,7 @@ Valem em **todas** as fases.
 | Fase | O quê | Dano hoje |
 |---|---|---|
 | 1 | Fundação: wrapper de storage + fake de teste | Nenhum — nada passa a usá-lo ainda |
-| 2 | `clearAllCache()` aborta pela metade | Limpeza de dados deixa estado inconsistente |
+| 2 | `clearAllCache()` aborta pela metade | Nenhum hoje — o caminho não tem chamador vivo (ver correção na Fase 2) |
 | 3 | Quatro guardas que não guardam | **App não abre** em Firefox estrito / aba privada |
 | 4 | Varredura de estatísticas | 2min30 e renderer travado, para todo mundo |
 | 5 | `loadCategoryStats` mente sobre frescor | Capa some sobre números não recalculados |
@@ -212,6 +212,17 @@ git add src/lib/stores/offline.js
 git commit -m "fix(offline): limpeza de dados não aborta na primeira chave que falha"
 ```
 
+> **Correção de 2026-09-02, depois da execução:** esta fase corrige um caminho
+> que **hoje nada alcança**. Nem `offline.js:clearAllCache` nem `disableOffline`
+> (que a chama) têm chamador vivo no repo; a rota `/offline` tem uma
+> `clearAllCache` **própria** (`src/routes/offline/+page.svelte:1226`) que
+> também não tem chamador, e o texto da tela (`:1368`) manda o utilizador limpar
+> o cache do navegador à mão. Ou seja: a tabela "Por que esta ordem" classifica
+> o dano desta fase como "limpeza deixa estado inconsistente", e isso é **dano
+> latente, não ativo**. A correção continua certa e barata — fica pronta para o
+> dia em que alguém ligar o botão — mas quem reordenar as fases deve saber que
+> esta não tem urgência. O código morto é assunto à parte.
+
 **Verificação manual:** no DevTools, `Object.defineProperty(window, 'localStorage', { get() { throw new Error('x') } })` **não** funciona depois da página carregar (os módulos já capturaram referências). Verifique em vez disso pelo caminho feliz: limpar o cache pela interface e confirmar que todas as chaves somem e a mensagem de sucesso aparece — a prova do caminho de falha é o teste unitário da Fase 1.
 
 ---
@@ -318,7 +329,7 @@ Hoje isso está contido por uma guarda `!isLoadingStats` no sítio de chamada do
 
 **Duas tarefas.** Item de §3, e o único do plano cujo modo de falha é **perda de dado do usuário**.
 
-**O que foi provado, com strings reais:** `normalizeForStorage("assets/a%252525b.pdf")` dá `"assets/a%25b.pdf"`, mas aplicada de novo dá `"assets/a\x0Bpdf"` — a função não é idempotente para `%` aninhado em três ou mais camadas. A migração NFC, recebendo uma chave dessas, **grava a chave nova errada e apaga a original correta**.
+**O que foi provado, com strings reais:** `normalizeForStorage("assets/a%252525b.pdf")` dá `"assets/a%b.pdf"`, mas aplicada de novo dá `"assets/a\x0Bpdf"` — a função não é idempotente para `%` aninhado em três ou mais camadas. A migração NFC, recebendo uma chave dessas, **grava a chave nova errada e apaga a original correta**.
 
 **Não pode disparar hoje:** os 4629 caminhos do acervo (conferidos em `louvores-manifest.json` e `offline-manifest.json`) não têm um único `%`. Mas quatro sítios de produção já aplicam `normalizeForStorage`/`createRequestUrl` duas vezes no mesmo valor — hoje um no-op inofensivo, e é o gatilho pronto esperando um nome de arquivo com `%`.
 

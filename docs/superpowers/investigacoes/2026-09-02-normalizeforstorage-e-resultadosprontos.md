@@ -25,13 +25,13 @@ encapsulado em **percent-encoding aninhado** (3+ camadas de
 
 ```
 x  = "assets/a%252525b.pdf"        // 3 camadas de encoding em torno de um "%"
-F(x)  = normalizeForStorage(x)     = "assets/a%25b.pdf"
+F(x)  = normalizeForStorage(x)     = "assets/a%b.pdf"
 F(F(x)) = normalizeForStorage(F(x)) = "assets/a\x0Bpdf"   // note: sumiu o "." antes de "pdf"
 ```
 
 `F(x) !== F(F(x))` — a definição exata de não-idempotência pedida. Com 4
 camadas (`"assets/a%25252525b.pdf"`) o mesmo padrão se repete: `F(x) =
-"assets/a%25b.pdf"`, `F(F(x)) = "assets/a\x0Bpdf"`, e a partir daí sim
+"assets/a%b.pdf"`, `F(F(x)) = "assets/a\x0Bpdf"`, e a partir daí sim
 estabiliza (`F(F(F(x))) === F(F(x))`).
 
 **Mecanismo, linha a linha:**
@@ -39,7 +39,7 @@ estabiliza (`F(F(F(x))) === F(F(x))`).
   `normalized.includes('%')`, delegando para
   `decodeUrlUtf8Multiple(normalized, 3)` (`src/lib/utils/urlEncoding.js:294-314`),
   que decodifica no máximo 3 iterações e para mesmo se ainda sobrar um `%`
-  não resolvido — é exatamente esse resíduo (`"a%25b.pdf"`) que sobrevive à
+  não resolvido — é exatamente esse resíduo (`"a%b.pdf"`) que sobrevive à
   primeira chamada.
 - Na segunda chamada, esse `%25` residual decodifica para um `%` literal em
   `decodeUrlComponentUtf8` (urlEncoding.js:83-113); a iteração seguinte tenta
@@ -142,7 +142,7 @@ deste item):
 2. Uma gravação normal (ex.: `handlePdf` do service worker, ou qualquer um
    dos quatro pontos do item 1.2) grava a chave real via
    `createRequestUrl(raw, origin)`:
-   `K_orig = "https://plpcg.com/assets/a%25b.pdf"`.
+   `K_orig = "https://plpcg.com/assets/a%b.pdf"`.
    Essa é a chave que **qualquer leitura futura** também calcula — confirmado:
    chamar `createRequestUrl(raw, origin)` de novo, do zero, dá **exatamente**
    `K_orig` de novo (`K_read_again === K_orig` → `true`). Ou seja: **sem a
@@ -197,7 +197,7 @@ function levels(n){ let s="%"; for(let i=0;i<n;i++) s=encodeURIComponent(s); ret
 const input = `assets/a${levels(4)}b.pdf`;
 const n1 = PdfPathManager.normalizeForStorage(input);
 const n2 = PdfPathManager.normalizeForStorage(n1);
-// n1 = "assets/a%25b.pdf", n2 = "assets/a\x0Bpdf", n1 !== n2
+// n1 = "assets/a%b.pdf", n2 = "assets/a\x0Bpdf", n1 !== n2
 
 // probe5.mjs — caminho destrutivo ponta a ponta
 function canonicalizarReal(url) {
@@ -463,3 +463,21 @@ corridas nesta base:
      o `$:` graph inteiro da página reage em conjunto, uma verificação manual
      de "abrir um PDF" e "compartilhar uma playlist" em `/biblioteca` depois
      da mudança é barata e recomendada mesmo sem relação de código aparente.
+
+
+---
+
+## Correção de 2026-09-02 (posterior à redação)
+
+Os valores da cadeia acima estavam trocados por uma camada. Verificado rodando
+`PdfPathManager.normalizeForStorage` real:
+
+```
+"assets/a%252525b.pdf"    (3 camadas)  ->  "assets/a%b.pdf"    ->  "assets/a\x0Bpdf"
+"assets/a%25252525b.pdf"  (4 camadas)  ->  "assets/a%25b.pdf"  ->  "assets/a\x0Bpdf"
+```
+
+Ou seja: `"assets/a%25b.pdf"` é o resultado de **quatro** camadas, não de três. O
+texto acima foi corrigido para `"assets/a%b.pdf"`. **A conclusão não muda** — a
+não-idempotência, o colapso do `.` antes de `pdf` e a estabilidade da corrupção
+sob nova aplicação (`F(F(F(x))) === F(F(x))`, confirmado) valem para as duas.
