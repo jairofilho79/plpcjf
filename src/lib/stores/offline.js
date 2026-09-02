@@ -59,7 +59,7 @@ import {
   getCategoryAvailabilityStats,
   getRequiredPackagesInfo
 } from './offlineStats.js';
-import { safeRemoveMany } from '$lib/utils/safeStorage.js';
+import { safeGet, safeSet, safeRemoveMany } from '$lib/utils/safeStorage.js';
 
 const ALLOW_OFFLINE_KEY = 'ALLOW_OFFLINE';
 const CACHED_PDFS_KEY = 'cachedPdfsList';
@@ -1071,7 +1071,7 @@ async function startZipDownloadWithSpecificParts(categories, pdfUrls, partsByCat
 async function checkForNewPDFs() {
   if (!browser) return;
 
-  const allowOffline = localStorage.getItem(ALLOW_OFFLINE_KEY) === 'true';
+  const allowOffline = safeGet(ALLOW_OFFLINE_KEY) === 'true';
   if (!allowOffline) return;
 
   // Get saved categories - only download PDFs from selected categories
@@ -1088,7 +1088,7 @@ async function checkForNewPDFs() {
   if (!louvoresData || louvoresData.length === 0) return;
 
   const currentHash = getManifestHash(louvoresData);
-  const lastHash = localStorage.getItem(LAST_MANIFEST_HASH_KEY);
+  const lastHash = safeGet(LAST_MANIFEST_HASH_KEY);
 
   // First time or manifest changed
   if (lastHash && lastHash !== currentHash) {
@@ -1137,7 +1137,7 @@ async function checkForNewPDFs() {
   }
 
   // Save current hash
-  localStorage.setItem(LAST_MANIFEST_HASH_KEY, currentHash);
+  safeSet(LAST_MANIFEST_HASH_KEY, currentHash);
 }
 
 /**
@@ -1955,7 +1955,7 @@ function hideOfflineModal() {
  */
 function enableOffline() {
   if (browser) {
-    localStorage.setItem(ALLOW_OFFLINE_KEY, 'true');
+    safeSet(ALLOW_OFFLINE_KEY, 'true');
   }
   offlineState.update(state => ({ ...state, enabled: true }));
 }
