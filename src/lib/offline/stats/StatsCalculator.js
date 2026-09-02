@@ -5,9 +5,11 @@
  */
 
 import cacheStorageAdapter from '../storage/CacheStorageAdapter.js';
-import { findMissingPdfs } from '$lib/utils/pdfValidation.js';
+import { buildPdfCacheIndex, louvorFaltaNoIndice } from '$lib/utils/pdfCacheIndex.js';
+import PdfPathManager from '../utils/PdfPathManager.js';
 import { getCachedStats, cacheStats, invalidateCategory, invalidateCategories, getAllCachedStats } from '$lib/utils/statsCache.js';
 import { createLogger } from '../utils/OfflineLogger.js';
+import { criarCedente } from './yieldScheduler.js';
 import { browser } from '$app/environment';
 import { getCachedPDFsFast } from '$lib/utils/swRegistration.js';
 
@@ -34,10 +36,51 @@ const logger = createLogger('StatsCalculator');
  * Calculates category availability statistics with intelligent caching
  */
 class StatsCalculator {
+  /**
+   * Índice de cache memoizado pela **identidade** do array de PDFs em cache.
+   *
+   * Antes, cada chunk de 50 louvores reconstruía o índice inteiro por dentro de
+   * `findMissingPdfs`: 11,7 ms sobre os 4629 caminhos do acervo, 95 vezes por
+   * varredura — ~1,1 s de CPU jogado fora num Mac, mais num telemóvel.
+   *
+   * A chave é o array porque `+page.svelte` passa o **mesmo** `cachedPdfs` às
+   * três chamadas concorrentes de `getCategoryStats`: as três partilham um
+   * índice só, de graça, sem que aquele arquivo precise saber disso.
+   *
+   * Não há invalidação manual, e nem deve haver: `loadCachedPdfsList` devolve um
+   * array novo a cada leitura, então uma lista velha perde a última referência e
+   * o WeakMap larga a entrada sozinho. Invalidar por tempo ou por evento aqui
+   * seria reintroduzir a chance de responder com um índice que já não
+   * corresponde à lista recebida.
+   *
+   * @type {WeakMap<object, import('$lib/utils/pdfCacheIndex.js').PdfCacheIndex>}
+   */
+  #indicePorLista = new WeakMap();
+
   constructor() {
     this.cacheAdapter = cacheStorageAdapter;
     this.memoryCache = new Map(); // In-memory cache for quick access
     this.calculationInProgress = new Set(); // Track calculations in progress to avoid duplicates
+  }
+
+  /**
+   * O índice desta lista, construído no máximo uma vez por lista.
+   * @param {string[]} listaDePdfs
+   * @returns {import('$lib/utils/pdfCacheIndex.js').PdfCacheIndex}
+   */
+  #obterIndice(listaDePdfs) {
+    const lista = Array.isArray(listaDePdfs) ? listaDePdfs : [];
+
+    const memoizado = this.#indicePorLista.get(lista);
+    if (memoizado) return memoizado;
+
+    // A mesma régua de `findMissingPdfs`: normalizeForStorage nos dois lados.
+    // #22.2 — a chave gravada no cache está em NFC e `getPdfRelPath` devolve o
+    // caminho cru, NFD em 8 casos do acervo. Divergir aqui faria esses 8
+    // aparecerem como faltando para sempre.
+    const indice = buildPdfCacheIndex(lista, { normalize: PdfPathManager.normalizeForStorage });
+    this.#indicePorLista.set(lista, indice);
+    return indice;
   }
 
   /**
@@ -144,30 +187,34 @@ class StatsCalculator {
         return result;
       }
 
-      // Calculate missing PDFs
-      let missing;
-      if (categoryLouvores.length > 100) {
-        // Process in chunks for large categories to avoid blocking UI
-        missing = [];
-        const chunkSize = 50;
-        for (let i = 0; i < categoryLouvores.length; i += chunkSize) {
-          const chunk = categoryLouvores.slice(i, i + chunkSize);
-          const chunkMissing = findMissingPdfs(chunk, cachedPdfsList);
-          missing.push(...chunkMissing);
-          
-          // Yield to UI if needed
-          if (i + chunkSize < categoryLouvores.length) {
-            await new Promise(resolve => setTimeout(resolve, 0));
-          }
-        }
-      } else {
-        missing = findMissingPdfs(categoryLouvores, cachedPdfsList);
+      // Contagem de faltantes: um índice, uma passagem, cedência por relógio.
+      //
+      // O ramo `> 100` saiu. Ele fatiava a categoria em chunks de 50 e esperava
+      // um `setTimeout(…, 0)` entre eles — que, aninhado a partir do quinto
+      // nível e com a aba não visível, o Chrome trava em 1000 ms. Medido em
+      // produção: `Gestos` (6 chunks) e `Partitura` (34 chunks) gravadas com
+      // 27,98 s de diferença, 1,00 s por chunk, exato. Eram ~95 s de espera
+      // pura por varredura — o botão "atualizar" preso, e o utilizador a ver
+      // estatísticas que não mudavam.
+      //
+      // `findMissingPdfs` também saiu do caminho, mas continua a valer para os
+      // outros três chamadores: ela reconstrói o índice a cada chamada, e era
+      // chamada uma vez por chunk. Aqui o índice vem memoizado e o que se
+      // percorre é a lista inteira, uma vez. `pdfCacheIndex.equivalencia.test.js`
+      // prova, sobre os 4629 caminhos do acervo, que a contagem é a mesma.
+      const indice = this.#obterIndice(/** @type {string[]} */ (cachedPdfsList));
+      const cedente = criarCedente();
+
+      let missing = 0;
+      for (const louvor of categoryLouvores) {
+        if (louvorFaltaNoIndice(louvor, indice)) missing++;
+        await cedente.talvezCeder();
       }
 
-      const available = total - missing.length;
+      const available = total - missing;
       const percentage = total > 0 ? Math.round((available / total) * 100) : 0;
 
-      const result = { total, available, missing: missing.length, percentage };
+      const result = { total, available, missing, percentage };
 
       // Cache the result
       this._cacheResult(category, result, louvores.length, cachedPdfsList.length);
@@ -267,6 +314,11 @@ class StatsCalculator {
   invalidateAll() {
     // Clear memory cache
     this.memoryCache.clear();
+
+    // WeakMap não tem clear(): reatribuir é o descarte. Na prática é redundante
+    // — a lista velha morre sozinha —, mas invalidar tudo tem de significar
+    // tudo, e um índice construído sobre uma lista ainda viva ficaria de pé.
+    this.#indicePorLista = new WeakMap();
 
     // Invalidate all persistent cache
     const allCached = getAllCachedStats();

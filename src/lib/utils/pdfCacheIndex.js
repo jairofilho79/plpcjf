@@ -15,6 +15,7 @@
  */
 
 import { decodeUrlUtf8Multiple } from './urlEncoding.js';
+import { getPdfRelPath } from './pathUtils.js';
 
 /**
  * Converte URL completa ou caminho em uma forma comparável:
@@ -26,11 +27,18 @@ export function toComparablePath(url) {
   if (!url || typeof url !== 'string') return '';
 
   let pathname = url;
-  try {
-    pathname = new URL(url).pathname;
-  } catch {
-    const match = url.match(/https?:\/\/[^/]+(\/.*)/);
-    if (match) pathname = match[1];
+  // `new URL('assets/…/Cifra.pdf')` **sempre** lança: sem esquema, não há URL
+  // absoluta. O catch era, portanto, o caminho normal — uma exceção construída
+  // e desenrolada por louvor, ~4629 por varredura, e outra por entrada do
+  // cache. O teste de esquema é a mesma resposta sem o custo; o try continua
+  // aqui para a URL que tem esquema mas é malformada.
+  if (url.includes('://')) {
+    try {
+      pathname = new URL(url).pathname;
+    } catch {
+      const match = url.match(/https?:\/\/[^/]+(\/.*)/);
+      if (match) pathname = match[1];
+    }
   }
 
   pathname = pathname.replace(/^\/+/, '');
@@ -76,4 +84,27 @@ export function buildPdfCacheIndex(cachedUrls, options = {}) {
       return byPath.has(path);
     }
   };
+}
+
+/**
+ * Um louvor "falta" quando tem `pdfId`, tem caminho, e o caminho não está no
+ * índice. É o critério de `findMissingPdfs` (`pdfValidation.js`), item a item.
+ *
+ * Mora aqui, e não dentro de `StatsCalculator`, por uma razão só: é o único
+ * jeito de o teste de equivalência exercitar o código que a varredura roda de
+ * facto. `StatsCalculator` importa `$app/environment` e `$lib/…`, e não carrega
+ * sob `node --test`; `pdfValidation.js` é da Lane A e também não carrega. Este
+ * módulo carrega, e é o ponto que os dois lados partilham.
+ *
+ * @param {any} louvor
+ * @param {PdfCacheIndex} indice
+ * @returns {boolean}
+ */
+export function louvorFaltaNoIndice(louvor, indice) {
+  if (!louvor?.pdfId) return false;
+
+  const pdfPath = getPdfRelPath(louvor);
+  if (!pdfPath) return false;
+
+  return !indice.has(pdfPath);
 }
