@@ -1,86 +1,107 @@
 /**
- * Preferências persistidas do leitor de PDF em localStorage.
+ * As preferências do leitor com armazenamento hostil. Este arquivo existe
+ * porque as três leituras entram por inicializador de instância da rota
+ * `/leitor` — um throw aqui não devolve valor errado, aborta a construção do
+ * componente e deixa a página em branco.
  * Run: node --test src/lib/pdf-reader/readerPreferences.test.js
  */
 
 import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
+import { criarFakeStorage, criarStorageQueLanca, criarStorageSomenteLeitura } from '../testing/fakeStorage.js';
 import {
-  BRIGHTNESS_PRESETS,
-  DEFAULT_BRIGHTNESS,
-  getBrightness,
-  setBrightness,
-  getFitMode,
-  setFitMode
+  getFitMode, setFitMode,
+  getNavigationMode, setNavigationMode,
+  getBrightness, setBrightness,
+  DEFAULT_BRIGHTNESS
 } from './readerPreferences.js';
 
-/** Storage de memória com a mesma interface de window.localStorage. */
-function criarStorage() {
-  const mapa = new Map();
-  return {
-    get length() { return mapa.size; },
-    key(i) { return [...mapa.keys()][i] ?? null; },
-    getItem(k) { return mapa.has(k) ? mapa.get(k) : null; },
-    setItem(k, v) { mapa.set(k, String(v)); },
-    removeItem(k) { mapa.delete(k); }
-  };
+const original = Object.getOwnPropertyDescriptor(globalThis, 'localStorage');
+
+function instalar(storage) {
+  Object.defineProperty(globalThis, 'localStorage', {
+    value: storage, configurable: true, writable: true
+  });
 }
 
-describe('readerPreferences — brilho', () => {
-  beforeEach(() => {
-    // O módulo lê `window`/`localStorage` globais, não parâmetros injetados.
-    globalThis.window = {};
-    globalThis.localStorage = criarStorage();
+afterEach(() => {
+  if (original) Object.defineProperty(globalThis, 'localStorage', original);
+  else delete globalThis.localStorage;
+});
+
+describe('readerPreferences — storage que lança em tudo', () => {
+  beforeEach(() => instalar(criarStorageQueLanca('SecurityError')));
+
+  it('getFitMode devolve o padrão em vez de lançar', () => {
+    assert.doesNotThrow(() => getFitMode());
+    assert.equal(getFitMode(), 'page-fit');
   });
 
-  afterEach(() => {
-    delete globalThis.window;
-    delete globalThis.localStorage;
+  it('getNavigationMode devolve o padrão em vez de lançar', () => {
+    assert.doesNotThrow(() => getNavigationMode());
+    assert.equal(getNavigationMode(), 'horizontal');
   });
 
-  it('sem window (SSR), devolve o padrão sem tocar em localStorage', () => {
-    delete globalThis.window;
+  it('getBrightness devolve o padrão em vez de lançar', () => {
+    assert.doesNotThrow(() => getBrightness());
     assert.equal(getBrightness(), DEFAULT_BRIGHTNESS);
   });
 
-  it('sem valor salvo, devolve o padrão (100)', () => {
-    assert.equal(getBrightness(), 100);
-    assert.equal(DEFAULT_BRIGHTNESS, 100);
-  });
-
-  it('grava e lê uma predefinição válida', () => {
-    setBrightness(60);
-    assert.equal(getBrightness(), 60);
-  });
-
-  it('persiste na chave pdfReaderBrightness', () => {
-    setBrightness(130);
-    assert.equal(localStorage.getItem('pdfReaderBrightness'), '130');
-  });
-
-  it('ignora valor salvo fora das predefinições e cai no padrão', () => {
-    localStorage.setItem('pdfReaderBrightness', '999');
-    assert.equal(getBrightness(), DEFAULT_BRIGHTNESS);
-  });
-
-  it('ignora lixo não numérico salvo e cai no padrão', () => {
-    localStorage.setItem('pdfReaderBrightness', 'abacate');
-    assert.equal(getBrightness(), DEFAULT_BRIGHTNESS);
-  });
-
-  it('expõe as três predefinições esperadas, na ordem do ciclo', () => {
-    assert.deepEqual(BRIGHTNESS_PRESETS, [100, 60, 130]);
-  });
-
-  it('setBrightness sem window (SSR) não lança', () => {
-    delete globalThis.window;
+  it('os setters não lançam', () => {
+    assert.doesNotThrow(() => setFitMode('page-width'));
+    assert.doesNotThrow(() => setNavigationMode('vertical'));
     assert.doesNotThrow(() => setBrightness(60));
   });
+});
 
-  it('não interfere na preferência de fitMode (chaves distintas)', () => {
-    setFitMode('page-width');
-    setBrightness(60);
+describe('readerPreferences — storage ausente (SSR / node puro)', () => {
+  beforeEach(() => { delete globalThis.localStorage; });
+
+  it('devolve os três padrões', () => {
+    assert.equal(getFitMode(), 'page-fit');
+    assert.equal(getNavigationMode(), 'horizontal');
+    assert.equal(getBrightness(), DEFAULT_BRIGHTNESS);
+  });
+});
+
+describe('readerPreferences — storage que lê mas recusa gravar', () => {
+  beforeEach(() => instalar(criarStorageSomenteLeitura({ pdfPreferredFitMode: 'page-width' })));
+
+  it('a leitura continua a valer', () => {
     assert.equal(getFitMode(), 'page-width');
-    assert.equal(getBrightness(), 60);
+  });
+
+  it('a gravação recusada não lança nem corrompe a leitura', () => {
+    assert.doesNotThrow(() => setFitMode('page-fit'));
+    assert.equal(getFitMode(), 'page-width');
+  });
+});
+
+describe('readerPreferences — storage normal', () => {
+  beforeEach(() => instalar(criarFakeStorage()));
+
+  it('faz ida e volta dos três valores', () => {
+    setFitMode('page-width');
+    assert.equal(getFitMode(), 'page-width');
+    setNavigationMode('vertical');
+    assert.equal(getNavigationMode(), 'vertical');
+    setBrightness(130);
+    assert.equal(getBrightness(), 130);
+  });
+
+  it('valor inválido gravado à mão cai no padrão', () => {
+    instalar(criarFakeStorage({
+      pdfPreferredFitMode: 'lixo',
+      pdfNavigationMode: 'diagonal',
+      pdfReaderBrightness: '999'
+    }));
+    assert.equal(getFitMode(), 'page-fit');
+    assert.equal(getNavigationMode(), 'horizontal');
+    assert.equal(getBrightness(), DEFAULT_BRIGHTNESS);
+  });
+
+  it('getBrightness não aceita o "" que vira 0 no Number()', () => {
+    instalar(criarFakeStorage({ pdfReaderBrightness: '' }));
+    assert.equal(getBrightness(), DEFAULT_BRIGHTNESS);
   });
 });
