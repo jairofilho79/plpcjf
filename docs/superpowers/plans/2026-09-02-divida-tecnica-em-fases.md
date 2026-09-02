@@ -408,3 +408,15 @@ Cada arquivo é um commit. Nenhum bloqueia nada.
 **Dependências entre fases:** só uma — Fases 2, 3 e 8 importam o módulo da Fase 1. As Fases 4, 5, 6 e 7 são independentes de tudo, inclusive entre si. Fase 5 encosta no mesmo arquivo da Fase 4 (`+page.svelte` da rota `/offline`), em funções vizinhas mas não nas mesmas linhas; se forem executadas fora de ordem, não conflitam.
 
 **Onde este plano pode estar errado:** a Fase 4 assume que as 95 reconstruções são o custo dominante. Isso é certo pela leitura do código, mas a magnitude do ganho depende de quantos PDFs estão de fato em Cache Storage — número que só a medição da Task 3 responde. É por isso que a medição é tarefa, e não observação.
+
+---
+
+> **Continuação (2026-09-02):** as Fases 1, 2, 3, 5, 6 e 7 foram mescladas na
+> `main`. A Fase 4 foi **descartada** — passou nas três revisões e não move
+> número nenhum; a medição que a derrubou está em
+> `docs/superpowers/investigacoes/2026-09-02-medicao-da-varredura.md`.
+> A Fase 8 foi reescrita a partir de um levantamento do código de hoje (os
+> números desta secção estavam desatualizados: `offline.js` tem 4 acessos crus e
+> não ~20, `swRegistration.js` tem 2 e não 15) e vive agora em
+> **`docs/superpowers/plans/2026-09-02-fase-8-faxina-de-armazenamento.md`**,
+> junto com a Fase 9 — a investigação dos ~47 s da varredura.
