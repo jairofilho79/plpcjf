@@ -1653,6 +1653,7 @@ async function startZipDownload(categories, pdfUrls, alreadyDownloadedCategories
       // Firefox com dados do site bloqueados, um acesso direto a localStorage
       // aqui lançaria e cairia no catch externo, reportando falha depois de
       // todos os PDFs já terem sido gravados no cache com sucesso.
+      // (Fase 8: passou de `safeStorage()?.getItem` para `safeGet`.)
       const isLeitorOffline = safeGet(IS_LEITOR_OFFLINE_KEY);
       if (!isLeitorOffline || isLeitorOffline !== 'true') {
         // Open offline-setup.pdf in leitor to set the flag
@@ -1795,9 +1796,8 @@ async function downloadByCategories(categories) {
   saveCategories(validCategories);
 
   // Check if IS_LEITOR_OFFLINE flag exists, if not open PDF in leitor
-  // Via safeStorage(): mesmo motivo da definição de safeStorage() acima — no
-  // Firefox com dados do site bloqueados, o acesso direto a localStorage
-  // aqui lançaria.
+  // Via `safeGet`: mesmo motivo do sítio acima — no Firefox com dados do site
+  // bloqueados, o acesso direto a localStorage aqui lançaria.
   const isLeitorOffline = safeGet(IS_LEITOR_OFFLINE_KEY);
   if (!isLeitorOffline || isLeitorOffline !== 'true') {
     // Open offline-setup.pdf in leitor to set the flag
