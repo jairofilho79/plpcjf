@@ -17,7 +17,10 @@
   } from '$lib/utils/pdfUtils';
   import { sharePlaylistLink, generatePlaylistShareUrl } from '$lib/utils/playlistUtils';
   import { generateFolhetoHtml, generateFolhetoImage, shareFolheto } from '$lib/utils/folhetoUtils';
-  import { navigateLouvorToLeitor } from '$lib/utils/navigateLouvorToLeitor';
+  import {
+    navigateLouvorToLeitor,
+    ERRO_IDENTIFICADOR_INVALIDO
+  } from '$lib/utils/navigateLouvorToLeitor';
   import {
     resolveTargetIndex,
     computeKeyboardTarget,
@@ -25,14 +28,6 @@
     hasPassedDragThreshold,
     isReorderKey
   } from '$lib/utils/chipPointerReorder.js';
-
-  /**
-   * Mensagem para um louvor sem caminho de PDF. Fica aqui em constante local
-   * porque, nesta branch, o `navigateLouvorToLeitor.js` ainda não exporta a
-   * sua — é a lane que está a repor o `error` que a traz. Na integração, isto
-   * passa a importar essa constante e esta linha desaparece.
-   */
-  const PDF_INDISPONIVEL = 'Não foi possível abrir este louvor: PDF indisponível.';
 
   /**
    * @type {number | null}
@@ -146,10 +141,19 @@
         listEl.scrollLeft = antes + velocity;
       }
       const depois = isExpanded ? listEl.scrollTop : listEl.scrollLeft;
-      // Se a lista já está no fim não vale a pena continuar a pedir frames.
+      // A lista no fim não rola: os retângulos são os mesmos de há um frame e
+      // reavaliar o alvo daria o mesmo resultado. Poupa-se o cálculo, não o
+      // frame.
       if (depois !== antes) refreshDragTarget();
     }
 
+    // O reagendamento é incondicional de propósito. Um dedo parado junto à
+    // borda não emite `pointermove`, por isso este ciclo é a única coisa que
+    // pode acordar sozinho quando o que estava a travar a rolagem deixa de
+    // travar — o fim da lista afasta-se assim que uma reordenação muda a
+    // extensão do scroll. Parar aqui deixaria a rolagem morta até o utilizador
+    // mexer o dedo. Quem termina o ciclo é o fim do gesto: `pointerup`,
+    // `pointercancel`, `Escape` e `onDestroy` chamam todos `stopAutoScroll`.
     autoScrollRaf = requestAnimationFrame(tickAutoScroll);
   }
 
@@ -338,6 +342,23 @@
     // none` que as classes .checking/.processing traziam — foi esse padrão que
     // produziu o bug dos dois cliques noutro sítio da app. Aqui vale para
     // todos os modos, e não só para o `leitor`.
+    //
+    // A tranca é da lista inteira, e não só do chip tocado como era com o
+    // `pointer-events: none`. É deliberado, por duas razões. A primeira é que
+    // `checkingPdfId` e `processingPdfId` guardam um pdfId cada, e não um
+    // conjunto: com dois chips ocupados ao mesmo tempo, o primeiro a terminar
+    // limpa o estado do segundo, e o segundo perde o indicador de
+    // "Compartilhando…/Baixando…" com o trabalho ainda a correr. Estreitar a
+    // guarda a `=== louvor.pdfId` obriga, para ser coerente, a trocar também
+    // estes dois campos por conjuntos — não se faz uma coisa sem a outra. A
+    // segunda é que evita dois downloads do mesmo tamanho em paralelo numa
+    // ligação móvel.
+    //
+    // Não é o estado de espera que bloqueou a interface no bug anterior: ali o
+    // `pointer-events: none` matava o elemento e exigia um segundo clique para
+    // o acordar; aqui cada ramo liberta o estado num `finally`, e o
+    // `fetchPdfAsBlob` traz timeout de rede, portanto a espera tem fim
+    // garantido.
     if (checkingPdfId !== null || processingPdfId !== null) return;
 
     const pdfPath = getPdfRelPath(louvor);
@@ -347,8 +368,13 @@
     // Um pdfId corrompido dava, conforme o modo, uma aba com "/undefined" ou
     // um download de um ficheiro que não existe. O banner de erro já cá
     // estava; só lhe faltava quem o escrevesse fora do ramo do leitor.
+    //
+    // A mensagem vem do `navigateLouvorToLeitor` e não de uma constante daqui:
+    // é a mesma condição que o `LouvorCard` já reporta com ela, e o utilizador
+    // não deve ler diagnósticos diferentes conforme tenha tocado num chip da
+    // playlist ou num cartão da lista.
     if (!pdfPath) {
-      pdfError = PDF_INDISPONIVEL;
+      pdfError = ERRO_IDENTIFICADOR_INVALIDO;
       return;
     }
 
