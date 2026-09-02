@@ -564,19 +564,41 @@
    * Load category availability statistics for specific categories
    * @param {string[]} categories - Categories to load stats for
    * @param {boolean} force - Force reload even if cached
+   * @returns {Promise<boolean>} `true` só quando a varredura correu até ao fim e
+   *   `categoryStats` foi reescrito com números recalculados agora. `false`
+   *   quando nada foi feito: sem louvores, sem categorias, chamada barrada pela
+   *   guarda de reentrância, ou erro no meio do caminho. Quem chama usa isto
+   *   para não declarar frescor que não existe (ver `loadCategoryStats`).
    */
   async function loadCategoryStatsForCategories(categories = [], force = false) {
-    if (!$louvores.length || !categories || categories.length === 0) return;
-    
+    if (!$louvores.length || !categories || categories.length === 0) return false;
+
     // Prevent concurrent loads
     if (isLoadingStats) {
       console.log('[Offline Page] Stats already loading, skipping');
-      return;
+      return false;
     }
-    
+
     isLoadingStats = true;
-    
+
     try {
+      // FASE 3: Invalidar cache se forçado.
+      // A limpeza mora aqui, depois da guarda de reentrância, e não no sítio de
+      // chamada: antes, uma chamada forçada que ia ser descartada logo a seguir
+      // já tinha raspado o cache de stats no caminho, deixando a varredura que
+      // realmente estava em curso sem os valores que ela poderia reaproveitar e
+      // o painel sem nada para mostrar se essa varredura falhasse.
+      //
+      // E mora DENTRO do `try`: o `finally` é o único sítio que solta
+      // `isLoadingStats`. Um throw aqui fora prendia-o em `true` para sempre e
+      // deixava os dois botões de atualizar `disabled` com a capa de pé — sem
+      // saída. Hoje `clearStatsCache` engole os próprios erros, mas a Fase 3
+      // mexe justamente na camada de storage por baixo dele.
+      if (force) {
+        clearStatsCache();
+        statsCache.clear();
+      }
+
       // Always reload cached PDFs list before calculating stats
       // This ensures we have the latest cache state, especially important with lazy loading
       // Force reload to bypass cache and get fresh data
@@ -685,8 +707,14 @@
       } else {
         requiredPackagesInfo = null;
       }
+
+      return true;
     } catch (error) {
       console.error('[Offline Page] Failed to load stats for categories:', error);
+      // Falhou no meio: os números na tela podem ser os antigos ou uma mistura.
+      // Dizer que não houve trabalho mantém a capa "dados em cache" de pé, com
+      // o botão de atualizar disponível para tentar de novo.
+      return false;
     } finally {
       isLoadingStats = false;
     }
@@ -723,15 +751,27 @@
       return;
     }
     
-    // FASE 3: Invalidar cache se forçado
-    if (force) {
-      clearStatsCache();
-      statsCache.clear();
+    // Usar função específica para todas as categorias.
+    // A limpeza do cache do `force` acontece lá dentro, depois da guarda de
+    // reentrância — ver `loadCategoryStatsForCategories`.
+    const recalculou = await loadCategoryStatsForCategories(CATEGORY_OPTIONS, force);
+
+    if (!recalculou) {
+      // Não houve varredura: ou outra já estava em curso e barrou esta, ou a
+      // desta falhou. Em nenhum dos casos os números na tela são novos, então
+      // não se toca em `statsStale` nem em `lastStatsLoadTime` — dizer que
+      // estão frescos levantaria a capa sobre valores antigos. Quando o motivo
+      // foi a reentrância, é a varredura que está a correr que limpa a capa ao
+      // terminar; quando foi erro, a capa fica de pé com o botão a convidar
+      // nova tentativa.
+      console.log('[Offline Page] Stats not recalculated, keeping stale overlay');
+      return;
     }
-    
-    // Usar função específica para todas as categorias
-    await loadCategoryStatsForCategories(CATEGORY_OPTIONS, force);
-    lastStatsLoadTime = now;
+
+    // Marca o fim da varredura, não o seu começo: `now` foi lido antes de uma
+    // varredura que pode demorar minutos, e é o fim que interessa a quem
+    // pergunta "há quanto tempo os números são reais?".
+    lastStatsLoadTime = Date.now();
     statsStale = false;
   }
 
@@ -787,19 +827,19 @@
         // varredura explícita já terminou dentro de MIN_STATS_LOAD_INTERVAL é
         // seguro: ela deixa `statsStale` em false com números reais, e
         // recalcular de novo só duplicaria a varredura completa do Cache
-        // Storage. Mas também é preciso pular quando essa varredura ainda
-        // está em curso (`isLoadingStats` true): `lastStatsLoadTime` só é
-        // escrito quando `loadCategoryStats` termina, então enquanto a
-        // varredura roda o timestamp continua com o valor antigo e a conta
-        // acima passaria — chamando `loadCategoryStats(true)` de novo. Essa
-        // segunda chamada não repete a varredura (a guarda `isLoadingStats`
-        // de dentro de `loadCategoryStatsForCategories` já a barra), mas
-        // `loadCategoryStats` some e faz `statsStale = false`
-        // incondicionalmente ao retornar, mesmo sem ter feito nada — isso
-        // levantaria a capa "dados em cache" com os números antigos antes da
-        // varredura de verdade terminar. Por isso a checagem de
-        // `isLoadingStats` tem de estar aqui, no sítio da chamada: delegar o
-        // corte para a guarda interna não evita esse efeito colateral.
+        // Storage. Também se pula quando essa varredura ainda está em curso
+        // (`isLoadingStats` true), porque `lastStatsLoadTime` só é escrito no
+        // fim: enquanto a varredura roda o timestamp continua antigo e a conta
+        // acima sozinha deixaria passar uma segunda chamada.
+        //
+        // Desde a correção do frescor (Fase 5), essa segunda chamada já seria
+        // inofensiva: `loadCategoryStatsForCategories` devolve `false` quando a
+        // guarda de reentrância a barra e `loadCategoryStats` deixa então
+        // `statsStale` e `lastStatsLoadTime` como estavam, em vez de anunciar
+        // números frescos sem ter recalculado nada. A checagem de
+        // `isLoadingStats` daqui virou redundante — fica de propósito por uma
+        // versão (redundância barata; remover depois), e ainda poupa a ida
+        // desnecessária à função.
         if (statsRequested && !isLoadingStats && Date.now() - lastStatsLoadTime >= MIN_STATS_LOAD_INTERVAL) {
           await loadCategoryStats(true);
         }
