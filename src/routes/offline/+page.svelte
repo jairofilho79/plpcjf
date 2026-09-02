@@ -581,18 +581,24 @@
 
     isLoadingStats = true;
 
-    // FASE 3: Invalidar cache se forçado.
-    // A limpeza mora aqui, depois da guarda de reentrância, e não no sítio de
-    // chamada: antes, uma chamada forçada que ia ser descartada logo a seguir
-    // já tinha raspado o cache de stats no caminho, deixando a varredura que
-    // realmente estava em curso sem os valores que ela poderia reaproveitar e
-    // o painel sem nada para mostrar se essa varredura falhasse.
-    if (force) {
-      clearStatsCache();
-      statsCache.clear();
-    }
-
     try {
+      // FASE 3: Invalidar cache se forçado.
+      // A limpeza mora aqui, depois da guarda de reentrância, e não no sítio de
+      // chamada: antes, uma chamada forçada que ia ser descartada logo a seguir
+      // já tinha raspado o cache de stats no caminho, deixando a varredura que
+      // realmente estava em curso sem os valores que ela poderia reaproveitar e
+      // o painel sem nada para mostrar se essa varredura falhasse.
+      //
+      // E mora DENTRO do `try`: o `finally` é o único sítio que solta
+      // `isLoadingStats`. Um throw aqui fora prendia-o em `true` para sempre e
+      // deixava os dois botões de atualizar `disabled` com a capa de pé — sem
+      // saída. Hoje `clearStatsCache` engole os próprios erros, mas a Fase 3
+      // mexe justamente na camada de storage por baixo dele.
+      if (force) {
+        clearStatsCache();
+        statsCache.clear();
+      }
+
       // Always reload cached PDFs list before calculating stats
       // This ensures we have the latest cache state, especially important with lazy loading
       // Force reload to bypass cache and get fresh data
@@ -758,7 +764,7 @@
       // foi a reentrância, é a varredura que está a correr que limpa a capa ao
       // terminar; quando foi erro, a capa fica de pé com o botão a convidar
       // nova tentativa.
-      console.log('[Offline Page] Stats não recalculadas — mantendo capa de desatualizado');
+      console.log('[Offline Page] Stats not recalculated, keeping stale overlay');
       return;
     }
 
