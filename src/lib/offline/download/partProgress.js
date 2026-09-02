@@ -215,10 +215,13 @@ function abortError(message = 'Download cancelado pelo usuário.') {
 }
 
 /**
+ * Um `AbortController` **não** tem `.aborted` — quem tem é o `signal` dele.
+ * Este predicado existe para que essa distinção more num lugar só.
+ *
  * @param {{ aborted?: boolean } | null | undefined} signal
  * @returns {boolean}
  */
-function isAborted(signal) {
+export function isAborted(signal) {
   return Boolean(signal && signal.aborted);
 }
 

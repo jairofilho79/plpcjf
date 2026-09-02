@@ -6,6 +6,7 @@
 import packageDownloader from './PackageDownloader.js';
 import DownloadProgressTracker from './DownloadProgress.js';
 import DownloadQueue from './DownloadQueue.js';
+import { isAborted } from './partProgress.js';
 import cacheStorageAdapter from '../storage/CacheStorageAdapter.js';
 import manifestRepository from '../manifest/ManifestRepository.js';
 import { findMissingPdfs, findRequiredPackages } from '$lib/utils/pdfValidation.js';
@@ -450,11 +451,12 @@ export class DownloadManager {
     try {
       // Process each package using indexed loop to track package info
       for (let packageIndex = 0; packageIndex < packagesInfo.length; packageIndex++) {
-        // ACHADO (não corrigido: mudaria comportamento, fora do escopo desta
-        // tarefa de tipos): `AbortController` não tem `.aborted` — isso é
-        // `AbortController.signal.aborted`. Essa checagem de cancelamento no
-        // laço nunca dispara em runtime (sempre undefined); reportado à parte.
-        if (/** @type {any} */ (this.abortController)?.aborted) {
+        // O cancelamento é lido do SINAL, não do controlador: `AbortController`
+        // não tem `.aborted`. Até 2026-09-01 esta linha era
+        // `this.abortController?.aborted` — sempre undefined, nunca disparava,
+        // e o corte só acontecia lá no fetch. É a causa do "cancelar não para
+        // o download na hora".
+        if (isAborted(this.abortController?.signal)) {
           throw new Error('DOWNLOAD_CANCELLED');
         }
 

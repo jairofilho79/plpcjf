@@ -13,7 +13,8 @@ import {
   isRetryableStatus,
   looksLikeCaptivePortal,
   fetchWithRetry,
-  excludeSkippedPartFromBytesTotal
+  excludeSkippedPartFromBytesTotal,
+  isAborted
 } from './partProgress.js';
 
 /**
@@ -434,5 +435,30 @@ describe('excludeSkippedPartFromBytesTotal', () => {
 
   it('nunca fica negativo mesmo se a soma das partes puladas exceder o total', () => {
     assert.equal(excludeSkippedPartFromBytesTotal(10, 90_000_000), 0);
+  });
+});
+
+describe('isAborted', () => {
+  it('lê o sinal, não o controlador', () => {
+    const controller = new AbortController();
+
+    assert.equal(isAborted(controller.signal), false);
+    controller.abort();
+    assert.equal(isAborted(controller.signal), true);
+  });
+
+  it('devolve false para um AbortController — a armadilha que este helper existe para evitar', () => {
+    // `AbortController` não tem `.aborted`. Passar o controlador no lugar do
+    // sinal é silencioso: a expressão vira undefined e a checagem nunca
+    // dispara. Foi o que aconteceu em DownloadManager._downloadPackages.
+    const controller = new AbortController();
+    controller.abort();
+
+    assert.equal(isAborted(/** @type {any} */ (controller)), false);
+  });
+
+  it('aceita null e undefined sem lançar', () => {
+    assert.equal(isAborted(null), false);
+    assert.equal(isAborted(undefined), false);
   });
 });
