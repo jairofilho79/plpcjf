@@ -20,7 +20,7 @@
   import { groupLouvoresByGroupId, compareLouvorNome } from '$lib/utils/groupLouvores.js';
   import LouvorListSkeleton from '$lib/components/LouvorListSkeleton.svelte';
   import { estadoVazioBiblioteca } from '$lib/utils/estadosVazios.js';
-  import { houveFiltragemReal } from '$lib/utils/resultadosProntos.js';
+  import { houveFiltragemReal, podeCorrigirPaginacao } from '$lib/utils/resultadosProntos.js';
 
   // Normalize classification by removing content in parentheses
   /**
@@ -357,26 +357,47 @@
   let resultadosProntos = false;
 
   // TRAVA, NÃO DERIVAÇÃO — não troque isto por
-  // `$: resultadosProntos = filtragemRealAgora`. Era exatamente essa a forma
-  // antiga, e ela tinha um defeito: desmarcar todos os Arranjos (ação
-  // alcançável pela interface) zera `$classificationFilters`, a flag caía para
-  // `false`, o bloco logo abaixo que corrige `?pagina=` desligava, e a URL
-  // ficava presa em `?arranjo=&pagina=999` enquanto a lista renderizada era a
-  // página 1 — link errado, compartilhável, até alguém remarcar um Arranjo.
-  // A pergunta que esta variável responde é "já produzi uma lista real alguma
-  // vez?" (fato histórico, permanente), não "há Arranjo marcado agora?" (fato
-  // presente, reversível). Por isso só sobe.
+  // `$: resultadosProntos = podeCorrigirPaginacao(...)`. A forma antiga era
+  // uma derivação viva, e ela tinha um defeito: desmarcar todos os Arranjos
+  // (ação alcançável pela interface) zera `$classificationFilters`, a flag
+  // caía para `false`, o bloco logo abaixo que corrige `?pagina=` desligava, e
+  // a URL ficava presa em `?arranjo=&pagina=999` enquanto a lista renderizada
+  // era a página 1 — link errado, compartilhável, até alguém remarcar um
+  // Arranjo. A pergunta que esta variável responde é "a contagem de páginas
+  // já é a definitiva?" (fato histórico, permanente), não "há Arranjo marcado
+  // agora?" (fato presente, reversível). Por isso só sobe.
   //
-  // E não é cedo demais: o predicado exige `totalArranjos > 0`, e
-  // `$classificationFilters` só fica não-vazio depois de
-  // `classificationFilters.aplicarPadrao(...)` (ou de um `?arranjo=` no link).
-  // Além disso este bloco está declarado ABAIXO de `totalPages`/`currentPage`,
-  // então na passada em que a trava fecha o Svelte já recalculou a paginação
-  // com os mesmos Arranjos — o bloco de correção nunca compara um
-  // `estadoUrl.pagina` novo contra um `currentPage` velho. Mover isto para
-  // cima da paginação reabre a corrida D-3 e volta a apagar o `?pagina=3` de
-  // um deep link em aba fria.
-  $: if (filtragemRealAgora) {
+  // Não é cedo demais, por dois motivos independentes:
+  //
+  // 1. O predicado. Ele só dispensa `totalArranjos > 0` quando a URL traz
+  //    `arranjo` (`estadoUrl.temArranjo`), e é exatamente aí que
+  //    `initializeFiltersIfNeeded` PULA o `aplicarPadrao` — logo a seleção
+  //    vazia é definitiva, não transiente. Sem o param, continua exigindo
+  //    Arranjo selecionado, que é o que só existe depois de `aplicarPadrao`.
+  //    A janela D-3 fica coberta como antes. Ver `resultadosProntos.js`.
+  // 2. A posição. Este bloco está declarado ABAIXO de
+  //    `totalPages`/`currentPage`, então na passada em que a trava fecha o
+  //    Svelte já recalculou a paginação com os mesmos Arranjos — o bloco de
+  //    correção nunca compara um `estadoUrl.pagina` novo contra um
+  //    `currentPage` velho.
+  //
+  // Cuidado com o motivo #2: a ordem de declaração no arquivo só desempata
+  // blocos `$:` que NÃO têm aresta de dependência entre si, que é o caso aqui
+  // (nem este bloco lê `currentPage`, nem a cadeia da paginação lê a trava).
+  // Quem criar uma aresta entre eles reordena o grafo sem mover uma linha, e
+  // este aviso deixa de proteger. Mover o bloco para cima da paginação, ou
+  // fazer a paginação depender dele, reabre a corrida D-3 e volta a apagar o
+  // `?pagina=3` de um deep link em aba fria. `resultadosProntos.test.js`
+  // compila esta página e falha se a ordem inverter, por qualquer das duas
+  // vias.
+  $: if (
+    podeCorrigirPaginacao({
+      carregado: $louvoresLoaded,
+      totalCatalogo: $louvores.length,
+      totalArranjos: $classificationFilters.length,
+      selecaoDeArranjoDefinida: estadoUrl.temArranjo
+    })
+  ) {
     resultadosProntos = true;
   }
 
@@ -389,9 +410,11 @@
 
   // Corrige a URL quando a página pedida não existe mais. Idempotente: depois
   // da escrita a condição é falsa, então não há laço e não há flag.
-  // Guardado pela TRAVA, não pela condição viva: uma vez que a lista real
-  // existiu, a URL passa a ser corrigível para sempre — inclusive quando o
-  // usuário desmarca todos os Arranjos e a lista fica vazia por escolha dele.
+  // Guardado pela TRAVA, não pela condição viva: uma vez que a contagem de
+  // páginas é a definitiva, a URL passa a ser corrigível para sempre —
+  // inclusive quando a lista fica vazia por escolha, seja porque o usuário
+  // desmarcou todos os Arranjos aqui, seja porque o link já chegou com
+  // `?arranjo=` vazio.
   $: if (browser && naBiblioteca && resultadosProntos && estadoUrl.pagina !== currentPage) {
     updateUrlParams({ pagina: currentPage });
   }
