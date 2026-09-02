@@ -207,7 +207,44 @@
     if (newObjectUrl) activePdfObjectUrl = newObjectUrl;
     return url;
   }
-  // Load PDF directly without validation (optimization: skip validation if already validated)
+  // Extract PDF path from URL - usar caminho original (NÃO normalizar)
+  // O PDF deve ser carregado e validado usando o caminho original (preserva case e acentos)
+  //
+  // Vive numa função porque os dois carregadores precisam **da mesma** URL:
+  // `loadDirectly` passou a ser o caminho de toda a gente, e enquanto passava o
+  // `fileUrl` cru ao PDF.js os 3 PDFs do acervo com colchetes no nome pediam uma
+  // URL diferente da chave gravada no cache — o #22.1 outra vez, agora no
+  // caminho comum em vez do raro.
+  function resolveCanonicalPdfUrl(fileUrl: string) {
+    const urlObj = new URL(fileUrl, window.location.origin);
+    const pdfPath = urlObj.pathname.startsWith('/') ? urlObj.pathname.substring(1) : urlObj.pathname;
+    // Achado I3 (corrigido): dois caminhos que o leitor abre não são do
+    // acervo — o exemplo padrão (`/pdfs/exemplo.pdf`, quando não há
+    // `?file=`) e a página de configuração offline (`/offline-setup.pdf`,
+    // aberta por `stores/offline.js`). Ambos vivem em `static/`, fora de
+    // `assets/`. A tentativa original de distinguir os dois olhando se
+    // `pdfPath` começa com `assets/` inverte o contrato: um link de acervo
+    // legado (`?file=` sem o prefixo `assets/`, formato suportado desde
+    // sempre — ver `urlParams.test.js` §5.5) também não começa com
+    // `assets/`, e passava a ser tratado como estático, pulando a
+    // normalização que o fazia resolver. A lista curta é a única forma
+    // segura: só os dois arquivos estáticos conhecidos usam o caminho como
+    // está; qualquer outro — incluindo formatos de acervo que não previmos —
+    // continua indo por `PdfPathManager`/validação, como sempre foi.
+    const isKnownStaticFile =
+      pdfPath.toLowerCase() === 'pdfs/exemplo.pdf' || pdfPath.toLowerCase() === 'offline-setup.pdf';
+    const isCatalogAsset = !isKnownStaticFile;
+    // #22.1: um só codificador. O parser WHATWG deixa `[` e `]` literais e o
+    // escritor do cache os escapa — para os 3 PDFs do acervo com colchetes no
+    // nome, a URL pedida aqui nunca era a chave gravada.
+    const originalFullUrl = isCatalogAsset
+      ? PdfPathManager.createRequestUrl(pdfPath, window.location.origin)
+      : new URL(`/${pdfPath}`, window.location.origin).toString();
+    return { pdfPath, isCatalogAsset, originalFullUrl };
+  }
+
+  // Primeira tentativa de toda a gente: pedir o PDF pela ordem normal — cache do
+  // Service Worker, depois rede — sem validar nada antes.
   async function loadDirectly(fileUrl: string) {
     const getDocument = (window as any).__pdfjsGetDocument as PDFJSGetDocument | undefined;
     if (!getDocument) return;
@@ -220,7 +257,10 @@
     try {
       // Try to load directly - Service Worker will intercept and serve from cache if available
       perfMark('pdf-source-resolve-start')
-      const sourceUrl = await resolvePdfSourceUrl(fileUrl);
+      // A URL canónica, não o `fileUrl` cru: é esta a chave que o cache do SW
+      // conhece, e a diferença só aparece nos nomes com colchetes.
+      const { originalFullUrl } = resolveCanonicalPdfUrl(fileUrl);
+      const sourceUrl = await resolvePdfSourceUrl(originalFullUrl);
       perfMark('pdf-source-resolve-end')
       perfMeasure('pdf-source-resolve', 'pdf-source-resolve-start', 'pdf-source-resolve-end')
       perfMark('pdf-getdocument-start')
@@ -258,32 +298,7 @@
     
     setPdfUi('loading', null);
     
-    // Extract PDF path from URL - usar caminho original (NÃO normalizar)
-    // O PDF deve ser carregado e validado usando o caminho original (preserva case e acentos)
-    const urlObj = new URL(fileUrl, window.location.origin);
-    const pdfPath = urlObj.pathname.startsWith('/') ? urlObj.pathname.substring(1) : urlObj.pathname;
-    // Achado I3 (corrigido): dois caminhos que o leitor abre não são do
-    // acervo — o exemplo padrão (`/pdfs/exemplo.pdf`, quando não há
-    // `?file=`) e a página de configuração offline (`/offline-setup.pdf`,
-    // aberta por `stores/offline.js`). Ambos vivem em `static/`, fora de
-    // `assets/`. A tentativa original de distinguir os dois olhando se
-    // `pdfPath` começa com `assets/` inverte o contrato: um link de acervo
-    // legado (`?file=` sem o prefixo `assets/`, formato suportado desde
-    // sempre — ver `urlParams.test.js` §5.5) também não começa com
-    // `assets/`, e passava a ser tratado como estático, pulando a
-    // normalização que o fazia resolver. A lista curta é a única forma
-    // segura: só os dois arquivos estáticos conhecidos usam o caminho como
-    // está; qualquer outro — incluindo formatos de acervo que não previmos —
-    // continua indo por `PdfPathManager`/validação, como sempre foi.
-    const isKnownStaticFile =
-      pdfPath.toLowerCase() === 'pdfs/exemplo.pdf' || pdfPath.toLowerCase() === 'offline-setup.pdf';
-    const isCatalogAsset = !isKnownStaticFile;
-    // #22.1: um só codificador. O parser WHATWG deixa `[` e `]` literais e o
-    // escritor do cache os escapa — para os 3 PDFs do acervo com colchetes no
-    // nome, a URL pedida aqui nunca era a chave gravada.
-    const originalFullUrl = isCatalogAsset
-      ? PdfPathManager.createRequestUrl(pdfPath, window.location.origin)
-      : new URL(`/${pdfPath}`, window.location.origin).toString();
+    const { pdfPath, isCatalogAsset, originalFullUrl } = resolveCanonicalPdfUrl(fileUrl);
     lastPdfPathForRecovery = pdfPath;
     lastOriginalFullUrlForRecovery = originalFullUrl;
 
@@ -297,8 +312,19 @@
         const validation = await validatePdfAvailability(pdfPath);
 
         if (!validation.available) {
-          // Try to download automatically if online
-          const effectiveOnline = await checkEffectiveConnectivity({ timeoutMs: 1500 });
+          // Sem sondar outra vez. `validatePdfAvailability` só chega a
+          // "indisponível" depois de já ter sondado a rede, e traz esse veredito
+          // em `effectiveOnline`; repetir a sonda aqui custava mais 1,5 s de ecrã
+          // morto a quem está exatamente no pior caso — offline, com o material
+          // por baixar, à espera de uma mensagem que já podia ter lido. O `??`
+          // cobre o caminho de exceção, onde nenhuma sonda correu; e o
+          // `navigator.onLine === false` dispensa-a de vez, porque aí não há
+          // dúvida nenhuma a esclarecer.
+          const effectiveOnline =
+            validation.effectiveOnline ??
+            (typeof navigator !== 'undefined' && navigator.onLine === false
+              ? false
+              : await checkEffectiveConnectivity({ timeoutMs: 1500 }));
           if (validation.needsDownload && effectiveOnline && retryCount < MAX_RETRIES) {
             retryCount++;
             console.log('[Leitor] auto-download-start', { pdfPath, attempt: retryCount });
