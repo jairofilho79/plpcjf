@@ -4,6 +4,11 @@
 import { dev } from '$app/environment';
 import { PDF_CACHE_NAME } from '$lib/offline/sw/swCaches.js';
 import { resolveDebugTargetWorker, buildSetDebugMessage } from './swDebugMessage.js';
+// `typeof localStorage !== 'undefined'` como guarda não protege: `typeof` só
+// suprime exceção para referência não resolvível (ECMA-262 §13.5.3), e é o
+// `[[Get]]` de `localStorage` que lança no Firefox com dados de site
+// bloqueados — a guarda lançava antes de o `try` interno começar.
+import { getStorage, safeGet, safeSet, safeRemove } from './safeStorage.js';
 
 let swRegistration = null;
 
@@ -337,9 +342,11 @@ export async function getCachedPDFsFast() {
   }
   
   // Verificar cache local primeiro
-  if (typeof window !== 'undefined' && typeof localStorage !== 'undefined') {
+  // `getStorage()` diz a mesma coisa que a guarda antiga queria dizer — "não dá
+  // para usar storage, pula este bloco" — sem lançar ao perguntar.
+  if (typeof window !== 'undefined' && getStorage()) {
     try {
-      const cached = localStorage.getItem(CACHED_PDFS_LOCAL_KEY);
+      const cached = safeGet(CACHED_PDFS_LOCAL_KEY);
       if (cached) {
         const { pdfs, timestamp } = JSON.parse(cached);
         // Verificar se cache ainda é válido (TTL de 5 minutos)
@@ -386,12 +393,18 @@ export async function getCachedPDFsFast() {
   }
   
   // Atualizar cache local apenas se houver PDFs
-  if (pdfs.length > 0 && typeof window !== 'undefined' && typeof localStorage !== 'undefined') {
+  if (pdfs.length > 0 && typeof window !== 'undefined' && getStorage()) {
     try {
-      localStorage.setItem(CACHED_PDFS_LOCAL_KEY, JSON.stringify({
+      const gravou = safeSet(CACHED_PDFS_LOCAL_KEY, JSON.stringify({
         pdfs,
         timestamp: Date.now()
       }));
+      // O storage passou na sonda e mesmo assim a gravação falhou (cota
+      // estourada, tipicamente): é o caso que antes caía no `catch` abaixo, e o
+      // aviso continua a sair.
+      if (!gravou) {
+        console.warn('[SW Message] Failed to update local cache: gravação recusada');
+      }
     } catch (err) {
       console.warn('[SW Message] Failed to update local cache:', err);
     }
@@ -407,12 +420,13 @@ export async function getCachedPDFsFast() {
  * Invalidate local cache of PDFs
  */
 export function invalidateCachedPDFsLocal() {
-  if (typeof window !== 'undefined' && typeof localStorage !== 'undefined') {
-    try {
-      localStorage.removeItem(CACHED_PDFS_LOCAL_KEY);
+  if (typeof window !== 'undefined' && getStorage()) {
+    // `safeRemove` devolve `false` só quando o acesso lançou — exatamente o
+    // caso que antes caía no `catch`, e o aviso continua a sair.
+    if (safeRemove(CACHED_PDFS_LOCAL_KEY)) {
       debugLog('[SW Message] Invalidated local PDFs cache');
-    } catch (err) {
-      console.warn('[SW Message] Failed to invalidate local cache:', err);
+    } else {
+      console.warn('[SW Message] Failed to invalidate local cache: remoção recusada');
     }
   }
 }

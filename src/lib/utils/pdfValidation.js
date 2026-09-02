@@ -8,6 +8,11 @@ import compositeValidator from '$lib/offline/validation/CompositeValidator.js';
 import cacheStorageAdapter from '$lib/offline/storage/CacheStorageAdapter.js';
 import PdfPathManager from '$lib/offline/utils/PdfPathManager.js';
 import { buildPdfCacheIndex } from './pdfCacheIndex.js';
+// A guarda `typeof localStorage === 'undefined'` que estava nestas funções não
+// protegia: `typeof` só suprime exceção para referência não resolvível
+// (ECMA-262 §13.5.3), e é o `[[Get]]` de `localStorage` que lança no Firefox
+// com dados de site bloqueados. Nenhuma destas quatro lança.
+import { getStorage, safeGet, safeSet, safeRemove } from './safeStorage.js';
 import {
   readValidationEntry,
   writeValidationEntry,
@@ -50,17 +55,58 @@ export async function checkEffectiveConnectivity(options = {}) {
   }
 }
 
+/**
+ * O storage entregue a `validationCacheStore.js` para o registro único.
+ *
+ * **Não** é `getStorage()`, de propósito. A sonda de `getStorage()` exige
+ * `key()` e `length`, e aqui só se lê e grava UMA chave: um stub parcial de
+ * extensão de privacidade — só `getItem`/`setItem`/`removeItem` — reprovaria na
+ * sonda e desligaria o cache de validação inteiro, mandando cada PDF ser
+ * revalidado pela rede, em silêncio. `safeGet`/`safeSet`/`safeRemove` não
+ * passam pela sonda: cada uma tem o seu próprio `try` e lê
+ * `globalThis.localStorage` diretamente.
+ *
+ * Os dois métodos de escrita **lançam** quando a operação falha, e isso é
+ * deliberado: `writeAll`, em `validationCacheStore.js`, usa a exceção como
+ * canal de erro — é assim que ele reconhece cota estourada, descarta o registro
+ * inteiro e tenta de novo, e é assim que `migrateLegacyValidationKeys` sabe que
+ * não pode apagar as chaves antigas. Um `setItem` que falhasse em silêncio
+ * deixaria o cache grande e inútil para sempre. Nenhuma exceção escapa daqui:
+ * todos os usos destes três métodos naquele arquivo estão dentro de `try/catch`
+ * próprios.
+ *
+ * @type {Storage}
+ */
+const registroDeValidacao = /** @type {any} */ ({
+  getItem: (/** @type {string} */ chave) => safeGet(chave),
+  setItem: (/** @type {string} */ chave, /** @type {string} */ valor) => {
+    if (!safeSet(chave, valor)) throw new Error('localStorage recusou a gravação');
+  },
+  removeItem: (/** @type {string} */ chave) => {
+    if (!safeRemove(chave)) throw new Error('localStorage recusou a remoção');
+  }
+});
+
 let legacyMigrationDone = false;
 
 /**
  * Migra as chaves antigas `pdfValidation_<id>` para o registro único, uma vez por sessão.
- * `localStorage` indisponível (ex.: modo privado do Safari) apenas faz a função retornar
- * sem migrar — nunca lança.
+ * `localStorage` indisponível — ausente (SSR), em modo privado do Safari ou bloqueado
+ * pelo Firefox estrito — apenas faz a função retornar sem migrar, e sem marcar a
+ * migração como feita: se o storage voltar a ser utilizável, a próxima chamada tenta.
+ *
+ * Esta é a única função do arquivo que precisa mesmo do objeto `Storage`, e por
+ * isso a única que ainda usa `getStorage()`: `migrateLegacyValidationKeys`
+ * **enumera** o storage (`storage.length` e `storage.key(i)`) à procura das
+ * chaves `pdfValidation_*`. Num stub parcial, sem `key()`, não há como enumerar
+ * — pular a migração é a resposta correta, não um estreitamento.
  */
 function ensureLegacyMigration() {
-  if (legacyMigrationDone || typeof localStorage === 'undefined') return;
+  if (legacyMigrationDone) return;
+  const storage = getStorage();
+  if (!storage) return;
   legacyMigrationDone = true;
-  const removed = migrateLegacyValidationKeys(localStorage);
+  const removed = migrateLegacyValidationKeys(storage);
   if (removed > 0) {
     console.info(`[PDF Validation] ${removed} chaves de cache antigas consolidadas`);
   }
@@ -72,9 +118,9 @@ function ensureLegacyMigration() {
  * @returns {{available: boolean, url: string} | null} - Resultado do cache ou null se não encontrado/expirado
  */
 export function getCachedValidation(pdfId) {
-  if (!pdfId || typeof localStorage === 'undefined') return null;
+  if (!pdfId) return null;
   ensureLegacyMigration();
-  return readValidationEntry(localStorage, pdfId, Date.now());
+  return readValidationEntry(registroDeValidacao, pdfId, Date.now());
 }
 
 /**
@@ -83,9 +129,9 @@ export function getCachedValidation(pdfId) {
  * @param {{available: boolean, url: string}} result - Resultado da validação
  */
 export function cacheValidation(pdfId, result) {
-  if (!pdfId || !result || typeof localStorage === 'undefined') return;
+  if (!pdfId || !result) return;
   ensureLegacyMigration();
-  writeValidationEntry(localStorage, pdfId, result, Date.now());
+  writeValidationEntry(registroDeValidacao, pdfId, result, Date.now());
 }
 
 /**
@@ -93,16 +139,15 @@ export function cacheValidation(pdfId, result) {
  * @param {string} pdfId - PDF ID (base64)
  */
 export function invalidateValidationCache(pdfId) {
-  if (!pdfId || typeof localStorage === 'undefined') return;
-  removeValidationEntry(localStorage, pdfId);
+  if (!pdfId) return;
+  removeValidationEntry(registroDeValidacao, pdfId);
 }
 
 /**
  * Limpa todo o cache de validação
  */
 export function clearAllValidationCache() {
-  if (typeof localStorage === 'undefined') return;
-  clearValidationCache(localStorage);
+  clearValidationCache(registroDeValidacao);
 }
 
 /**

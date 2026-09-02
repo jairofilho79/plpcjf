@@ -7,7 +7,11 @@ import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   MANIFEST_SYNC_RETRY_DELAYS_MIN,
+  hasLouvoresManifestBaseline,
+  isManifestSyncBlocked,
   parseExpectedChecksumFromResponseBody,
+  readChecksumLastOkAt,
+  readManifestBodySha256,
   readManifestSyncPenalty,
   recordManifestSyncFailure,
   resetManifestSyncPenalty,
@@ -16,6 +20,7 @@ import {
   writeChecksumLastOkAt,
   writeManifestBodySha256
 } from './louvoresManifestChecksum.js';
+import { criarStorageQueLanca } from '../testing/fakeStorage.js';
 
 /** Storage de memória com a mesma interface de window.localStorage. */
 function criarStorage() {
@@ -85,5 +90,60 @@ describe('louvoresManifestChecksum', () => {
     assert.equal(final.failStreak, 0);
     assert.equal(final.nextRetryAt, 0);
     assert.equal(final.cooldownUntil, t + 24 * 60 * 60 * 1000);
+  });
+});
+
+/**
+ * Estas funções rodam dentro de `loadLouvores()`, no mount de `/`, `/listas`,
+ * `/biblioteca` e `/offline`. Um throw aqui não fica confinado: a rota não abre.
+ * Os dois cenários abaixo são as duas formas reais de storage bloqueado, e a
+ * guarda `typeof localStorage === 'undefined'` que existia antes falhava nas
+ * duas — na segunda, a própria linha da guarda lançava.
+ */
+describe('louvoresManifestChecksum com storage bloqueado', () => {
+  afterEach(() => {
+    delete globalThis.localStorage;
+  });
+
+  /** Faz `globalThis.localStorage` ser um getter que lança — Firefox estrito. */
+  function instalarGetterQueLanca() {
+    delete globalThis.localStorage;
+    Object.defineProperty(globalThis, 'localStorage', {
+      configurable: true,
+      get() {
+        const e = new Error('storage bloqueado');
+        e.name = 'SecurityError';
+        throw e;
+      }
+    });
+  }
+
+  /** Toda leitura devolve o mesmo default de storage ausente; nada lança. */
+  function verificarDefaults() {
+    assert.equal(readChecksumLastOkAt(), null);
+    assert.equal(readManifestBodySha256(), null);
+    assert.equal(hasLouvoresManifestBaseline(), false);
+    assert.deepEqual(readManifestSyncPenalty(), {
+      failStreak: 0,
+      nextRetryAt: 0,
+      cooldownUntil: 0
+    });
+    assert.equal(shouldFetchExpectedChecksum(1_000, true), false);
+    assert.equal(isManifestSyncBlocked(1_000), false);
+    // As escritas não lançam nem sinalizam falha ao chamador (contrato do módulo).
+    writeChecksumLastOkAt(1_000);
+    writeManifestBodySha256('a'.repeat(64));
+    recordManifestSyncFailure(1_000);
+    resetManifestSyncPenalty();
+  }
+
+  it('objeto presente cujos membros lançam: devolve os defaults, não lança', () => {
+    globalThis.localStorage = criarStorageQueLanca();
+    verificarDefaults();
+  });
+
+  it('getter global que lança (Firefox estrito): devolve os defaults, não lança', () => {
+    instalarGetterQueLanca();
+    verificarDefaults();
   });
 });

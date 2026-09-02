@@ -2,6 +2,10 @@
 // Handles synchronization between tabs and Service Worker notifications
 
 import { getConfig } from '$lib/offline/core/OfflineConfig.js';
+// `typeof localStorage === 'undefined'` não protegia nada: no Firefox com dados
+// bloqueados é o getter global que lança, e a própria guarda lançava. Ver o
+// comentário de topo de `safeStorage.js`.
+import { getStorage, safeGet, safeSet, safeRemove } from '$lib/utils/safeStorage.js';
 
 const CACHE_SYNC_CHANNEL = 'pdf-cache-sync';
 const CACHE_VERSION_KEY = 'pdfCacheVersion';
@@ -161,28 +165,38 @@ async function simpleHash(str) {
  * @returns {Promise<boolean>}
  */
 export async function checkCacheVersionChanged() {
-  if (typeof window === 'undefined' || typeof localStorage === 'undefined') {
+  if (typeof window === 'undefined' || !getStorage()) {
     return false;
   }
 
   try {
     const currentVersion = await getCacheVersion();
-    
+
     if (!currentVersion) {
       return false;
     }
 
-    const storedVersion = localStorage.getItem(CACHE_VERSION_KEY);
-    
+    const storedVersion = safeGet(CACHE_VERSION_KEY);
+
     if (!storedVersion) {
       // First time, store current version
-      localStorage.setItem(CACHE_VERSION_KEY, currentVersion);
+      if (!safeSet(CACHE_VERSION_KEY, currentVersion)) {
+        console.error('[Cache Sync] Failed to check cache version: gravação da versão recusada');
+      }
       return false;
     }
 
     if (storedVersion !== currentVersion) {
-      // Version changed, update stored version
-      localStorage.setItem(CACHE_VERSION_KEY, currentVersion);
+      // Version changed, update stored version.
+      // A gravação faz parte da resposta: o `true` promete que a versão nova
+      // ficou registada. Num storage que lê e recusa gravar (cota estourada), o
+      // `setItem` cru lançava, caía no `catch` abaixo e devolvia `false` — sem
+      // este `if`, quem chama remarcaria "precisa sincronizar" a cada foco de
+      // janela, para sempre, porque a versão nova nunca chega a ser gravada.
+      if (!safeSet(CACHE_VERSION_KEY, currentVersion)) {
+        console.error('[Cache Sync] Failed to check cache version: gravação da versão recusada');
+        return false;
+      }
       console.log('[Cache Sync] Cache version changed');
       return true;
     }
@@ -199,14 +213,16 @@ export async function checkCacheVersionChanged() {
  * @returns {Promise<void>}
  */
 export async function updateCacheVersion() {
-  if (typeof window === 'undefined' || typeof localStorage === 'undefined') {
+  if (typeof window === 'undefined' || !getStorage()) {
     return;
   }
 
   try {
     const version = await getCacheVersion();
-    if (version) {
-      localStorage.setItem(CACHE_VERSION_KEY, version);
+    if (version && !safeSet(CACHE_VERSION_KEY, version)) {
+      // Mesmo motivo do `clearCacheVersion`: `safeSet` engole a exceção que
+      // antes caía no `catch` abaixo, e o aviso tem de sobreviver a ela.
+      console.error('[Cache Sync] Failed to update cache version: gravação recusada');
     }
   } catch (error) {
     console.error('[Cache Sync] Failed to update cache version:', error);
@@ -217,15 +233,20 @@ export async function updateCacheVersion() {
  * Clear cache version (useful when cache is cleared)
  */
 export function clearCacheVersion() {
-  if (typeof window === 'undefined' || typeof localStorage === 'undefined') {
+  if (typeof window === 'undefined') {
     return;
   }
 
-  try {
-    localStorage.removeItem(CACHE_VERSION_KEY);
+  // Sem guarda de `getStorage()` aqui, de propósito: com o storage bloqueado
+  // ela devolveria `null` e esta função sairia calada, engolindo o
+  // `console.error` que o código antigo emitia — ficaríamos sem rasto nenhum
+  // na consola justamente no cenário desta fase (Firefox estrito a limpar
+  // dados). `safeRemove` devolve `false` só quando o acesso lançou, que é
+  // exatamente o caso que caía no `catch`, e nunca lança.
+  if (safeRemove(CACHE_VERSION_KEY)) {
     console.log('[Cache Sync] Cache version cleared');
-  } catch (error) {
-    console.error('[Cache Sync] Failed to clear cache version:', error);
+  } else {
+    console.error('[Cache Sync] Failed to clear cache version: acesso ao localStorage lançou');
   }
 }
 
