@@ -2,13 +2,17 @@
   import { AlertTriangle } from 'lucide-svelte';
   import { offline } from '$lib/stores/offline';
   import { browser } from '$app/environment';
+  import { safeGet } from '$lib/utils/safeStorage.js';
 
   const IS_LEITOR_OFFLINE_KEY = 'IS_LEITOR_OFFLINE';
 
   $: savedCategories = offline.getSavedCategories();
   $: hasCategoryDownloaded = savedCategories && savedCategories.length > 0;
   
-  $: isLeitorOffline = browser ? localStorage.getItem(IS_LEITOR_OFFLINE_KEY) === 'true' : false;
+  // Mesma leitura do `OfflineIndicator`, com o mesmo motivo para não ser crua:
+  // `localStorage` lança ao ser lida com dados de site bloqueados. `null` cai no
+  // mesmo `false` de antes — o alerta continua a aparecer, que é o certo.
+  $: isLeitorOffline = browser ? safeGet(IS_LEITOR_OFFLINE_KEY) === 'true' : false;
   
   $: requirementsMet = hasCategoryDownloaded && isLeitorOffline;
   $: showAlert = !requirementsMet;
