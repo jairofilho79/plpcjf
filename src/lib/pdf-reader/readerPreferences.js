@@ -1,6 +1,16 @@
 /**
  * Preferências persistidas do leitor de PDF em localStorage.
+ *
+ * Todos os acessos passam por `safeStorage`. A guarda antiga
+ * (`typeof window === 'undefined'`) foi removida de propósito: num navegador com
+ * dados de site bloqueados ela é falsa e deixava passar o `getItem` que lança.
+ * Como as três leituras correm em inicializador de instância de
+ * `routes/leitor/+page.svelte`, esse throw abortava a construção do componente e
+ * a página ficava em branco. `safeGet` devolve `null` nos dois casos — sem
+ * armazenamento e com armazenamento hostil.
  */
+
+import { safeGet, safeSet } from '../utils/safeStorage.js';
 
 const KEYS = {
   FIT_MODE: 'pdfPreferredFitMode',
@@ -12,8 +22,7 @@ const KEYS = {
  * @returns {'page-fit' | 'page-width'}
  */
 export function getFitMode() {
-  if (typeof window === 'undefined') return 'page-fit';
-  const saved = localStorage.getItem(KEYS.FIT_MODE);
+  const saved = safeGet(KEYS.FIT_MODE);
   return saved === 'page-width' || saved === 'page-fit' ? saved : 'page-fit';
 }
 
@@ -21,16 +30,14 @@ export function getFitMode() {
  * @param {'page-fit' | 'page-width'} mode
  */
 export function setFitMode(mode) {
-  if (typeof window === 'undefined') return;
-  localStorage.setItem(KEYS.FIT_MODE, mode);
+  safeSet(KEYS.FIT_MODE, mode);
 }
 
 /**
  * @returns {'horizontal' | 'vertical'}
  */
 export function getNavigationMode() {
-  if (typeof window === 'undefined') return 'horizontal';
-  const saved = localStorage.getItem(KEYS.NAV_MODE);
+  const saved = safeGet(KEYS.NAV_MODE);
   return saved === 'vertical' ? 'vertical' : 'horizontal';
 }
 
@@ -38,8 +45,7 @@ export function getNavigationMode() {
  * @param {'horizontal' | 'vertical'} mode
  */
 export function setNavigationMode(mode) {
-  if (typeof window === 'undefined') return;
-  localStorage.setItem(KEYS.NAV_MODE, mode);
+  safeSet(KEYS.NAV_MODE, mode);
 }
 
 /** Predefinições de brilho, em % — 100 é o padrão (sem filtro). */
@@ -50,15 +56,17 @@ export const DEFAULT_BRIGHTNESS = 100;
  * @returns {number}
  */
 export function getBrightness() {
-  if (typeof window === 'undefined') return DEFAULT_BRIGHTNESS;
-  const saved = Number(localStorage.getItem(KEYS.BRIGHTNESS));
-  return BRIGHTNESS_PRESETS.includes(saved) ? saved : DEFAULT_BRIGHTNESS;
+  const saved = safeGet(KEYS.BRIGHTNESS);
+  // `Number('')` e `Number(null)` dão 0, que não está nos presets — o
+  // `includes` abaixo já rejeita, mas o `saved === null` deixa a intenção clara.
+  if (saved === null) return DEFAULT_BRIGHTNESS;
+  const valor = Number(saved);
+  return BRIGHTNESS_PRESETS.includes(valor) ? valor : DEFAULT_BRIGHTNESS;
 }
 
 /**
  * @param {number} value
  */
 export function setBrightness(value) {
-  if (typeof window === 'undefined') return;
-  localStorage.setItem(KEYS.BRIGHTNESS, String(value));
+  safeSet(KEYS.BRIGHTNESS, String(value));
 }
