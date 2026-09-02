@@ -8,6 +8,8 @@
  * - Migração automática entre versões
  */
 
+import { safeKeys, safeRemoveMany } from './safeStorage.js';
+
 const STATS_CACHE_KEY = 'offlineStatsCache_v2';
 const STATS_CACHE_VERSION = 2;
 const STATS_CACHE_TTL = 24 * 60 * 60 * 1000; // 24 horas
@@ -53,9 +55,11 @@ export function initStatsCache() {
   try {
     // Verificar se existe cache antigo (Fase 2) e migrar
     const oldCacheKeys = [];
-    for (let i = 0; i < localStorage.length; i++) {
-      const key = localStorage.key(i);
-      if (key && key.startsWith('offlineStatsCache_') && !key.includes('_v2')) {
+    // `safeKeys()` em vez de `localStorage.length` + `.key(i)`: se o
+    // armazenamento lançar a meio, o laço cru perdia a lista toda para o
+    // `catch` de fora. `safeKeys` devolve o que conseguiu ler.
+    for (const key of safeKeys()) {
+      if (key.startsWith('offlineStatsCache_') && !key.includes('_v2')) {
         oldCacheKeys.push(key);
       }
     }
@@ -401,13 +405,16 @@ export function clearCache() {
     
     // Limpar também caches antigos (Fase 2)
     const keysToRemove = [];
-    for (let i = 0; i < localStorage.length; i++) {
-      const key = localStorage.key(i);
-      if (key && key.startsWith('offlineStatsCache_')) {
+    // Mesma troca da `initStatsCache`: enumerar cru descartava a lista inteira
+    // se o storage lançasse a meio do laço.
+    for (const key of safeKeys()) {
+      if (key.startsWith('offlineStatsCache_')) {
         keysToRemove.push(key);
       }
     }
-    keysToRemove.forEach(key => localStorage.removeItem(key));
+    // `safeRemoveMany` tenta todas as chaves; a sequência crua de `removeItem`
+    // abortava na primeira que lançasse e deixava as restantes para trás.
+    safeRemoveMany(keysToRemove);
     
     console.log('[Stats Cache] Cache cleared');
   } catch (error) {
