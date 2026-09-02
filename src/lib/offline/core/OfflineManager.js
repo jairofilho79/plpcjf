@@ -105,7 +105,15 @@ class OfflineManager {
           const u = new URL(url);
           return PdfPathManager.createRequestUrl(decodeURIComponent(u.pathname), u.origin);
         });
-        logger.info(`Migração NFC: ${r.migradas} migradas, ${r.mantidas} mantidas, ${r.erros} erros`);
+        logger.info(
+          `Migração NFC: ${r.migradas} migradas, ${r.mantidas} mantidas, ${r.preservadas} preservadas, ${r.erros} erros`
+        );
+        if (r.preservadas > 0) {
+          // A guarda da Fase 6 recusou apagar: a chave nova mudava mais do que
+          // a forma Unicode. As duas ficaram, e nenhum PDF se perdeu — mas é
+          // sinal de caminho com `%` aninhado no acervo, que merece olhada.
+          logger.warn(`Migração NFC preservou ${r.preservadas} chave(s) que não eram só NFC`);
+        }
         if (r.erros === 0) localStorage.setItem(NFC_MIGRATION_FLAG, 'true');
       } catch (error) {
         logger.warn('Migração NFC falhou (não crítico)', error);
