@@ -114,10 +114,18 @@ function ensureLegacyMigration() {
   if (legacyMigrationDone) return;
   const storage = getStorage();
   if (!storage) return;
-  legacyMigrationDone = true;
-  const removed = migrateLegacyValidationKeys(storage);
-  if (removed > 0) {
-    console.info(`[PDF Validation] ${removed} chaves de cache antigas consolidadas`);
+
+  const { removidas, restantes } = migrateLegacyValidationKeys(storage);
+
+  // A marca vem DEPOIS da migração, e só quando não sobrou chave antiga
+  // nenhuma. Marcá-la antes — como estava — transformava qualquer tentativa
+  // falhada num "já foi" definitivo para o resto da sessão, e o aparelho onde
+  // a migração falha é precisamente o único que precisa mesmo dela: o que tem
+  // o storage cheio de chaves antigas.
+  legacyMigrationDone = restantes === 0;
+
+  if (removidas > 0) {
+    console.info(`[PDF Validation] ${removidas} chaves de cache antigas consolidadas`);
   }
 }
 
