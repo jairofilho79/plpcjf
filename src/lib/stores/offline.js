@@ -59,6 +59,7 @@ import {
   getCategoryAvailabilityStats,
   getRequiredPackagesInfo
 } from './offlineStats.js';
+import { safeRemoveMany } from '$lib/utils/safeStorage.js';
 
 const ALLOW_OFFLINE_KEY = 'ALLOW_OFFLINE';
 const CACHED_PDFS_KEY = 'cachedPdfsList';
@@ -1901,12 +1902,27 @@ async function clearAllCache() {
     invalidateCachedPDFsLocal();
     
     // Clear localStorage
-    localStorage.removeItem(ALLOW_OFFLINE_KEY);
-    localStorage.removeItem(CACHED_PDFS_KEY);
-    localStorage.removeItem(LAST_MANIFEST_HASH_KEY);
-    localStorage.removeItem(SELECTED_CATEGORIES_KEY);
-    localStorage.removeItem(DOWNLOADED_CATEGORIES_KEY);
-    localStorage.removeItem(OFFLINE_CATEGORIAS_SALVAS);
+    // Tenta remover todas as chaves de uma vez, mesmo que alguma falhe no meio:
+    // seis removeItem crus em sequência abortavam no primeiro que lançasse e
+    // deixavam o resto de pé (ex.: ALLOW_OFFLINE_KEY limpa mas categorias
+    // baixadas intactas, fazendo o app achar que não tem permissão de offline
+    // e mesmo assim continuar listando categorias como baixadas).
+    const { removed, failed } = safeRemoveMany([
+      ALLOW_OFFLINE_KEY,
+      CACHED_PDFS_KEY,
+      LAST_MANIFEST_HASH_KEY,
+      SELECTED_CATEGORIES_KEY,
+      DOWNLOADED_CATEGORIES_KEY,
+      OFFLINE_CATEGORIAS_SALVAS
+    ]);
+    if (failed.length > 0) {
+      const total = removed.length + failed.length;
+      const erro = new Error(
+        `Erro ao limpar cache: ${removed.length} de ${total} chaves removidas`
+      );
+      erro.failed = failed;
+      throw erro;
+    }
     // Sem PDFs no cache, retomar um download interrompido não faz sentido.
     clearAllCompletedParts(safeStorage());
     
