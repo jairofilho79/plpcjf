@@ -103,7 +103,10 @@
   $: file = searchParams.get('file') ?? '/pdfs/exemplo.pdf';
   $: titulo = searchParams.get('titulo') ?? '';
   $: subtitulo = searchParams.get('subtitulo') ?? '';
-  $: skipValidation = searchParams.get('validated') === 'true';
+  // `?validated=true` deixou de ser lido: quem chega aqui já não validou nada
+  // antes, e o caminho de carregamento resolve a origem primeiro em todos os
+  // casos. Links antigos que ainda tragam o parâmetro continuam a abrir — ele
+  // é simplesmente ignorado.
 
   let currentPage = 1;
   let totalPages = 0;
@@ -151,6 +154,13 @@
     | 'retryableError'
     | 'fatalError'
     | 'forceOnlineLoading';
+
+  // A única mensagem que tem uma ação óbvia por trás: baixar o material. Vive
+  // numa constante porque o banner precisa de a reconhecer para oferecer o
+  // caminho para /offline — `navigator.onLine` sozinho não serve, não é
+  // reativo e mente com o Wi-Fi ligado sem internet.
+  const MSG_INDISPONIVEL_OFFLINE =
+    'PDF não está disponível offline. Por favor, baixe primeiro na página de configuração offline.';
 
   let pdfUiState: PdfUiState = 'idle';
   let pdfUiMessage: string | null = null;
@@ -343,7 +353,7 @@
             }
           } else {
             // PDF not available and cannot be downloaded
-            setPdfUi('fatalError', 'PDF não está disponível offline. Por favor, baixe primeiro na página de configuração offline.');
+            setPdfUi('fatalError', MSG_INDISPONIVEL_OFFLINE);
             return;
           }
         }
@@ -767,12 +777,11 @@
     // PDF.js carregado com sucesso, ocultar loading
     pdfLoading = false;
     
-    // Use direct load if validation was already done (skipValidation flag)
-    if (skipValidation) {
-      await loadDirectly(file);
-    } else {
-      await load(file);
-    }
+    // Sempre pela resolução direta: `loadDirectly` pede o PDF pela ordem
+    // normal — cache do Service Worker, depois rede — e só cai em `load`, que
+    // valida e diagnostica, quando isso falha. A ordem antiga fazia o
+    // contrário: validava toda a gente para servir o caso raro.
+    await loadDirectly(file);
 
     cleanup = () => {
       window.removeEventListener('resize', resize);
@@ -918,7 +927,7 @@
     const tituloParam = encodeURIComponent(louvor.nome || '');
     const subtituloText = `${louvor.categoria || ''} | ${louvor.classificacao || ''}`.trim();
     const subtituloParam = encodeURIComponent(subtituloText);
-    goto(`/leitor?file=${fileParam}&titulo=${tituloParam}&subtitulo=${subtituloParam}&validated=true`, { replaceState: true });
+    goto(`/leitor?file=${fileParam}&titulo=${tituloParam}&subtitulo=${subtituloParam}`, { replaceState: true });
   }
   
   // Função para toggle da barra superior (fullscreen)
@@ -1056,7 +1065,8 @@
   
   // Reload if the file query param changes, but only when it actually changes
   $: if (viewer && file && file !== lastLoadedFile) {
-    Promise.resolve().then(() => load(file));
+    // Mesma ordem da primeira carga: resolver primeiro, diagnosticar só se falhar.
+    Promise.resolve().then(() => loadDirectly(file));
   }
 </script>
 
@@ -1797,7 +1807,7 @@
         Buscar online
       </button>
     {/if}
-    {#if !navigator.onLine}
+    {#if !navigator.onLine || pdfError === MSG_INDISPONIVEL_OFFLINE}
       <button class="error-button" on:click={() => window.location.href = '/offline'}>
         Ir para Configuração Offline
       </button>
