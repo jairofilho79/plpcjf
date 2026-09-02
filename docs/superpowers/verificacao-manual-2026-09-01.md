@@ -73,8 +73,8 @@ projeto não usa. Isto é o que deixou de ter cobertura automatizada:
 
 ## 3. Pendências conhecidas — decididas, não esquecidas
 
-Nenhuma bloqueia o uso da branch. Todas foram encontradas durante a execução e deixadas de fora com
-razão registrada.
+Nenhuma bloqueia o uso da branch. As três que restam abaixo foram encontradas durante a execução e
+deixadas de fora com razão registrada.
 
 > Quatro destas pendências foram corrigidas em 2026-09-01 pelo plano
 > `docs/superpowers/plans/2026-09-01-pendencias-conhecidas.md`: a checagem de
