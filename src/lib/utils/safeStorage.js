@@ -58,7 +58,8 @@ export function getStorage() {
     if (
       typeof storage.getItem !== 'function' ||
       typeof storage.setItem !== 'function' ||
-      typeof storage.removeItem !== 'function'
+      typeof storage.removeItem !== 'function' ||
+      typeof storage.key !== 'function'
     ) {
       return null;
     }
@@ -150,6 +151,12 @@ export function safeRemoveMany(keys) {
   const removed = [];
   /** @type {string[]} */
   const failed = [];
+  // Uma string É iterável. Sem esta linha, `safeRemoveMany('offlinePermission')`
+  // — passar uma chave onde se queria uma lista, o erro de chamada mais provável
+  // — itera os 17 caracteres e reporta ter removido 17 chaves de uma letra.
+  if (typeof keys === 'string' || !keys || typeof keys[Symbol.iterator] !== 'function') {
+    return { removed, failed };
+  }
   try {
     for (const key of keys) {
       if (safeRemove(key)) removed.push(key);

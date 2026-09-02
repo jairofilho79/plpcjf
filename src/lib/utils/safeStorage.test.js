@@ -76,6 +76,9 @@ describe('safeStorage — caminho feliz', () => {
 
   it('safeKeys devolve todas as chaves', () => {
     assert.deepEqual(safeKeys(), ['a', 'b', 'c']);
+    // O comprimento explícito é o que apanha um `i <= total`: `key(3)` devolve
+    // `null` e o filtro de nulos comeria a volta extra em silêncio.
+    assert.equal(safeKeys().length, 3);
   });
 
   it('safeRemoveMany remove todas e não reporta falha nenhuma', () => {
@@ -234,8 +237,16 @@ describe('safeStorage — SSR, sem localStorage nenhum', () => {
 describe('safeStorage — entradas hostis', () => {
   afterEach(desinstalar);
 
-  for (const impostor of [42, 'abc', true, {}, { getItem: 1 }]) {
-    it(`getStorage recusa ${JSON.stringify(impostor)}: não é Storage`, () => {
+  const impostores = [
+    ['número', 42],
+    ['string', 'abc'],
+    ['booleano', true],
+    ['objeto vazio', {}],
+    ['getItem que não é função', { getItem: 1 }],
+    ['stub sem key()', { getItem() {}, setItem() {}, removeItem() {} }]
+  ];
+  for (const [nome, impostor] of impostores) {
+    it(`getStorage recusa ${nome}: não é Storage`, () => {
       globalThis.window = {};
       instalar(impostor);
       // Extensões de privacidade trocam `window.localStorage` por stubs assim.
@@ -247,7 +258,7 @@ describe('safeStorage — entradas hostis', () => {
   it('safeRemoveMany não lança com lista inválida', () => {
     globalThis.window = {};
     instalar(criarFakeStorage({ a: '1' }));
-    for (const invalida of [undefined, null, 42, { nao: 'iteravel' }]) {
+    for (const invalida of [undefined, null, 42, { nao: 'iteravel' }, 'offlinePermission']) {
       assert.doesNotThrow(() => safeRemoveMany(/** @type {any} */ (invalida)));
       assert.deepEqual(safeRemoveMany(/** @type {any} */ (invalida)), { removed: [], failed: [] });
     }
@@ -271,6 +282,35 @@ describe('safeStorage — entradas hostis', () => {
     }));
     // Descartar o parcial faria a faxina concluir "nada a limpar".
     assert.deepEqual(safeKeys(), ['k1', 'k2']);
+  });
+});
+
+describe('safeRemoveMany — iteráveis que não são array', () => {
+  afterEach(desinstalar);
+
+  it('aceita Set e gerador, recusa string', () => {
+    globalThis.window = {};
+    instalar(criarFakeStorage({ a: '1', b: '2', ab: '3' }));
+
+    assert.deepEqual(safeRemoveMany(new Set(['a', 'b'])), { removed: ['a', 'b'], failed: [] });
+    assert.equal(safeGet('ab'), '3');
+
+    // 'ab' como string daria removed: ['a','b'] — duas chaves que não foram
+    // pedidas — e deixaria a chave 'ab', que era a pedida, de pé.
+    assert.deepEqual(safeRemoveMany('ab'), { removed: [], failed: [] });
+    assert.equal(safeGet('ab'), '3');
+  });
+
+  it('preserva o parcial quando o iterável lança no meio', () => {
+    globalThis.window = {};
+    instalar(criarFakeStorage({ a: '1', b: '2', c: '3' }));
+    function* comFalha() {
+      yield 'a';
+      yield 'b';
+      throw new Error('iterável quebrado');
+    }
+    assert.deepEqual(safeRemoveMany(comFalha()), { removed: ['a', 'b'], failed: [] });
+    assert.equal(safeGet('c'), '3');
   });
 });
 
