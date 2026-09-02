@@ -96,13 +96,19 @@ export function buildPdfCacheIndex(cachedUrls, options = {}) {
  * sob `node --test`; `pdfValidation.js` é da Lane A e também não carrega. Este
  * módulo carrega, e é o ponto que os dois lados partilham.
  *
+ * `findMissingPdfs` faz duas guardas — `!louvor.pdfId` e depois `!pdfPath` —,
+ * aqui há uma só, de propósito: `getPdfRelPath` já devolve `null` para louvor
+ * ausente, sem `pdfId` ou com `pdfId` que não seja string, e a mesma linha
+ * apanha ainda o `pdfId` que existe mas não decodifica. A guarda separada seria
+ * inalcançável como decisão — nenhum teste conseguiria distingui-la de `if
+ * (false)` — e fingir que há duas decisões onde há uma só engana quem ler.
+ * O comportamento é idêntico ao daquele arquivo em todos os casos.
+ *
  * @param {any} louvor
  * @param {PdfCacheIndex} indice
  * @returns {boolean}
  */
 export function louvorFaltaNoIndice(louvor, indice) {
-  if (!louvor?.pdfId) return false;
-
   const pdfPath = getPdfRelPath(louvor);
   if (!pdfPath) return false;
 

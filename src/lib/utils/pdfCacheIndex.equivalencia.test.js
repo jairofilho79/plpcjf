@@ -102,11 +102,12 @@ function caminhosDaFixture() {
   return Object.values(fixture.grupos).flat();
 }
 
+const CAMINHO_MANIFESTO = path.join(RAIZ, 'louvores-manifest.json');
+
 /** Os 4629 caminhos reais, quando o manifesto (não versionado) está presente. */
 function caminhosDoManifesto() {
-  const arquivo = path.join(RAIZ, 'louvores-manifest.json');
-  if (!fs.existsSync(arquivo)) return null;
-  const dados = JSON.parse(fs.readFileSync(arquivo, 'utf8'));
+  if (!fs.existsSync(CAMINHO_MANIFESTO)) return null;
+  const dados = JSON.parse(fs.readFileSync(CAMINHO_MANIFESTO, 'utf8'));
   return dados.map((/** @type {{pdfId: string}} */ l) => {
     let p = Buffer.from(l.pdfId, 'base64').toString('utf8').replace(/^\/+/, '').trim();
     if (!p.toLowerCase().startsWith('assets/')) p = `assets/${p}`;
@@ -187,9 +188,16 @@ describe('B3 — o caminho novo conta o mesmo que findMissingPdfs', () => {
     assert.equal(contarFaltantesPeloIndice(dois, cache), 1);
   });
 
-  it('sobre os 4629 caminhos reais do acervo, os dois contam igual', () => {
+  it('sobre os 4629 caminhos reais do acervo, os dois contam igual', (t) => {
     const reais = caminhosDoManifesto();
-    if (!reais) return; // manifesto não versionado: o teste vira no-op fora da máquina do dono
+    if (!reais) {
+      // Salto explícito, não `return`. Este é o teste que o brief chamou o mais
+      // importante do lote, e o manifesto não é versionado: se a ausência
+      // passasse por verde, uma corrida noutra worktree daria a equivalência
+      // por provada sem ter afirmado nada.
+      t.skip(`${CAMINHO_MANIFESTO} não existe (não é versionado). Copie-o para a raiz do repo para correr este teste.`);
+      return;
+    }
     const todos = reais.map(louvorDe);
     for (const fatia of [0, 1, 500, 2314, reais.length - 1, reais.length]) {
       const cache = reais.slice(0, fatia).map(chave);
@@ -297,9 +305,12 @@ describe('B4 — toComparablePath deixa de lançar em caminho relativo', () => {
     }
   });
 
-  it('o índice construído sobre os 4629 caminhos reais tem o mesmo tamanho', () => {
+  it('o índice construído sobre os 4629 caminhos reais tem o mesmo tamanho', (t) => {
     const reais = caminhosDoManifesto();
-    if (!reais) return;
+    if (!reais) {
+      t.skip(`${CAMINHO_MANIFESTO} não existe (não é versionado). Copie-o para a raiz do repo para correr este teste.`);
+      return;
+    }
     const indice = buildPdfCacheIndex(reais.map(chave), {
       normalize: PdfPathManager.normalizeForStorage
     });

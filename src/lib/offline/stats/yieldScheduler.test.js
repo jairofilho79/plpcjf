@@ -73,23 +73,47 @@ describe('criarCedente', () => {
     assert.equal(agendador.cedencias, 1);
   });
 
-  it('numa varredura de 4629 louvores as cedências reais são muito menos que 95', async () => {
+  it('numa varredura de 4629 louvores cede muito menos que 95 — e cede mesmo quando o trabalho é lento', async () => {
     // 95 é o número de esperas de hoje — uma por chunk de 50, cada uma travada
     // em 1 s pelo clamp do Chrome em aba não visível.
-    const agendador = agendadorContado();
-    const cedente = criarCedente({ orcamentoMs: 16, agendar: agendador.agendar });
+    //
+    // As duas metades importam. Só o limite superior seria satisfeito por um
+    // cedente que nunca cede — que é o pior resultado possível, não o melhor.
+    // Só o inferior não diria nada sobre o ganho. Aqui o mesmo cedente é
+    // exercitado nas duas pontas: laço rápido (este Mac) e laço lento
+    // (dispositivo 100x mais lento, simulado escalando o relógio).
 
-    let soma = 0;
-    for (let i = 0; i < 4629; i++) {
-      soma += i % 7;
-      await cedente.talvezCeder();
+    /** @param {number} fator @returns {Promise<number>} */
+    async function varrer(fator) {
+      const agendador = agendadorContado();
+      const base = performance.now();
+      const cedente = criarCedente({
+        orcamentoMs: 16,
+        agendar: agendador.agendar,
+        agora: () => base + (performance.now() - base) * fator
+      });
+      let soma = 0;
+      for (let i = 0; i < 4629; i++) {
+        soma += i % 7;
+        await cedente.talvezCeder();
+      }
+      assert.equal(soma > 0, true);
+      return agendador.cedencias;
     }
 
-    assert.equal(soma > 0, true);
+    const rapido = await varrer(1);
     assert.equal(
-      agendador.cedencias < 95,
+      rapido < 95,
       true,
-      `cedeu ${agendador.cedencias} vezes; hoje são 95 esperas de 1 s`
+      `laço rápido cedeu ${rapido} vezes; hoje são 95 esperas de 1 s`
+    );
+
+    const lento = await varrer(100);
+    assert.equal(lento >= 1, true, 'com o trabalho lento o cedente tem de ceder alguma vez');
+    assert.equal(
+      lento < 95,
+      true,
+      `mesmo 100x mais lento cedeu ${lento} vezes, e deviam ser menos que 95`
     );
   });
 
