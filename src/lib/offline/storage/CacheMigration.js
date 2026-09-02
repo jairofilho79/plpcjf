@@ -8,6 +8,7 @@ import { createLogger } from '../utils/OfflineLogger.js';
 import { browser } from '$app/environment';
 import { getConfig } from '../core/OfflineConfig.js';
 import { decodeUrlUtf8 } from '$lib/utils/urlEncoding.js';
+import { safeGet, safeSet, safeRemove } from '$lib/utils/safeStorage.js';
 
 const logger = createLogger('CacheMigration');
 const MIGRATION_COMPLETE_KEY = 'cache_migration_v1_complete';
@@ -27,7 +28,7 @@ export class CacheMigration {
     }
 
     // Check if migration was already completed
-    const migrationComplete = localStorage.getItem(MIGRATION_COMPLETE_KEY);
+    const migrationComplete = safeGet(MIGRATION_COMPLETE_KEY);
     if (migrationComplete === 'true') {
       return false;
     }
@@ -57,7 +58,7 @@ export class CacheMigration {
     // `pdfCacheNfcMigration.js`: sai cedo se já concluída, e só marca a flag
     // numa saída limpa (abaixo), para que um erro deixe a próxima chamada
     // tentar de novo em vez de desistir silenciosamente.
-    if (localStorage.getItem(MIGRATION_COMPLETE_KEY) === 'true') {
+    if (safeGet(MIGRATION_COMPLETE_KEY) === 'true') {
       logger.debug('Migração já concluída, pulando nova varredura.');
       return { migrated: 0, errors: 0 };
     }
@@ -70,7 +71,12 @@ export class CacheMigration {
       
       if (pdfs.length === 0) {
         logger.info('No PDFs to migrate');
-        localStorage.setItem(MIGRATION_COMPLETE_KEY, 'true');
+        const gravou = safeSet(MIGRATION_COMPLETE_KEY, 'true');
+        if (!gravou) {
+          logger.warn(
+            'Migração concluída, mas a marca não gravou — vai repetir no próximo arranque'
+          );
+        }
         return { migrated: 0, errors: 0 };
       }
 
@@ -129,7 +135,12 @@ export class CacheMigration {
       // pdfCacheNfcMigration.js faz. Com erros, a flag fica ausente e a
       // próxima chamada tenta de novo, em vez de desistir para sempre.
       if (errors === 0) {
-        localStorage.setItem(MIGRATION_COMPLETE_KEY, 'true');
+        const gravou = safeSet(MIGRATION_COMPLETE_KEY, 'true');
+        if (!gravou) {
+          logger.warn(
+            'Migração concluída, mas a marca não gravou — vai repetir no próximo arranque'
+          );
+        }
       }
 
       logger.info(`Migration complete: ${migrated} migrated, ${errors} errors`);
@@ -146,7 +157,7 @@ export class CacheMigration {
    */
   resetMigrationFlag() {
     if (browser) {
-      localStorage.removeItem(MIGRATION_COMPLETE_KEY);
+      safeRemove(MIGRATION_COMPLETE_KEY);
     }
   }
 }
