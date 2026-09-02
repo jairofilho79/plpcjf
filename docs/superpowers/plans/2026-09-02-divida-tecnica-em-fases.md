@@ -339,7 +339,9 @@ Hoje isso está contido por uma guarda `!isLoadingStats` no sítio de chamada do
 - **Detectar "já normalizado"** foi descartada: não há como distinguir, só olhando a string, `%` literal de `%` de escape. Resolveria o sintoma, não a causa.
 - **Tornar a migração não-destrutiva** é o que esta fase faz. Local, testável sem navegador, **sem tocar em `PdfPathManager.js`**.
 
-**A guarda óbvia não funciona, e isso foi testado:** "só apague se `canonicalizar(chaveNova)` for ponto fixo" dá `true` mesmo para a chave corrompida — a corrupção é estável sob `canonicalizar`. A guarda que funciona é mais estreita e mais fiel ao nome da migração: **uma migração NFC só deveria mudar a forma Unicode, nada mais.** Antes de apagar a chave antiga, decodificar as duas pathnames com `decodeURIComponent` e comparar depois de `.normalize('NFC')` nas duas. Se sobrar qualquer diferença além da forma Unicode — sinal de que o tratamento de `%` mexeu em conteúdo — **não apagar**: manter as duas chaves e contar à parte. O próprio código já documenta que duas chaves apontando para o mesmo PDF é inofensivo.
+**A guarda óbvia não funciona, e isso foi testado:** "só apague se `canonicalizar(chaveNova)` for ponto fixo" dá `true` mesmo para a chave corrompida — a corrupção é estável sob `canonicalizar`. A guarda que funciona é mais estreita e mais fiel ao nome da migração: **uma migração NFC só deveria mudar a forma Unicode, nada mais.** Antes de apagar a chave antiga, decodificar as duas pathnames com `decodeURIComponent` e comparar depois de `.normalize('NFC')` nas duas. Se sobrar qualquer diferença além da forma Unicode — sinal de que o tratamento de `%` mexeu em conteúdo — **não apagar**: pular a entrada inteira e contar à parte.
+
+> **Correção aplicada na Fase 8 (Task 7).** A Fase 6 escreveu esta guarda *depois* do `put`, e por isso descrevia o resultado como "manter as duas chaves": quando ela recusava, a chave nova já tinha sido gravada e ficava órfã no cache. A guarda passou a decidir **antes** do `put` — numa recusa, nada é lido, nada é gravado, nada é apagado, e o cache fica exatamente como estava. O comportamento correto é **uma** chave, não duas.
 
 ## Task 1: o teste que documenta o defeito
 
@@ -358,7 +360,7 @@ O teste principal **afirma o defeito atual**, não o esconde: gera `%` aninhado 
 
 Implementar a guarda descrita acima no ponto de deleção. Manter a mecânica de "grava a nova antes de apagar a velha" que já existe e já é testada.
 
-**O teste que fecha o buraco real:** hoje `pdfCacheNfcMigration.test.js` usa um `canonicalizar` de brinquedo (linhas 41-45) que decodifica uma vez e recodifica — sempre seguro, e por isso nunca expõe o problema. O teste novo tem de usar o `canonicalizar` **real** de `OfflineManager.js` contra uma chave construída com `%` aninhado, e afirmar que a migração **mantém as duas chaves** em vez de apagar a original.
+**O teste que fecha o buraco real:** hoje `pdfCacheNfcMigration.test.js` usa um `canonicalizar` de brinquedo (linhas 41-45) que decodifica uma vez e recodifica — sempre seguro, e por isso nunca expõe o problema. O teste novo tem de usar o `canonicalizar` **real** de `OfflineManager.js` contra uma chave construída com `%` aninhado, e afirmar que a migração **mantém a chave original intacta** em vez de apagá-la. (A Fase 6 redigiu isto como "mantém as duas chaves", o que só era verdade porque a guarda corria depois do `put`; a Fase 8 inverteu a ordem e o esperado passou a ser uma chave só.)
 
 ---
 
