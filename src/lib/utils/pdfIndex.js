@@ -5,6 +5,7 @@ import { getCachedPDFsFast, waitForServiceWorker, debugLog } from '$lib/utils/sw
 import { getPdfRelPath } from '$lib/utils/pathUtils';
 import PdfPathManager from '$lib/offline/utils/PdfPathManager.js';
 import { buildPdfCacheIndex } from './pdfCacheIndex.js';
+import { criarCedente } from '../offline/stats/yieldScheduler.js';
 
 const PDF_INDEX_KEY = 'pdfAvailabilityIndex';
 // #22.3: bumpado de 1 para 2 porque o índice gravado antes desta versão foi
@@ -29,7 +30,7 @@ const DEBOUNCE_DELAY = 2000; // 2 segundos para agrupar chamadas
 
 /**
  * Generates availability index for PDFs
- * Processes in chunks to avoid blocking UI
+ * Uma passagem só, cedendo a thread por orçamento de relógio
  * @param {Array} louvores - Array of louvor objects
  * @returns {Promise<Map<string, boolean>>}
  */
@@ -56,45 +57,31 @@ export async function generatePdfIndex(louvores) {
       normalize: (path) => PdfPathManager.normalizeForStorage(path)
     });
 
-    // Process in chunks to avoid blocking UI
-    const CHUNK_SIZE = 50; // Process 50 PDFs at a time
-    const total = louvores.length;
-    let processed = 0;
+    // Uma passagem, cedência por relógio — a mesma correção já feita na
+    // varredura de estatísticas, pelo mesmo motivo e no mesmo módulo.
+    //
+    // O laço antigo fatiava os 4629 louvores em chunks de 50 (93 chunks) e
+    // esperava, entre cada dois, um `requestIdleCallback` com `timeout: 50` ou,
+    // onde ele não existe — Safari < 17.4, ou seja iOS 16 —, um `setTimeout(…, 0)`
+    // aninhado. A partir do quinto nível de aninhamento o navegador trava esse
+    // temporizador em 1000 ms com a aba não visível, e é exatamente essa a
+    // situação aqui: `updatePdfIndexInBackground(…, true, true)` corre logo
+    // depois de cada descarga, que acontece depois de um `window.open()`.
+    // Eram ~93 s de espera pura, com o índice a ficar velho durante todo esse
+    // tempo. `criarCedente` mede o relógio e agenda por `MessageChannel`, que
+    // não é temporizador e não sofre clamp nenhum.
+    //
+    // A ordem de visita, as chaves e os valores são os mesmos do laço de chunks:
+    // o que mudou foi só quando se cede, nunca o que se escreve.
+    const cedente = criarCedente();
 
-    // Helper function to process a chunk
-    const processChunk = (chunk) => {
-      for (const louvor of chunk) {
-        if (!louvor.pdfId) {
-          continue;
-        }
-
+    for (const louvor of louvores) {
+      if (louvor.pdfId) {
         const pdfPath = getPdfRelPath(louvor);
-        if (!pdfPath) {
-          index.set(louvor.pdfId, false);
-          continue;
-        }
-
-        index.set(louvor.pdfId, cacheIndex.has(pdfPath));
+        index.set(louvor.pdfId, pdfPath ? cacheIndex.has(pdfPath) : false);
       }
-    };
 
-    // Process all chunks with yield to browser between chunks
-    for (let i = 0; i < total; i += CHUNK_SIZE) {
-      const chunk = louvores.slice(i, i + CHUNK_SIZE);
-      processChunk(chunk);
-      processed += chunk.length;
-
-      // Yield to browser after each chunk to allow UI updates
-      // Use requestIdleCallback if available, otherwise setTimeout
-      if (i + CHUNK_SIZE < total) {
-        await new Promise(resolve => {
-          if (typeof requestIdleCallback !== 'undefined') {
-            requestIdleCallback(resolve, { timeout: 50 });
-          } else {
-            setTimeout(resolve, 0);
-          }
-        });
-      }
+      await cedente.talvezCeder();
     }
 
     debugLog(`[PDF Index] Generated index for ${index.size} PDFs`);
