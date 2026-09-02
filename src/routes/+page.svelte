@@ -522,6 +522,21 @@
   function getGroupKey(group) {
     return group.groupId || group.materials?.[0]?.pdfId || '';
   }
+
+  // Estado do botão "Tentar novamente" do estado vazio: loadLouvores() não
+  // muda louvoresLoaded e tenta de novo sozinha com backoff (até
+  // MANIFEST_RETRY_MAX_ATTEMPTS), então sem isto o botão parece não fazer
+  // nada por vários segundos.
+  let isRetryingLouvores = false;
+
+  async function handleRetryLoadLouvores() {
+    isRetryingLouvores = true;
+    try {
+      await loadLouvores();
+    } finally {
+      isRetryingLouvores = false;
+    }
+  }
 </script>
 
 <svelte:head>
@@ -624,8 +639,13 @@
     {:else if homeEmptyState === 'catalogo-vazio'}
       <div class="empty-state-message">
         <p>Não foi possível carregar a lista de louvores.</p>
-        <button type="button" class="empty-state-action" on:click={() => loadLouvores()}>
-          Tentar novamente
+        <button
+          type="button"
+          class="empty-state-action"
+          on:click={handleRetryLoadLouvores}
+          disabled={isRetryingLouvores}
+        >
+          {isRetryingLouvores ? 'Tentando novamente…' : 'Tentar novamente'}
         </button>
       </div>
     {:else if homeEmptyState === 'materiais-vazios'}

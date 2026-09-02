@@ -106,16 +106,30 @@ describe('conformidade dos sítios de chamada', () => {
     /** @type {string[]} */
     const ofensores = [];
 
+    // Global (não `.match` simples) e aceitando aspas simples ou duplas: um
+    // arquivo pode ter mais de um `createLogger(...)` vinculado, e nem todo
+    // sítio usa aspas simples.
+    const padraoVinculo = /createLogger\(\s*(['"])([^'"]+)\1\s*\)/g;
+
     for (const caminho of arquivosJs(raiz)) {
       const fonte = readFileSync(caminho, 'utf8');
-      const vinculo = fonte.match(/createLogger\('([^']+)'\)/);
-      if (!vinculo) continue;
+      /** @type {Set<string>} */
+      const modulos = new Set();
+      for (const vinculo of fonte.matchAll(padraoVinculo)) {
+        modulos.add(vinculo[2]);
+      }
+      if (modulos.size === 0) continue;
 
-      const modulo = vinculo[1];
-      const padrao = new RegExp(`logger\\.(error|warn|info|debug)\\(\\s*'${modulo}'\\s*,`, 'g');
-      for (const achado of fonte.matchAll(padrao)) {
-        const linha = fonte.slice(0, achado.index).split('\n').length;
-        ofensores.push(`${caminho}:${linha}`);
+      for (const modulo of modulos) {
+        const moduloEscapado = modulo.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const padrao = new RegExp(
+          `logger\\.(error|warn|info|debug)\\(\\s*(['"])${moduloEscapado}\\2\\s*,`,
+          'g'
+        );
+        for (const achado of fonte.matchAll(padrao)) {
+          const linha = fonte.slice(0, achado.index).split('\n').length;
+          ofensores.push(`${caminho}:${linha}`);
+        }
       }
     }
 

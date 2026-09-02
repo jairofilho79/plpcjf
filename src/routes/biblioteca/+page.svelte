@@ -556,6 +556,21 @@
     return group.groupId || group.materials?.[0]?.pdfId || '';
   }
 
+  // Estado do botão "Tentar novamente" do estado vazio: loadLouvores() não
+  // muda louvoresLoaded e tenta de novo sozinha com backoff (até
+  // MANIFEST_RETRY_MAX_ATTEMPTS), então sem isto o botão parece não fazer
+  // nada por vários segundos.
+  let isRetryingLouvores = false;
+
+  async function handleRetryLoadLouvores() {
+    isRetryingLouvores = true;
+    try {
+      await loadLouvores();
+    } finally {
+      isRetryingLouvores = false;
+    }
+  }
+
   // Handlers do filtro de arranjo especial: a única coisa que fazem é gravar a
   // URL. A seleção exibida volta pela derivação, no mesmo ciclo.
   /**
@@ -683,8 +698,13 @@
     {:else}
       <div class="empty-state-message">
         <p>Não foi possível carregar a lista de louvores.</p>
-        <button type="button" class="empty-state-action" on:click={() => loadLouvores()}>
-          Tentar novamente
+        <button
+          type="button"
+          class="empty-state-action"
+          on:click={handleRetryLoadLouvores}
+          disabled={isRetryingLouvores}
+        >
+          {isRetryingLouvores ? 'Tentando novamente…' : 'Tentar novamente'}
         </button>
       </div>
     {/if}

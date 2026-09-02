@@ -781,14 +781,17 @@
           needsStatsRecalculation = false; // Reset flag
         }
         
-        // Este bloco corre 1 s depois da MESMA conclusão de download que já
-        // chamou loadCategoryStats(true) — não é reação de fundo. Marcar
-        // obsoleto aqui punha os dois a disputar `statsStale`: quem terminasse
-        // por último vencia, e numa varredura rápida a capa "Dados em cache"
-        // voltava por cima de números corretos. Recalcular converge nos dois
-        // casos, e a guarda `isLoadingStats` de loadCategoryStatsForCategories
+        // Este bloco corre 1 s depois da MESMA conclusão de download que os
+        // fluxos de import e de PDFs faltando já podem ter usado para
+        // recalcular explicitamente segundos atrás. Pular aqui quando isso
+        // já aconteceu dentro de MIN_STATS_LOAD_INTERVAL é seguro: o
+        // recálculo explícito sempre deixa `statsStale` em false ao terminar,
+        // então os números já estão corretos e recalcular de novo só
+        // duplicaria a varredura completa do Cache Storage. Quando os dois
+        // realmente coincidem no tempo (recálculo explícito ainda em curso),
+        // a guarda `isLoadingStats` de loadCategoryStatsForCategories
         // colapsa o caso concorrente numa varredura só.
-        if (statsRequested) {
+        if (statsRequested && Date.now() - lastStatsLoadTime >= MIN_STATS_LOAD_INTERVAL) {
           await loadCategoryStats(true);
         }
         
@@ -961,6 +964,7 @@
     isImportingBundle = true;
     importJustFinished = false;
     importChecklist = [];
+    let bundleImportSucceeded = false;
     offline.updateState({
       downloading: true,
       progress: 0,
@@ -1024,11 +1028,7 @@
       });
 
       await offline.loadCachedPdfsList(false, true);
-      // Mesmo motivo do fim do download: a importação acabou de mudar o cache
-      // com a pessoa olhando.
-      if (statsRequested) {
-        await loadCategoryStats(true);
-      }
+      bundleImportSucceeded = true;
     } catch (error) {
       console.error('[Offline Page] Bundle import error:', error);
       importChecklist = [];
@@ -1040,6 +1040,15 @@
       showErrorModal = true;
     } finally {
       isImportingBundle = false;
+    }
+
+    // Recalcular fora do try/finally: esta varredura percorre o Cache Storage
+    // inteiro (4630 louvores) e pode levar muito mais tempo que o próprio
+    // import. Rodar enquanto isImportingBundle ainda é true prendia o seletor
+    // de arquivo e a mensagem "A importar pacote offline…" na tela por toda a
+    // duração da varredura, bem depois dos PDFs já terem sido gravados.
+    if (bundleImportSucceeded && statsRequested) {
+      await loadCategoryStats(true);
     }
   }
 
@@ -1151,19 +1160,10 @@
       // Reload cached PDFs list to update stats
       await offline.loadCachedPdfsList(true, false);
 
-      // A pessoa acabou de acompanhar o download inteiro na tela: recalcular
-      // agora, e não só marcar como obsoleto. Até 2026-09-01 isto marcava
-      // `statsStale` e parava aí, então num aparelho limpo (categoryStats
-      // vazio) o painel mostrava "0 Disponíveis" depois de baixar 1546 PDFs —
-      // parecia que o download tinha falhado.
-      if (statsRequested) {
-        await loadCategoryStats(true);
-      }
-
       // Show error modal if there were errors
       if (!result.success || result.errors.length > 0) {
         errorTitle = 'Erro ao baixar PDFs';
-        errorMessage = result.errors.length > 0 
+        errorMessage = result.errors.length > 0
           ? result.errors.join('\n')
           : 'Alguns PDFs não puderam ser baixados.';
         showErrorModal = true;
@@ -1172,6 +1172,17 @@
         errorTitle = 'Informação';
         errorMessage = 'Todos os PDFs já estão disponíveis offline.';
         showErrorModal = true;
+      }
+
+      // A pessoa acabou de acompanhar o download inteiro na tela: recalcular
+      // agora, e não só marcar como obsoleto. Até 2026-09-01 isto marcava
+      // `statsStale` e parava aí, então num aparelho limpo (categoryStats
+      // vazio) o painel mostrava "0 Disponíveis" depois de baixar 1546 PDFs —
+      // parecia que o download tinha falhado. O aviso de erro acima é
+      // levantado antes desta varredura para não atrasar quem só quer saber
+      // se algo falhou.
+      if (statsRequested) {
+        await loadCategoryStats(true);
       }
     } catch (error) {
       console.error('[Offline Page] Error downloading missing PDFs:', error);
@@ -1365,10 +1376,11 @@
       {/if}
 
       <!-- Loading indicator for stats (fora da capa, quando já atualizou e recalcula) -->
-      <!-- Mostra durante o recálculo em qualquer caso: o recálculo automático
-           do fim do download roda com statsStale ainda true (loadCategoryStats
-           só o zera no fim), e sem isto ele correria sem nenhum sinal. -->
-      {#if isLoadingStats && statsRequested}
+      <!-- Só aparece quando statsStale é false: enquanto está stale, a capa
+           do OfflineStatsSummary (linhas 85-98 desse componente) já mostra
+           "A atualizar…" no próprio botão. Sem esta guarda os dois indicadores
+           ficam visíveis ao mesmo tempo durante toda a varredura. -->
+      {#if isLoadingStats && statsRequested && !statsStale}
         <div class="stats-loading-indicator">
           <RefreshCw class="w-4 h-4 spinning" />
           <span>Carregando estatísticas...</span>
