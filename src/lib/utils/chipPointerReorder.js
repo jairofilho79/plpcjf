@@ -21,12 +21,46 @@
 export const DRAG_MOVE_THRESHOLD_PX = 6;
 
 /**
- * @typedef {{ left: number, right: number, top: number, bottom: number }} ChipRect
+ * A que distância das fronteiras da lista o arrasto passa a ser desistência.
+ * O drag-and-drop nativo que saiu daqui não reordenava se se largasse fora da
+ * lista, e essa saída não se podia perder: quem se engana a meio do gesto tem
+ * de conseguir abortá-lo. A margem é generosa de propósito — arrastar até à
+ * ponta da lista para empurrar um chip para o fim é gesto legítimo e não pode
+ * ser confundido com desistir.
+ */
+export const DRAG_CANCEL_MARGIN_PX = 48;
+
+/** Faixa junto às bordas da lista onde o arrasto começa a arrastar a lista. */
+export const AUTO_SCROLL_EDGE_PX = 56;
+
+/** Velocidade máxima do auto-scroll, em pixels por frame. */
+export const AUTO_SCROLL_MAX_SPEED_PX = 18;
+
+/**
+ * @typedef {{ left: number, right: number, top: number, bottom: number }} Rect
  */
 
 /**
+ * O ponteiro saiu da lista ao ponto de o gesto dever ser abandonado?
+ *
+ * @param {{ x: number, y: number }} point
+ * @param {Rect | null | undefined} bounds retângulo da lista
+ * @param {number} [margin]
+ */
+export function isPointerOutsideList(point, bounds, margin = DRAG_CANCEL_MARGIN_PX) {
+  if (!bounds) return false;
+  return (
+    point.x < bounds.left - margin ||
+    point.x > bounds.right + margin ||
+    point.y < bounds.top - margin ||
+    point.y > bounds.bottom + margin
+  );
+}
+
+/**
  * Decide em que chip o ponteiro está pousado, e portanto para que índice vai o
- * chip arrastado.
+ * chip arrastado. Devolve null quando não há destino — nem chips medíveis, nem
+ * ponteiro dentro da lista —, e null significa sempre "não reordenes".
  *
  * Compara com o *centro* de cada chip em vez de perguntar "está dentro deste
  * retângulo?": os chips têm larguras diferentes e há um vão de 0.5rem entre
@@ -35,17 +69,20 @@ export const DRAG_MOVE_THRESHOLD_PX = 6;
  * a fronteira entre dois chips cai no ponto médio dos seus centros — que é
  * onde o olho a espera.
  *
- * Só o eixo principal da lista conta. Na lista horizontal o dedo costuma
- * derivar para fora da faixa dos chips enquanto arrasta, e perder o alvo por
- * causa disso seria uma frustração sem motivo.
+ * Só o eixo principal da lista conta para escolher o chip. Na lista horizontal
+ * o dedo costuma derivar um pouco para fora da faixa dos chips enquanto
+ * arrasta, e perder o alvo por causa disso seria uma frustração sem motivo —
+ * é para isso que a desistência tem margem própria, bem maior.
  *
- * @param {Array<ChipRect | null | undefined> | null | undefined} rects geometria dos chips, na ordem da lista
+ * @param {Array<Rect | null | undefined> | null | undefined} rects geometria dos chips, na ordem da lista
  * @param {{ x: number, y: number }} point posição do ponteiro, em coordenadas de viewport
  * @param {'x' | 'y'} axis eixo da lista: 'x' encolhida, 'y' expandida
- * @returns {number | null} índice de destino, ou null se não houver chips medíveis
+ * @param {Rect | null} [bounds] retângulo da lista; sem ele não existe "fora"
+ * @returns {number | null} índice de destino, ou null para não reordenar
  */
-export function resolveTargetIndex(rects, point, axis) {
+export function resolveTargetIndex(rects, point, axis, bounds = null) {
   if (!Array.isArray(rects) || rects.length === 0) return null;
+  if (isPointerOutsideList(point, bounds)) return null;
 
   const coord = axis === 'y' ? point.y : point.x;
 
@@ -70,6 +107,67 @@ export function resolveTargetIndex(rects, point, axis) {
   }
 
   return closestIndex;
+}
+
+/**
+ * Quanto deve a lista rolar sozinha, em pixels por frame, enquanto o ponteiro
+ * está junto a uma das suas bordas.
+ *
+ * Sem isto o gesto só serve para listas que cabem no ecrã: numa playlist longa
+ * o utilizador teria de largar o chip, rolar, e voltar a pegar-lhe — que é
+ * precisamente a dificuldade que viemos resolver. A velocidade sobe com a
+ * profundidade dentro da faixa, para o arranque não ser um salto.
+ *
+ * @param {{ x: number, y: number }} point
+ * @param {Rect | null | undefined} bounds retângulo da lista
+ * @param {'x' | 'y'} axis
+ * @param {number} [edge] largura da faixa sensível
+ * @param {number} [maxSpeed]
+ * @returns {number} negativo para o início da lista, positivo para o fim, 0 no meio
+ */
+export function computeAutoScrollVelocity(
+  point,
+  bounds,
+  axis,
+  edge = AUTO_SCROLL_EDGE_PX,
+  maxSpeed = AUTO_SCROLL_MAX_SPEED_PX
+) {
+  if (!bounds || edge <= 0) return 0;
+
+  const coord = axis === 'y' ? point.y : point.x;
+  const start = axis === 'y' ? bounds.top : bounds.left;
+  const end = axis === 'y' ? bounds.bottom : bounds.right;
+
+  // Numa lista mais estreita do que duas faixas as zonas sobrepõem-se; ganha o
+  // início, que é o lado de onde se costuma vir.
+  if (coord < start + edge) {
+    const depth = Math.min(edge, start + edge - coord);
+    return -(depth / edge) * maxSpeed;
+  }
+  if (coord > end - edge) {
+    const depth = Math.min(edge, coord - (end - edge));
+    return (depth / edge) * maxSpeed;
+  }
+  return 0;
+}
+
+/**
+ * A tecla serve para reordenar? Separada do cálculo do destino porque o
+ * componente precisa de saber isto *antes* de saber se o movimento é possível:
+ * sem prevenir a tecla, uma seta no primeiro chip rolava a página em vez de
+ * não fazer nada.
+ *
+ * @param {string} key valor de `KeyboardEvent.key`
+ */
+export function isReorderKey(key) {
+  return (
+    key === 'ArrowLeft' ||
+    key === 'ArrowRight' ||
+    key === 'ArrowUp' ||
+    key === 'ArrowDown' ||
+    key === 'Home' ||
+    key === 'End'
+  );
 }
 
 /**

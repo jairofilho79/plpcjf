@@ -14,7 +14,13 @@ import {
   resolveTargetIndex,
   computeKeyboardTarget,
   hasPassedDragThreshold,
-  DRAG_MOVE_THRESHOLD_PX
+  isPointerOutsideList,
+  computeAutoScrollVelocity,
+  isReorderKey,
+  DRAG_MOVE_THRESHOLD_PX,
+  DRAG_CANCEL_MARGIN_PX,
+  AUTO_SCROLL_EDGE_PX,
+  AUTO_SCROLL_MAX_SPEED_PX
 } from './chipPointerReorder.js';
 
 /**
@@ -37,6 +43,11 @@ function chipsVerticais() {
     { left: 0, right: 300, top: 50, bottom: 90 },
     { left: 0, right: 300, top: 100, bottom: 140 }
   ];
+}
+
+/** Retângulo da lista que contém os chips horizontais, com folga de 5px. */
+function listaHorizontal() {
+  return { left: 0, right: 320, top: 195, bottom: 245 };
 }
 
 describe('resolveTargetIndex — para onde vai o chip arrastado', () => {
@@ -63,10 +74,42 @@ describe('resolveTargetIndex — para onde vai o chip arrastado', () => {
     assert.equal(resolveTargetIndex(rects, { x: 108, y: 220 }, 'x'), 1);
   });
 
-  it('fixa-se nos extremos quando o dedo sai da lista pelas pontas', () => {
+  it('sem fronteiras da lista não existe "fora": encosta aos extremos', () => {
+    // Sem bounds o módulo não tem como saber onde a lista acaba; é este o
+    // contrato para quem só quer o cálculo geométrico.
     const rects = chipsHorizontais();
     assert.equal(resolveTargetIndex(rects, { x: -500, y: 220 }, 'x'), 0);
     assert.equal(resolveTargetIndex(rects, { x: 5000, y: 220 }, 'x'), 2);
+  });
+
+  it('encosta ao último chip quando o dedo passa a ponta sem sair da lista', () => {
+    // Empurrar um chip para o fim implica arrastar até depois do último; isso
+    // é gesto legítimo e tem de continuar a apontar para o último índice.
+    const rects = chipsHorizontais();
+    const bounds = listaHorizontal();
+    assert.equal(resolveTargetIndex(rects, { x: bounds.right + 10, y: 220 }, 'x', bounds), 2);
+    assert.equal(resolveTargetIndex(rects, { x: bounds.left - 10, y: 220 }, 'x', bounds), 0);
+  });
+
+  it('desiste quando o dedo sai mesmo da lista — largar fora não reordena', () => {
+    const rects = chipsHorizontais();
+    const bounds = listaHorizontal();
+    const m = DRAG_CANCEL_MARGIN_PX;
+    // Longe pelas pontas.
+    assert.equal(resolveTargetIndex(rects, { x: bounds.right + m + 1, y: 220 }, 'x', bounds), null);
+    assert.equal(resolveTargetIndex(rects, { x: bounds.left - m - 1, y: 220 }, 'x', bounds), null);
+    // E puxando o chip para fora da faixa, que é o gesto natural de "esquece".
+    assert.equal(resolveTargetIndex(rects, { x: 160, y: bounds.top - m - 1 }, 'x', bounds), null);
+    assert.equal(resolveTargetIndex(rects, { x: 160, y: bounds.bottom + m + 1 }, 'x', bounds), null);
+  });
+
+  it('em cima da margem ainda não é desistir', () => {
+    const rects = chipsHorizontais();
+    const bounds = listaHorizontal();
+    assert.equal(
+      resolveTargetIndex(rects, { x: bounds.right + DRAG_CANCEL_MARGIN_PX, y: 220 }, 'x', bounds),
+      2
+    );
   });
 
   it('ignora o eixo secundário: o dedo pode fugir para cima da lista sem perder o alvo', () => {
@@ -106,6 +149,105 @@ describe('resolveTargetIndex — para onde vai o chip arrastado', () => {
 
   it('devolve null se nenhuma referência estiver montada', () => {
     assert.equal(resolveTargetIndex([null, undefined], { x: 0, y: 0 }, 'x'), null);
+  });
+});
+
+describe('isPointerOutsideList — a saída de emergência do gesto', () => {
+  it('dentro da lista não é fora', () => {
+    assert.equal(isPointerOutsideList({ x: 160, y: 220 }, listaHorizontal()), false);
+  });
+
+  it('a folga da margem conta como dentro, em qualquer dos quatro lados', () => {
+    const b = listaHorizontal();
+    const m = DRAG_CANCEL_MARGIN_PX;
+    assert.equal(isPointerOutsideList({ x: b.left - m, y: 220 }, b), false);
+    assert.equal(isPointerOutsideList({ x: b.right + m, y: 220 }, b), false);
+    assert.equal(isPointerOutsideList({ x: 160, y: b.top - m }, b), false);
+    assert.equal(isPointerOutsideList({ x: 160, y: b.bottom + m }, b), false);
+  });
+
+  it('passar a margem é sair, em qualquer dos quatro lados', () => {
+    const b = listaHorizontal();
+    const m = DRAG_CANCEL_MARGIN_PX + 1;
+    assert.equal(isPointerOutsideList({ x: b.left - m, y: 220 }, b), true);
+    assert.equal(isPointerOutsideList({ x: b.right + m, y: 220 }, b), true);
+    assert.equal(isPointerOutsideList({ x: 160, y: b.top - m }, b), true);
+    assert.equal(isPointerOutsideList({ x: 160, y: b.bottom + m }, b), true);
+  });
+
+  it('sem retângulo da lista nunca está fora', () => {
+    assert.equal(isPointerOutsideList({ x: -9999, y: -9999 }, null), false);
+    assert.equal(isPointerOutsideList({ x: -9999, y: -9999 }, undefined), false);
+  });
+
+  it('aceita uma margem própria', () => {
+    const b = listaHorizontal();
+    assert.equal(isPointerOutsideList({ x: b.right + 20, y: 220 }, b, 10), true);
+    assert.equal(isPointerOutsideList({ x: b.right + 20, y: 220 }, b, 30), false);
+  });
+});
+
+describe('computeAutoScrollVelocity — alcançar os chips que não cabem no ecrã', () => {
+  it('no meio da lista a lista não se mexe', () => {
+    assert.equal(computeAutoScrollVelocity({ x: 160, y: 220 }, listaHorizontal(), 'x'), 0);
+  });
+
+  it('junto ao início puxa para trás, junto ao fim puxa para a frente', () => {
+    const b = listaHorizontal();
+    assert.ok(computeAutoScrollVelocity({ x: b.left + 10, y: 220 }, b, 'x') < 0);
+    assert.ok(computeAutoScrollVelocity({ x: b.right - 10, y: 220 }, b, 'x') > 0);
+  });
+
+  it('acelera com a profundidade dentro da faixa, em vez de arrancar aos saltos', () => {
+    const b = listaHorizontal();
+    const pouco = computeAutoScrollVelocity({ x: b.right - AUTO_SCROLL_EDGE_PX + 8, y: 220 }, b, 'x');
+    const muito = computeAutoScrollVelocity({ x: b.right - 4, y: 220 }, b, 'x');
+    assert.ok(muito > pouco);
+    assert.ok(pouco > 0);
+  });
+
+  it('não passa da velocidade máxima, mesmo com o dedo já fora', () => {
+    const b = listaHorizontal();
+    assert.equal(computeAutoScrollVelocity({ x: b.right + 500, y: 220 }, b, 'x'), AUTO_SCROLL_MAX_SPEED_PX);
+    assert.equal(computeAutoScrollVelocity({ x: b.left - 500, y: 220 }, b, 'x'), -AUTO_SCROLL_MAX_SPEED_PX);
+  });
+
+  it('a fronteira exata da faixa ainda não rola', () => {
+    const b = listaHorizontal();
+    assert.equal(computeAutoScrollVelocity({ x: b.left + AUTO_SCROLL_EDGE_PX, y: 220 }, b, 'x'), 0);
+    assert.equal(computeAutoScrollVelocity({ x: b.right - AUTO_SCROLL_EDGE_PX, y: 220 }, b, 'x'), 0);
+  });
+
+  it('na lista expandida rola na vertical e ignora o x', () => {
+    const b = { left: 0, right: 300, top: 0, bottom: 400 };
+    assert.ok(computeAutoScrollVelocity({ x: 9999, y: 5 }, b, 'y') < 0);
+    assert.ok(computeAutoScrollVelocity({ x: -9999, y: 395 }, b, 'y') > 0);
+    assert.equal(computeAutoScrollVelocity({ x: 150, y: 200 }, b, 'y'), 0);
+  });
+
+  it('sem lista, ou sem faixa, não há auto-scroll', () => {
+    assert.equal(computeAutoScrollVelocity({ x: 0, y: 0 }, null, 'x'), 0);
+    assert.equal(computeAutoScrollVelocity({ x: 0, y: 0 }, listaHorizontal(), 'x', 0), 0);
+  });
+});
+
+describe('isReorderKey — o que a alça consome antes de saber se pode mover', () => {
+  it('conhece as seis teclas de reordenação', () => {
+    for (const k of ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End']) {
+      assert.equal(isReorderKey(k), true, k);
+    }
+  });
+
+  it('deixa passar tudo o resto', () => {
+    for (const k of ['Enter', ' ', 'Tab', 'Escape', 'a', 'PageDown']) {
+      assert.equal(isReorderKey(k), false, k);
+    }
+  });
+
+  it('é verdadeiro nas pontas, onde computeKeyboardTarget já não move nada', () => {
+    // É esta a diferença que impede a seta de rolar a página no primeiro chip.
+    assert.equal(isReorderKey('ArrowLeft'), true);
+    assert.equal(computeKeyboardTarget(0, 'ArrowLeft', 5), null);
   });
 });
 
