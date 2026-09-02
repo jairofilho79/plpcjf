@@ -1018,8 +1018,10 @@
       });
 
       await offline.loadCachedPdfsList(false, true);
+      // Mesmo motivo do fim do download: a importação acabou de mudar o cache
+      // com a pessoa olhando.
       if (statsRequested) {
-        statsStale = true;
+        await loadCategoryStats(true);
       }
     } catch (error) {
       console.error('[Offline Page] Bundle import error:', error);
@@ -1143,8 +1145,13 @@
       // Reload cached PDFs list to update stats
       await offline.loadCachedPdfsList(true, false);
 
+      // A pessoa acabou de acompanhar o download inteiro na tela: recalcular
+      // agora, e não só marcar como obsoleto. Até 2026-09-01 isto marcava
+      // `statsStale` e parava aí, então num aparelho limpo (categoryStats
+      // vazio) o painel mostrava "0 Disponíveis" depois de baixar 1546 PDFs —
+      // parecia que o download tinha falhado.
       if (statsRequested) {
-        statsStale = true;
+        await loadCategoryStats(true);
       }
 
       // Show error modal if there were errors
@@ -1352,7 +1359,10 @@
       {/if}
 
       <!-- Loading indicator for stats (fora da capa, quando já atualizou e recalcula) -->
-      {#if isLoadingStats && statsRequested && !statsStale}
+      <!-- Mostra durante o recálculo em qualquer caso: o recálculo automático
+           do fim do download roda com statsStale ainda true (loadCategoryStats
+           só o zera no fim), e sem isto ele correria sem nenhum sinal. -->
+      {#if isLoadingStats && statsRequested}
         <div class="stats-loading-indicator">
           <RefreshCw class="w-4 h-4 spinning" />
           <span>Carregando estatísticas...</span>
