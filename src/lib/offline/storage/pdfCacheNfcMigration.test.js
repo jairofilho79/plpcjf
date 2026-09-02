@@ -147,7 +147,7 @@ describe('a migração não apaga quando a mudança não é só de forma Unicode
     );
   });
 
-  it('mantém as duas chaves quando o `%` aninhado corrompe o caminho', async () => {
+  it('mantém a chave boa e não grava nada quando o `%` aninhado corrompe o caminho', async () => {
     // A chave que o app grava e recalcula a cada leitura, a partir do caminho
     // cru — a única que qualquer leitura futura volta a construir.
     const cru = `assets/a${camadas(3)}b.pdf`;
@@ -163,11 +163,13 @@ describe('a migração não apaga quando a mudança não é só de forma Unicode
     assert.equal(cache.mapa.get(K_ORIG), 'pdf-a', 'a chave boa foi apagada');
     assert.deepEqual(r, { migradas: 0, mantidas: 1, preservadas: 1, erros: 0 });
 
-    // E a chave nova, que ninguém volta a pedir, ficou junto — inofensiva.
+    // E a chave nova, que ninguém volta a pedir, nem chega a existir: a guarda
+    // decide ANTES do `put`, então não fica órfã nenhuma no cache.
     const K_NOVA = await semRuido(async () => canonicalizarReal(K_ORIG));
     assert.notEqual(K_NOVA, K_ORIG);
-    assert.equal(cache.mapa.get(K_NOVA), 'pdf-a');
+    assert.equal(cache.mapa.has(K_NOVA), false, 'a chave recusada foi gravada assim mesmo');
     assert.equal(cache.mapa.get(JA_OK), 'pdf-b');
+    assert.equal(cache.mapa.size, 2, 'o cache tem de ficar como estava: K_ORIG e JA_OK');
   });
 
   it('depois da migração, a chave que uma leitura fresca reconstrói ainda está no cache', async () => {
@@ -224,7 +226,7 @@ describe('a migração não apaga quando a mudança não é só de forma Unicode
     }
   });
 
-  it('uma chave terminada em `?` mantém as duas — o delimitador vazio não engana a guarda', async () => {
+  it('uma chave terminada em `?` fica intacta — o delimitador vazio não engana a guarda', async () => {
     // O falso negativo que a revisão da fase apanhou: `URL.search` devolve `''`
     // tanto para "não tem query" quanto para um `?` final vazio. Comparar
     // `search` dos dois lados dava `'' === ''`, as `pathname` batiam, e a
@@ -242,9 +244,10 @@ describe('a migração não apaga quando a mudança não é só de forma Unicode
     assert.equal(cache.mapa.get(K_ORIG), 'pdf-a', 'a chave boa foi apagada');
     assert.equal(r.preservadas, 1);
     assert.equal(r.migradas, 0);
-    // As duas ficam: a antiga é a que a leitura reconstrói, a nova perdeu o `?`.
-    assert.equal(cache.mapa.get('https://plpcg.com/assets/x.pdf'), 'pdf-a');
-    assert.equal(cache.mapa.size, 2);
+    // Só a antiga fica — é a que a leitura reconstrói. A nova, que perdeu o
+    // `?`, é recusada antes do `put` e nunca chega ao cache.
+    assert.equal(cache.mapa.has('https://plpcg.com/assets/x.pdf'), false);
+    assert.equal(cache.mapa.size, 1);
   });
 
   it('o mesmo para `#` final e para `?`/`#` no meio do nome', async () => {
@@ -273,6 +276,7 @@ describe('a migração não apaga quando a mudança não é só de forma Unicode
     );
     assert.equal(cache.mapa.get(K_ORIG), 'pdf-a');
     assert.equal(r.preservadas, 1);
-    assert.equal(cache.mapa.size, 2);
+    // Nem a primeira nem a segunda passada gravam a chave recusada.
+    assert.equal(cache.mapa.size, 1);
   });
 });

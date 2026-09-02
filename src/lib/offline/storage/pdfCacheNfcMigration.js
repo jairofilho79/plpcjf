@@ -12,10 +12,11 @@
  * chaves apontando para o mesmo PDF, o que é inofensivo, e nunca nenhuma.
  * Idempotente: rodar de novo não faz nada.
  *
- * A deleção passa por `soMudouAFormaUnicode` (Fase 6): se a chave nova diferir
- * da antiga por algo além da forma Unicode, as duas ficam e a entrada é contada
- * em `preservadas`. É o mesmo "duas chaves são inofensivas, nenhuma é fatal"
- * aplicado ao caso em que o tratamento de `%` corrompe o caminho.
+ * A reescrita passa por `soMudouAFormaUnicode` (Fase 6): se a chave nova
+ * diferir da antiga por algo além da forma Unicode, a entrada é pulada inteira
+ * — nada é gravado, nada é apagado — e contada em `preservadas`. A guarda
+ * decide ANTES do `put`: recusar depois de gravar deixaria a chave nova órfã no
+ * cache, que é o defeito que a Fase 8 corrigiu.
  *
  * Recebe `cache` e `canonicalizar` por parâmetro para poder rodar sob
  * `node --test`, que não tem Cache Storage nem o alias `$lib`.
@@ -107,6 +108,18 @@ export async function migrarChavesPdfParaNfc(cache, canonicalizar) {
       continue;
     }
 
+    // Decidir ANTES de escrever. A guarda só olha para as duas URLs, não
+    // precisa do corpo: quando ela recusa, nada é lido, nada é gravado, e o
+    // cache fica exatamente como estava. (Fase 6 tinha esta verificação DEPOIS
+    // do `put`, então uma recusa deixava a chave nova órfã no cache.)
+    if (!soMudouAFormaUnicode(urlAntiga, urlNova)) {
+      // A chave nova não é uma reescrita Unicode da antiga — o conteúdo mudou.
+      // Fica só a antiga, que é a que toda leitura recalcula. Contada à parte,
+      // nunca como migrada.
+      resultado.preservadas++;
+      continue;
+    }
+
     try {
       const resposta = await cache.match(requisicao);
       if (!resposta) {
@@ -117,14 +130,6 @@ export async function migrarChavesPdfParaNfc(cache, canonicalizar) {
       await cache.put(urlNova, resposta.clone());
     } catch {
       resultado.erros++;
-      continue;
-    }
-
-    if (!soMudouAFormaUnicode(urlAntiga, urlNova)) {
-      // A chave nova não é uma reescrita Unicode da antiga — o conteúdo mudou.
-      // Fica com as duas: a antiga é a que toda leitura recalcula, a nova já
-      // foi gravada e é inofensiva. Contadas à parte, nunca como migradas.
-      resultado.preservadas++;
       continue;
     }
 
