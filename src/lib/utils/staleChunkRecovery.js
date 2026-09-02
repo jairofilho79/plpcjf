@@ -57,7 +57,14 @@ export async function tryRecoverFromStaleDeployment(reason) {
     console.error('[staleChunkRecovery] Desistindo após 2 tentativas:', reason);
     return false;
   }
-  sessionStorage.setItem(STORAGE_KEY, JSON.stringify({ n: s.n + 1, at: Date.now() }));
+  // A contagem é um limitador de segurança, não o objetivo. Com sessionStorage
+  // bloqueado o `readState` já devolve `{ n: 0 }` e esta gravação lançaria —
+  // abortando o resgate justamente no navegador onde o app está partido.
+  // Perder a contagem custa, no pior caso, reloads a mais; perder o resgate
+  // custa o app.
+  try {
+    sessionStorage.setItem(STORAGE_KEY, JSON.stringify({ n: s.n + 1, at: Date.now() }));
+  } catch { /* armazenamento bloqueado: seguir sem contar */ }
   console.warn('[staleChunkRecovery] Tentativa', s.n + 1, reason);
   await hardResetSwAndAppCaches();
   window.location.reload();
