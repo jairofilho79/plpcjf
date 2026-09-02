@@ -781,9 +781,15 @@
           needsStatsRecalculation = false; // Reset flag
         }
         
-        // Após download: marcar stats como desatualizadas (capa), sem recalcular agora
+        // Este bloco corre 1 s depois da MESMA conclusão de download que já
+        // chamou loadCategoryStats(true) — não é reação de fundo. Marcar
+        // obsoleto aqui punha os dois a disputar `statsStale`: quem terminasse
+        // por último vencia, e numa varredura rápida a capa "Dados em cache"
+        // voltava por cima de números corretos. Recalcular converge nos dois
+        // casos, e a guarda `isLoadingStats` de loadCategoryStatsForCategories
+        // colapsa o caso concorrente numa varredura só.
         if (statsRequested) {
-          statsStale = true;
+          await loadCategoryStats(true);
         }
         
         // Set offline available flag after download completes
