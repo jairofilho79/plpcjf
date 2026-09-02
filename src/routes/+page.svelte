@@ -18,6 +18,7 @@
     stripShareParams
   } from '$lib/utils/playlistShare';
   import { prepareSearchQuery, louvorRowMatchesPreparedSearch } from '$lib/utils/louvorSearch';
+  import { houveFiltragemReal } from '$lib/utils/resultadosProntos.js';
   import SearchBar from '$lib/components/SearchBar.svelte';
   import CategoryFilters from '$lib/components/CategoryFilters.svelte';
   import ClassificationFilters from '$lib/components/ClassificationFilters.svelte';
@@ -63,7 +64,12 @@
   let paginatedResults = [];
   let filtersExpanded = false;
 
-  /** Vira true quando filterLouvores já rodou com catálogo e arranjos prontos. */
+  /**
+   * Trava (latch), não derivação: vira `true` na primeira filtragem real e
+   * **nunca** volta atrás. Ver o comentário no ponto onde é setada, dentro de
+   * `finalizeFilteredResults`. `/biblioteca` usa a mesma trava, com o mesmo
+   * predicado (`houveFiltragemReal`).
+   */
   let resultadosProntos = false;
   /** Critério de filtro da última execução real; mudar de verdade zera a paginação. */
   /** @type {string | null} */
@@ -79,7 +85,21 @@
     // ajustar a paginação seria apagar o `?pagina=3` de um deep link em aba fria
     // — a corrida que fazia a mesma URL abrir na página 3 ou na 1 dependendo de
     // quem chegava primeiro, o auto-select-all dos arranjos ou o debounce (D-3).
-    if ($louvoresLoaded && $louvores.length > 0 && $classificationFilters.length > 0) {
+    if (houveFiltragemReal({
+      carregado: $louvoresLoaded,
+      totalCatalogo: $louvores.length,
+      totalArranjos: $classificationFilters.length
+    })) {
+      // TRAVA, NÃO DERIVAÇÃO — não transforme isto num `$: resultadosProntos =
+      // houveFiltragemReal(...)`. A pergunta que esta variável responde é "já
+      // produzi uma lista real alguma vez?", um fato histórico, e não "há
+      // Arranjo marcado agora?", um fato reversível. A diferença é observável:
+      // desmarcar todos os Arranjos com `?pagina=5` na URL zera
+      // `$classificationFilters`; se a flag caísse junto, o bloco que corrige
+      // `?pagina=` desligaria e a URL ficaria presa em `pagina=5` mostrando a
+      // página 1, compartilhável e errada. Era esse o defeito que
+      // `/biblioteca` tinha, por usar `$:` aqui. Só sobe; nada neste arquivo a
+      // devolve para `false`.
       resultadosProntos = true;
 
       // Calculado AQUI, dentro da função, e não numa `$: criterioAtual = ...`

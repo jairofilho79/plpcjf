@@ -20,6 +20,7 @@
   import { groupLouvoresByGroupId, compareLouvorNome } from '$lib/utils/groupLouvores.js';
   import LouvorListSkeleton from '$lib/components/LouvorListSkeleton.svelte';
   import { estadoVazioBiblioteca } from '$lib/utils/estadosVazios.js';
+  import { houveFiltragemReal } from '$lib/utils/resultadosProntos.js';
 
   // Normalize classification by removing content in parentheses
   /**
@@ -331,8 +332,53 @@
     setPage(e.detail.page, { scroll: e.detail.scroll !== false });
   }
 
-  /** Só depois disso faz sentido corrigir a paginação (preserva `?pagina=N`). */
-  $: resultadosProntos = $louvoresLoaded && $louvores.length > 0 && $classificationFilters.length > 0;
+  /**
+   * Condição VIVA: há, neste instante, catálogo carregado e ao menos um
+   * Arranjo marcado. Reversível — desmarcar todos os Arranjos derruba isto.
+   * Só o bloco de "critério de filtro mudou" (mais abaixo) usa esta forma,
+   * porque ele é sobre a transição de agora, não sobre o passado.
+   */
+  $: filtragemRealAgora = houveFiltragemReal({
+    carregado: $louvoresLoaded,
+    totalCatalogo: $louvores.length,
+    totalArranjos: $classificationFilters.length
+  });
+
+  /**
+   * Só depois disso faz sentido corrigir a paginação (preserva `?pagina=N`).
+   * Mesma trava de `/` (`src/routes/+page.svelte`, em
+   * `finalizeFilteredResults`) — declarada como `let` normal, e não como `$:`,
+   * de propósito. Um `$:` compila para uma variável atribuída dentro de
+   * `$$.update()`, que só roda DEPOIS de `instance()` retornar: qualquer
+   * leitura síncrona no corpo do componente (o `louvoresLoaded.subscribe`
+   * lá embaixo, `initializeFiltersIfNeeded`, `onMount`) veria `undefined`.
+   * Com `let ... = false` ela vale `false` desde o primeiro instante.
+   */
+  let resultadosProntos = false;
+
+  // TRAVA, NÃO DERIVAÇÃO — não troque isto por
+  // `$: resultadosProntos = filtragemRealAgora`. Era exatamente essa a forma
+  // antiga, e ela tinha um defeito: desmarcar todos os Arranjos (ação
+  // alcançável pela interface) zera `$classificationFilters`, a flag caía para
+  // `false`, o bloco logo abaixo que corrige `?pagina=` desligava, e a URL
+  // ficava presa em `?arranjo=&pagina=999` enquanto a lista renderizada era a
+  // página 1 — link errado, compartilhável, até alguém remarcar um Arranjo.
+  // A pergunta que esta variável responde é "já produzi uma lista real alguma
+  // vez?" (fato histórico, permanente), não "há Arranjo marcado agora?" (fato
+  // presente, reversível). Por isso só sobe.
+  //
+  // E não é cedo demais: o predicado exige `totalArranjos > 0`, e
+  // `$classificationFilters` só fica não-vazio depois de
+  // `classificationFilters.aplicarPadrao(...)` (ou de um `?arranjo=` no link).
+  // Além disso este bloco está declarado ABAIXO de `totalPages`/`currentPage`,
+  // então na passada em que a trava fecha o Svelte já recalculou a paginação
+  // com os mesmos Arranjos — o bloco de correção nunca compara um
+  // `estadoUrl.pagina` novo contra um `currentPage` velho. Mover isto para
+  // cima da paginação reabre a corrida D-3 e volta a apagar o `?pagina=3` de
+  // um deep link em aba fria.
+  $: if (filtragemRealAgora) {
+    resultadosProntos = true;
+  }
 
   /** Qual estado a área de resultados mostra — consumido só no template (ver estadosVazios.js). */
   $: estadoResultados = estadoVazioBiblioteca({
@@ -343,6 +389,9 @@
 
   // Corrige a URL quando a página pedida não existe mais. Idempotente: depois
   // da escrita a condição é falsa, então não há laço e não há flag.
+  // Guardado pela TRAVA, não pela condição viva: uma vez que a lista real
+  // existiu, a URL passa a ser corrigível para sempre — inclusive quando o
+  // usuário desmarca todos os Arranjos e a lista fica vazia por escolha dele.
   $: if (browser && naBiblioteca && resultadosProntos && estadoUrl.pagina !== currentPage) {
     updateUrlParams({ pagina: currentPage });
   }
@@ -357,7 +406,14 @@
 
   // Trocar de filtro volta para a página 1. A **primeira** chave é só
   // registrada: é o que preserva `/biblioteca?pagina=5` de um deep link.
-  $: if (browser && naBiblioteca && resultadosProntos) {
+  //
+  // Usa a condição VIVA, não a trava — mecanismo separado, de propósito, e o
+  // mesmo desenho da home (lá este bloco mora dentro do `if` de
+  // `finalizeFilteredResults`, que também é a condição viva). Com a trava aqui,
+  // desmarcar todos os Arranjos passaria a contar como "o critério mudou" e
+  // dispararia um reset de página por conta própria, além da correção que o
+  // bloco acima já faz — dois donos para a mesma escrita.
+  $: if (browser && naBiblioteca && filtragemRealAgora) {
     if (criterioAnterior === null) {
       criterioAnterior = criterioAtual;
     } else if (criterioAtual !== criterioAnterior) {
