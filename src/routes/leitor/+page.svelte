@@ -129,6 +129,12 @@
   // avaliado dentro de `$$.update()`, depois de `instance()` retornar, e quem
   // lesse a guarda durante o `onMount` veria `undefined`.
   let cargaEmVoo: string | null = null;
+  // Número de série da carga que pôs a marca. A marca sozinha é a URL, e a URL
+  // não identifica a chamada: em A → B → voltar a A, a carga de A que ficou para
+  // trás encontraria `cargaEmVoo === A` no seu `finally` e libertaria a marca da
+  // carga de A que ainda está a descarregar — a janela de deduplicação reabria.
+  // Com o número de série, só liberta quem ainda é o dono corrente.
+  let geracaoDaCarga = 0;
   // Preferred fit mode: 'page-width' or 'page-fit' — persistido via readerPreferences
   let preferredFitMode: 'page-width' | 'page-fit' = getFitMode();
   // Controlador de zoom: encapsula cache de escala e cálculos de page-width
@@ -183,6 +189,9 @@
   let pdfUiMessage: string | null = null;
   let lastPdfPathForRecovery: string | null = null;
   let lastOriginalFullUrlForRecovery: string | null = null;
+  // O `?file=` cru que deu origem à recuperação. É este — e não a URL completa —
+  // o valor que o bloco reativo compara com `file`.
+  let lastFileUrlForRecovery: string | null = null;
   let activeForcedObjectUrl: string | null = null;
 
   // Backward-compatible bindings for existing template (will be driven by state)
@@ -278,6 +287,14 @@
     // essa janela que deixava as duas passarem.
     if (cargaEmVoo === fileUrl) return;
     cargaEmVoo = fileUrl;
+    const geracao = ++geracaoDaCarga;
+
+    // Capturado agora porque o `setPdfUi('loading')` da linha seguinte limpa o
+    // `pdfError` — e é o `pdfError` que autoriza a entrada quando o ficheiro já
+    // consta como carregado. Sem guardar o facto aqui, o `load` do `catch` não
+    // teria como distinguir "recarga legítima de algo que falhou" de "carga
+    // paralela que já não interessa a ninguém".
+    const entrouApesarDeJaCarregado = lastLoadedFile === fileUrl;
 
     setPdfUi('loading', null);
 
@@ -308,39 +325,54 @@
     } catch (error) {
       console.warn('[Leitor] Direct load failed, falling back to validation:', error);
       // If direct load fails, fall back to full validation
-      await load(fileUrl);
+      await load(fileUrl, entrouApesarDeJaCarregado);
     } finally {
-      // Só quem pôs a marca a levanta: se o utilizador já navegou para outro
-      // louvor, a marca corrente é a dele e esta carga velha não pode apagá-la.
-      // Levantar aqui, no `finally`, é também o que impede uma falha de trancar
-      // a URL para sempre.
-      if (cargaEmVoo === fileUrl) cargaEmVoo = null;
+      // Só quem pôs a marca a levanta — e "quem" é o número de série, não a URL:
+      // duas cargas do mesmo ficheiro podem coexistir, e a que ficou para trás
+      // não pode libertar a marca da que ainda está a descarregar. Levantar aqui,
+      // no `finally`, é também o que impede uma falha de trancar a URL para sempre.
+      if (geracaoDaCarga === geracao) cargaEmVoo = null;
       if (pdfUiState === 'loading') {
         setPdfUi('idle', null);
       }
     }
   }
 
-  async function load(fileUrl: string) {
+  // `recargaAutorizada` é o que o `loadDirectly` viu no momento em que decidiu
+  // carregar: o ficheiro já constava como carregado e mesmo assim havia motivo
+  // para o refazer. Sem esse facto trazido de fora havia um beco sem saída — com
+  // `lastLoadedFile` já igual a esta URL e um erro pendente, o
+  // `setPdfUi('loading')` do `loadDirectly` limpava o `pdfError`, e o teste aqui,
+  // agora com `pdfError` nulo, mandava sair em silêncio; o `finally` do chamador
+  // punha `idle` e ficava visualizador escondido, sem PDF e sem mensagem.
+  //
+  // Passar o facto em vez de olhar para `cargaEmVoo` também fecha o inverso: uma
+  // carga paralela do mesmo ficheiro que falha depois de outra ter tido êxito
+  // não tem autorização nenhuma, e sai daqui sem refazer validação por cima de um
+  // PDF que já está no ecrã.
+  async function load(fileUrl: string, recargaAutorizada = false) {
     const getDocument = (window as any).__pdfjsGetDocument as PDFJSGetDocument | undefined;
     if (!getDocument) return;
-    
-    // Avoid duplicate loads of the same file — exceto quando esta chamada é a
-    // continuação da carga em voo, ou seja, o `loadDirectly` a cair para cá
-    // depois de falhar. Sem a ressalva havia um beco sem saída: com
-    // `lastLoadedFile` já igual a esta URL e um erro pendente, o
-    // `setPdfUi('loading')` do `loadDirectly` limpava o `pdfError`, e o teste
-    // aqui — agora com `pdfError` nulo — mandava sair em silêncio. O `finally`
-    // do chamador punha `idle`: visualizador escondido, sem PDF e sem mensagem.
-    if (cargaEmVoo !== fileUrl && lastLoadedFile === fileUrl && !pdfError) return;
+
+    // Avoid duplicate loads of the same file
+    if (!recargaAutorizada && lastLoadedFile === fileUrl && !pdfError) return;
 
     setPdfUi('loading', null);
 
-    const { pdfPath, isCatalogAsset, originalFullUrl } = resolveCanonicalPdfUrl(fileUrl);
-    lastPdfPathForRecovery = pdfPath;
-    lastOriginalFullUrlForRecovery = originalFullUrl;
+    // Declarados aqui, atribuídos dentro do `try`: o `catch` precisa de os ler, e
+    // `resolveCanonicalPdfUrl` pode lançar — um `?file=` que o `new URL()` recuse
+    // escapava por fora do `try`, atravessava o `catch` do `loadDirectly` e
+    // deixava o utilizador com o visualizador escondido, sem PDF, sem mensagem e
+    // com uma rejeição não tratada na consola.
+    let pdfPath = '';
+    let isCatalogAsset = false;
+    let originalFullUrl = '';
 
     try {
+      ({ pdfPath, isCatalogAsset, originalFullUrl } = resolveCanonicalPdfUrl(fileUrl));
+      lastPdfPathForRecovery = pdfPath;
+      lastOriginalFullUrlForRecovery = originalFullUrl;
+      lastFileUrlForRecovery = fileUrl;
 
       if (isCatalogAsset) {
         // VALIDAÇÃO: Check if PDF is available in cache using original path (no normalization)
@@ -551,7 +583,12 @@
       viewer.setDocument(pdfDocument);
       totalPages = pdfDocument.numPages ?? 0;
       currentPage = 1;
-      lastLoadedFile = lastOriginalFullUrlForRecovery;
+      // O `?file=` cru, não a URL completa. Com a URL completa, `lastLoadedFile`
+      // nunca voltava a ser igual a `file`, o bloco reativo reavaliava, via
+      // `file !== lastLoadedFile` e mandava o `loadDirectly` refazer o pedido que
+      // tinha acabado de falhar — o "Buscar online" desfazia-se a si próprio
+      // segundos depois de ter dado certo.
+      lastLoadedFile = lastFileUrlForRecovery;
       retryCount = 0;
       setPdfUi('idle', null);
       console.log('[Leitor] force-online-success', { pdfPath: lastPdfPathForRecovery });

@@ -281,22 +281,35 @@ describe('D2 — a cedência é por relógio, não por chunk temporizado', () =>
     );
   });
 
-  it('sem orçamento estourado, nenhuma cedência chega a agendar coisa nenhuma', async () => {
+  it('sem orçamento estourado, as cedências acontecem e nenhuma agenda coisa nenhuma', async () => {
     let agendamentos = 0;
+    let consultas = 0;
     // Relógio parado: `talvezCeder` nunca ultrapassa o orçamento e devolve
     // sempre a promessa já resolvida. É o caso comum — milhares de microtasks,
     // zero macrotarefas.
-    const cedenteImovel = () =>
-      criarCedente({
+    //
+    // Contar as consultas é o que impede este teste de ser vácuo: um laço que
+    // não cede de todo — o de chunks temporizados, por exemplo — também faria
+    // zero agendamentos, e passaria sem provar nada.
+    const cedenteImovel = () => {
+      const real = criarCedente({
         agora: () => 0,
         agendar: (/** @type {() => void} */ cb) => {
           agendamentos++;
           cb();
         }
       });
+      return {
+        talvezCeder: () => {
+          consultas++;
+          return real.talvezCeder();
+        }
+      };
+    };
 
     const { deps } = depsCom({ cachedPdfs: [], criarCedente: cedenteImovel });
     await fabricarGenerate(deps)(louvores);
+    assert.equal(consultas, louvores.length, 'o cedente tem de ser consultado por louvor');
     assert.equal(agendamentos, 0);
   });
 

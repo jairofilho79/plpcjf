@@ -71,10 +71,16 @@ function semTipos(codigo) {
   return codigo
     .replace(/\(window as any\)/g, '(window)')
     .replace(/ as PDFJSGetDocument \| undefined/g, '')
-    .replace(/\bfunction (load|loadDirectly)\(fileUrl: string\)/g, 'function $1(fileUrl)')
+    .replace(/\bfunction loadDirectly\(fileUrl: string\)/g, 'function loadDirectly(fileUrl)')
+    // O segundo parâmetro é opcional na expressão de propósito: assim uma
+    // reversão para a assinatura antiga falha por asserção, com a mensagem que
+    // diz o que se perdeu, e não por SyntaxError.
+    .replace(/\bfunction load\(fileUrl: string(, recargaAutorizada = false)?\)/g,
+      (_, segundo) => `function load(fileUrl${segundo ?? ''})`)
     .replace(/\bfunction setPdfUi\(state: PdfUiState, message: string \| null = null\)/g,
       'function setPdfUi(state, message = null)')
-    .replace(/\((downloadErr|error|err) as any\)/g, '($1)');
+    .replace(/\((downloadErr|error|err) as any\)/g, '($1)')
+    .replace(/\bcatch \(err: any\)/g, 'catch (err)');
 }
 
 /**
@@ -98,7 +104,16 @@ function fabricar(assinatura, estado) {
 /* ------------------------------------------------------------------ */
 
 /**
- * @param {{ getDocument?: (opcoes: any) => any, online?: boolean, catalogo?: boolean }} [opcoes]
+ * LIMITAÇÃO CONHECIDA: `catalogo` fica `false` em toda a suite. O
+ * `isCatalogAsset === false` é, na produção, só o `pdfs/exemplo.pdf` e o
+ * `offline-setup.pdf`; o ramo que **todo louvor real** percorre — o
+ * `await import('$lib/utils/pdfValidation')` dentro do `load` — não é
+ * exercitado aqui, porque um import dinâmico de `$lib` não resolve sob
+ * `node --test`. O que estes testes cobrem são as guardas de entrada e saída de
+ * `loadDirectly`/`load`, que são as mesmas nos dois ramos; o miolo da validação
+ * fica por cobrir e está declarado no relatório da lane.
+ *
+ * @param {{ getDocument?: (opcoes: any) => any, online?: boolean, catalogo?: boolean, fetch?: any }} [opcoes]
  */
 function montarLeitor(opcoes = {}) {
   const { online = true, catalogo = false } = opcoes;
@@ -128,12 +143,15 @@ function montarLeitor(opcoes = {}) {
     // — o estado que o componente declara —
     lastLoadedFile: null,
     cargaEmVoo: null,
+    geracaoDaCarga: 0,
     pdfUiState: 'idle',
     pdfUiMessage: null,
     pdfLoading: false,
     pdfError: null,
     lastPdfPathForRecovery: null,
     lastOriginalFullUrlForRecovery: null,
+    lastFileUrlForRecovery: null,
+    activeForcedObjectUrl: null,
     totalPages: 0,
     currentPage: 0,
     retryCount: 0,
@@ -150,6 +168,19 @@ function montarLeitor(opcoes = {}) {
     viewer: { setDocument: (/** @type {any} */ d) => registo.documentos.push(d) },
     checkEffectiveConnectivity: async () => online,
     clearPdfFromSwCache: async () => {},
+
+    // O "Buscar online" precisa destes; nenhum temporizador real, para a suite
+    // não ficar presa aos 8 s do AbortController.
+    fetch: opcoes.fetch,
+    AbortController: class {
+      constructor() {
+        this.signal = {};
+      }
+      abort() {}
+    },
+    setTimeout: () => 0,
+    clearTimeout: () => {},
+    URL: { createObjectURL: () => 'blob:objeto-falso', revokeObjectURL: () => {} },
 
     resolveCanonicalPdfUrl: (/** @type {string} */ fileUrl) => ({
       pdfPath: fileUrl.replace(/^\//, ''),
@@ -169,8 +200,28 @@ function montarLeitor(opcoes = {}) {
 
   estado.load = fabricar('async function load(', estado);
   const loadDirectly = fabricar('async function loadDirectly(', estado);
+  const handleForceOnlineFetch = fabricar('async function handleForceOnlineFetch(', estado);
 
-  return { estado, registo, loadDirectly, load: estado.load };
+  return { estado, registo, loadDirectly, load: estado.load, handleForceOnlineFetch };
+}
+
+/**
+ * Uma promessa é considerada pendurada se não resolver dentro de `ms`. Serve
+ * para as asserções de "esta chamada tem de sair sem trabalho": sem isto, a
+ * regressão pendura a suite inteira em vez de a pintar de vermelho.
+ *
+ * @param {Promise<any>} promessa
+ * @param {number} [ms]
+ */
+async function saiuOuPendurou(promessa, ms = 250) {
+  /** @type {any} */
+  let temporizador;
+  const relogio = new Promise((resolve) => {
+    temporizador = setTimeout(() => resolve('pendurou'), ms);
+  });
+  const resultado = await Promise.race([promessa.then(() => 'saiu'), relogio]);
+  clearTimeout(temporizador);
+  return resultado;
 }
 
 /* ------------------------------------------------------------------ */
@@ -220,7 +271,14 @@ describe('D1 — a abertura pede o PDF uma vez só', () => {
     await Promise.resolve();
     const transicoesAntes = registo.transicoes.length;
 
-    await loadDirectly(URL_A); // a segunda entrada, com a primeira ainda em voo
+    // A segunda entrada, com a primeira ainda em voo. Sem a guarda ela fica à
+    // espera do mesmo `getDocument` que nunca resolve — e um `await` cru aqui
+    // penduraria `npm test` inteiro em vez de falhar.
+    assert.equal(
+      await saiuOuPendurou(loadDirectly(URL_A)),
+      'saiu',
+      'a segunda entrada tem de sair sem trabalho, não esperar pela primeira'
+    );
 
     assert.equal(
       registo.transicoes.length,
@@ -267,6 +325,122 @@ describe('D1 — a abertura pede o PDF uma vez só', () => {
 
     resolvedores[1]({ numPages: 2 });
     await deB;
+    assert.equal(estado.cargaEmVoo, null);
+  });
+
+  it('A → B → voltar a A: a carga de A que ficou para trás não liberta a marca da nova', async () => {
+    // A marca é a URL, e a URL não identifica a chamada. Sem o número de série,
+    // o `finally` de A#1 vê `cargaEmVoo === A` — mas essa marca é de A#2, que
+    // ainda está a descarregar — e liberta-a. A janela de deduplicação reabre e
+    // a abertura seguinte volta a pedir o PDF duas vezes.
+    /** @type {Array<(v: any) => void>} */
+    const resolvedores = [];
+    const { registo, loadDirectly, estado } = montarLeitor({
+      getDocument: () => ({ promise: new Promise((resolve) => resolvedores.push(resolve)) })
+    });
+
+    const a1 = loadDirectly(URL_A);
+    await Promise.resolve();
+    const b1 = loadDirectly(URL_B); // o utilizador navega para B
+    await Promise.resolve();
+    const a2 = loadDirectly(URL_A); // e volta a A, com A#1 ainda em voo
+    await Promise.resolve();
+
+    assert.equal(registo.pedidos.length, 3);
+    assert.equal(estado.cargaEmVoo, URL_A, 'a marca corrente é a de A#2');
+
+    resolvedores[0]({ numPages: 1 }); // A#1, a que ficou para trás, resolve
+    await a1;
+    assert.equal(
+      estado.cargaEmVoo,
+      URL_A,
+      'A#1 não pode libertar a marca de A#2, que ainda está a descarregar'
+    );
+
+    // E a prova de que a janela continua fechada: uma quarta entrada para A —
+    // o bloco reativo a disparar outra vez — não gera pedido nenhum.
+    assert.equal(await saiuOuPendurou(loadDirectly(URL_A)), 'saiu');
+    assert.equal(registo.pedidos.length, 3, 'a janela de deduplicação reabriu');
+
+    resolvedores[1]({ numPages: 2 });
+    resolvedores[2]({ numPages: 3 });
+    await Promise.all([b1, a2]);
+    assert.equal(estado.cargaEmVoo, null, 'no fim, a marca do dono corrente cai');
+  });
+
+  it('uma carga paralela que falha depois de outra ter tido êxito não refaz a validação', async () => {
+    // A#1 resolve e põe o PDF no ecrã; A#2 falha e cai no `catch`. Se a
+    // autorização de recarga viesse de `cargaEmVoo === fileUrl`, o `load` de A#2
+    // saltava a deduplicação e recomeçava tudo por cima de um PDF já visível.
+    /** @type {Array<{resolve: (v: any) => void, reject: (e: any) => void}>} */
+    const controlos = [];
+    const { registo, loadDirectly, estado } = montarLeitor({
+      online: false,
+      getDocument: () => ({
+        promise: new Promise((resolve, reject) => controlos.push({ resolve, reject }))
+      })
+    });
+
+    const a1 = loadDirectly(URL_A);
+    await Promise.resolve();
+    loadDirectly(URL_B);
+    await Promise.resolve();
+    const a2 = loadDirectly(URL_A);
+    await Promise.resolve();
+
+    assert.equal(registo.pedidos.length, 3);
+
+    controlos[0].resolve({ numPages: 5 }); // A#1 tem êxito
+    await a1;
+    assert.equal(estado.lastLoadedFile, URL_A);
+    assert.equal(estado.pdfError, null);
+
+    controlos[2].reject(new Error('A#2 falhou')); // A#2 falha e cai no `load`
+    await a2;
+
+    assert.equal(
+      registo.pedidos.length,
+      3,
+      'o `load` de A#2 não pode pedir o PDF outra vez por cima do que já está no ecrã'
+    );
+    assert.equal(estado.pdfUiState, 'idle', 'e não pode estragar o estado bom da A#1');
+    assert.equal(estado.lastLoadedFile, URL_A);
+  });
+
+  it('a marca de carga em voo, sozinha, não autoriza um `load` a repetir o trabalho', async () => {
+    // O caso isolado do anterior. Enquanto a autorização vinha de
+    // `cargaEmVoo === fileUrl`, QUALQUER `load` desta URL saltava a deduplicação
+    // durante toda a janela em que a marca estivesse posta — inclusive um cujo
+    // `loadDirectly` de origem nunca teve motivo nenhum para recarregar.
+    const { registo, load, estado } = montarLeitor();
+
+    estado.lastLoadedFile = URL_A; // já carregado
+    estado.cargaEmVoo = URL_A; // e com uma carga desta mesma URL em voo
+    estado.pdfError = null; // sem nada errado no ecrã
+
+    await load(URL_A); // sem autorização explícita
+
+    assert.equal(registo.pedidos.length, 0, 'não há motivo para pedir o PDF outra vez');
+    assert.equal(registo.transicoes.length, 0, 'nem para mexer no estado da UI');
+
+    // E o contraponto: com a autorização, o mesmo `load` trabalha.
+    await load(URL_A, true);
+    assert.equal(registo.pedidos.length, 1);
+  });
+
+  it('um `?file=` que a resolução de URL recusa termina com mensagem, não com rejeição solta', async () => {
+    // `resolveCanonicalPdfUrl` estava fora do `try` do `load`: a exceção escapava
+    // pelo `catch` do `loadDirectly`, o `finally` punha `idle` e sobrava um ecrã
+    // mudo mais uma rejeição não tratada na consola.
+    const { loadDirectly, estado } = montarLeitor({ online: false });
+    estado.resolveCanonicalPdfUrl = () => {
+      throw new TypeError('Invalid URL');
+    };
+
+    await assert.doesNotReject(() => loadDirectly('/assets/%%%/Coro.pdf'));
+
+    assert.notEqual(estado.pdfUiState, 'idle', 'terminar em `idle` é o ecrã mudo');
+    assert.ok(estado.pdfError, 'sem PDF na tela, tem de haver mensagem');
     assert.equal(estado.cargaEmVoo, null);
   });
 
@@ -332,6 +506,61 @@ describe('D3 — a queda para a validação não termina em ecrã mudo', () => {
 });
 
 /* ------------------------------------------------------------------ */
+/* O "Buscar online" tem de ficar de pé                                */
+/* ------------------------------------------------------------------ */
+
+describe('o "Buscar online" não se desfaz a si próprio', () => {
+  it('depois de uma busca manual bem-sucedida, o bloco reativo não manda recarregar', async () => {
+    // `lastLoadedFile` ficava com a URL **completa**, que nunca é igual ao
+    // `?file=` cru. O bloco reativo `$: if (viewer && file && file !== lastLoadedFile)`
+    // reavaliava, via diferença onde não havia nenhuma, e mandava o `loadDirectly`
+    // refazer o pedido que tinha acabado de falhar — desfazendo, segundos depois,
+    // a busca que o utilizador pediu.
+    const { estado, registo, loadDirectly, handleForceOnlineFetch } = montarLeitor({
+      online: true,
+      // A abertura normal falha; só o blob trazido pela busca manual abre.
+      getDocument: (/** @type {{url: string}} */ o) =>
+        o.url.startsWith('blob:')
+          ? { promise: Promise.resolve({ numPages: 7 }) }
+          : { promise: Promise.reject(new Error('nem cache nem rede')) },
+      fetch: async () => ({
+        ok: true,
+        status: 200,
+        blob: async () => ({ size: 1234 })
+      })
+    });
+
+    // Primeiro a abertura falha — é o que faz aparecer o botão.
+    await loadDirectly(URL_A);
+    assert.ok(estado.pdfError, 'sem erro não haveria botão "Buscar online"');
+
+    // O utilizador carrega no botão, e desta vez o PDF vem.
+    await handleForceOnlineFetch();
+    assert.equal(estado.pdfUiState, 'idle');
+    assert.equal(estado.totalPages, 7);
+
+    const pedidosDepoisDaBusca = registo.pedidos.length;
+
+    // A condição do bloco reativo, tal como está no ficheiro. Se ela for
+    // verdadeira aqui, o leitor recarrega sozinho e deita fora a busca manual.
+    assert.equal(
+      estado.lastLoadedFile,
+      URL_A,
+      '`lastLoadedFile` tem de ficar com o `?file=` cru, que é o que o bloco reativo compara'
+    );
+
+    // E a confirmação por execução: a entrada que o bloco reativo faria sai sem
+    // trabalho.
+    assert.equal(await saiuOuPendurou(loadDirectly(URL_A)), 'saiu');
+    assert.equal(
+      registo.pedidos.length,
+      pedidosDepoisDaBusca,
+      'o leitor voltou a pedir o PDF e desfez a busca manual'
+    );
+  });
+});
+
+/* ------------------------------------------------------------------ */
 /* Invariantes estruturais do componente                               */
 /* ------------------------------------------------------------------ */
 
@@ -379,9 +608,39 @@ describe('a fiação do componente — as duas entradas continuam a ser as mesma
     );
   });
 
-  it('só há dois `getDocument` no caminho de abertura, e cada um numa das funções', () => {
-    // Se alguém acrescentar um terceiro pedido ao caminho comum, isto avisa.
+  it('o ficheiro tem exatamente três `getDocument` — nenhum pedido novo entrou no caminho de abertura', () => {
+    // Dois no caminho de abertura (`loadDirectly` e o `load` de recurso) e um no
+    // "Buscar online" manual. Um quarto é pedido novo, e tem de acender luz.
     const chamadas = [...codigo.matchAll(/getDocument\(\{/g)];
     assert.equal(chamadas.length, 3, 'loadDirectly, load e o "buscar online" manual');
+  });
+
+  it('a marca é libertada por número de série, nunca por comparação de URL', () => {
+    const corpo = semComentarios(recortarFuncao('async function loadDirectly('));
+    assert.match(
+      corpo,
+      /if \(geracaoDaCarga === geracao\) cargaEmVoo = null;/,
+      'a URL não identifica a chamada: duas cargas do mesmo ficheiro coexistem'
+    );
+    assert.doesNotMatch(corpo, /if \(cargaEmVoo === fileUrl\) cargaEmVoo = null;/);
+  });
+
+  it('`load` não decide a recarga olhando para `cargaEmVoo`', () => {
+    // Enquanto a marca estivesse posta, QUALQUER `load` da mesma URL saltava a
+    // deduplicação — inclusive o de uma carga paralela que já não interessa.
+    const corpo = semComentarios(recortarFuncao('async function load('));
+    assert.doesNotMatch(corpo, /cargaEmVoo/);
+    assert.match(corpo, /if \(!recargaAutorizada && lastLoadedFile === fileUrl && !pdfError\) return;/);
+  });
+
+  it('`resolveCanonicalPdfUrl` do `load` está dentro do `try`', () => {
+    const corpo = semComentarios(recortarFuncao('async function load('));
+    const iTry = corpo.indexOf('try {');
+    const iResolve = corpo.indexOf('resolveCanonicalPdfUrl(fileUrl)');
+    assert.notEqual(iResolve, -1);
+    assert.ok(
+      iTry !== -1 && iTry < iResolve,
+      'fora do `try`, um `?file=` inválido escapa e deixa o ecrã mudo'
+    );
   });
 });
