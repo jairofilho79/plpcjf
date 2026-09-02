@@ -1,13 +1,17 @@
 // PDF Validation Utility
 // Validates PDF availability and identifies missing PDFs
 
-import { getCachedPDFsFast, waitForServiceWorker, downloadPDFsViaSW, invalidateCachedPDFsLocal, getCachedPDFs, debugLog } from '$lib/utils/swRegistration';
+// `downloadPDFsViaSW` e `debugLog` saíram com o auto-download que vivia em
+// `ensurePdfAvailable` — função que, entretanto, deixou de existir. Validar já
+// não baixa nada.
+import { getCachedPDFsFast, waitForServiceWorker, invalidateCachedPDFsLocal, getCachedPDFs } from '$lib/utils/swRegistration';
 import { getPdfRelPath } from '$lib/utils/pathUtils';
 import { isPdfAvailableInIndex } from '$lib/utils/pdfIndex';
 import compositeValidator from '$lib/offline/validation/CompositeValidator.js';
 import cacheStorageAdapter from '$lib/offline/storage/CacheStorageAdapter.js';
 import PdfPathManager from '$lib/offline/utils/PdfPathManager.js';
 import { buildPdfCacheIndex } from './pdfCacheIndex.js';
+import { resolveAvailabilityInOrder } from './pdfValidationOrder.js';
 // A guarda `typeof localStorage === 'undefined'` que estava nestas funções não
 // protegia: `typeof` só suprime exceção para referência não resolvível
 // (ECMA-262 §13.5.3), e é o `[[Get]]` de `localStorage` que lança no Firefox
@@ -204,8 +208,11 @@ export async function validatePdfAvailabilityFast(pdfPath, pdfId = null) {
 /**
  * Validates if a PDF is available in cache
  * @param {string} pdfPath - Relative path of the PDF (ex: "assets/ColAdultos/001.pdf")
- * @param {string} pdfId - Optional PDF ID for caching results
- * @returns {Promise<{available: boolean, needsDownload: boolean, url: string}>}
+ * @param {string | null} [pdfId] - Optional PDF ID for caching results
+ * @returns {Promise<{available: boolean, needsDownload: boolean, url: string, effectiveOnline: boolean | undefined}>}
+ *   `effectiveOnline` é o veredito da sonda de rede, para o chamador não ter de
+ *   a repetir. `undefined` quando a sonda não correu — o cache respondeu, ou
+ *   houve exceção antes de se chegar lá.
  */
 export async function validatePdfAvailability(pdfPath, pdfId = null) {
   if (!pdfPath) {
@@ -224,19 +231,22 @@ export async function validatePdfAvailability(pdfPath, pdfId = null) {
   }
 
   try {
-    const effectiveOnline = await checkEffectiveConnectivity({ timeoutMs: 1500 });
-    // Use CompositeValidator with full validation (cache + network)
-    const result = await compositeValidator.validate(normalizedPath, {
-      useIndex: true,
-      checkNetwork: effectiveOnline,
-      pdfId: pdfId
+    // A ordem é o ponto: cache primeiro, rede só se o cache falhar. Ver
+    // `pdfValidationOrder.js` — a política mora lá para poder ser testada.
+    const { result, effectiveOnline } = await resolveAvailabilityInOrder({
+      validate: (options) => compositeValidator.validate(normalizedPath, options),
+      checkConnectivity: () => checkEffectiveConnectivity({ timeoutMs: 1500 }),
+      pdfId
     });
-    
+
     // Convert ValidationResult to legacy format
     const legacyResult = {
       available: result.available,
       needsDownload: result.needsDownload,
-      url: result.url || fullUrl
+      url: result.url || fullUrl,
+      // Vai junto para o chamador não ter de sondar outra vez o que já foi
+      // sondado aqui. `undefined` quando o cache respondeu e a sonda não correu.
+      effectiveOnline
     };
     
     // Cache the result if PDF ID is provided
@@ -259,7 +269,7 @@ export async function validatePdfAvailability(pdfPath, pdfId = null) {
     return legacyResult;
   } catch (error) {
     console.error('[PDF Validation] Error:', error);
-    const result = { available: false, needsDownload: false, url: fullUrl };
+    const result = { available: false, needsDownload: false, url: fullUrl, effectiveOnline: undefined };
     // Don't cache errors, but cache negative results if PDF ID is provided
     if (pdfId && !error.message?.includes('timeout')) {
       cacheValidation(pdfId, { available: false, url: fullUrl });
@@ -268,42 +278,11 @@ export async function validatePdfAvailability(pdfPath, pdfId = null) {
   }
 }
 
-/**
- * Ensures PDF is available before navigation
- * @param {string} pdfPath - Path of the PDF
- * @returns {Promise<boolean>} - true if available, false otherwise
- */
-export async function ensurePdfAvailable(pdfPath) {
-  const validation = await validatePdfAvailability(pdfPath);
-
-  if (validation.available) {
-    return true;
-  }
-
-  const effectiveOnline = await checkEffectiveConnectivity({ timeoutMs: 1500 });
-  if (validation.needsDownload && effectiveOnline) {
-    // Try to download automatically
-    try {
-      debugLog('[PDF Validation] Attempting auto-download:', validation.url);
-      await downloadPDFsViaSW([validation.url], 1, (progress) => {
-        if (progress.completed > 0) {
-          debugLog('[PDF Validation] Auto-download completed');
-        }
-      });
-      
-      // Wait a bit for SW to process
-      await new Promise(resolve => setTimeout(resolve, 500));
-      
-      // Verify it was cached
-      const recheck = await validatePdfAvailability(pdfPath);
-      return recheck.available;
-    } catch (err) {
-      console.error('[PDF Validation] Auto-download failed:', err);
-    }
-  }
-
-  return false;
-}
+// `ensurePdfAvailable` foi removida: depois de o clique deixar de validar, ficou
+// com zero chamadores em todo o `src/`. Dar-lhe um `pdfId` para o cache voltar a
+// ser escrito seria consertar uma função que ninguém chama — o cache de
+// validação perdeu o consumidor quente quando `LouvorCard` e
+// `navigateLouvorToLeitor` deixaram de o ler.
 
 /**
  * Finds missing PDFs by comparing louvores with cached PDFs

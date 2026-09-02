@@ -1,10 +1,5 @@
 import { goto } from '$app/navigation';
 import { getPdfRelPath } from '$lib/utils/pathUtils';
-import { isPdfAvailableInIndex } from '$lib/utils/pdfIndex';
-import { ensurePdfAvailable, getCachedValidation, checkEffectiveConnectivity } from '$lib/utils/pdfValidation';
-
-const OFFLINE_ERROR =
-  'PDF não está disponível offline. Por favor, baixe primeiro na página de configuração offline.';
 
 /**
  * @typedef {{
@@ -17,7 +12,16 @@ const OFFLINE_ERROR =
  */
 
 /**
- * Navigate to /leitor for a louvor with the same validation flow as carousel chips.
+ * Navega para /leitor. Não valida nada antes: o leitor resolve a origem do PDF
+ * sozinho — cache do Service Worker, depois rede — e só diagnostica quando isso
+ * falha, que é o caso raro.
+ *
+ * Validar aqui custava duas sondas de conectividade e cinco pedidos do mesmo
+ * PDF, o download completo incluído, antes de a navegação sequer começar. A
+ * assinatura pública fica: o `{ navigated, error }` continua a ser o que
+ * `CarouselChips.svelte` e `/listas` esperam receber, e `error` continua
+ * possível para o único caso que ainda existe — não haver caminho de PDF.
+ *
  * @param {LouvorNav} louvor
  * @returns {Promise<{ navigated: true } | { navigated: false, error?: string }>}
  */
@@ -27,80 +31,11 @@ export async function navigateLouvorToLeitor(louvor) {
     return { navigated: false };
   }
 
-  try {
-    let validated = false;
-    const cached = getCachedValidation(louvor.pdfId);
-    if (cached && cached.available) {
-      validated = true;
-      const fileParam = encodeURIComponent(`/${pdfPath}`);
-      const tituloParam = encodeURIComponent(louvor.nome || '');
-      const subtituloText = `${louvor.categoria || ''} | ${louvor.classificacao || ''}`.trim();
-      const subtituloParam = encodeURIComponent(subtituloText);
-      const url = `/leitor?file=${fileParam}&titulo=${tituloParam}&subtitulo=${subtituloParam}&validated=true`;
-      await goto(url);
-      return { navigated: true };
-    }
+  const fileParam = encodeURIComponent(`/${pdfPath}`);
+  const tituloParam = encodeURIComponent(louvor.nome || '');
+  const subtituloText = `${louvor.categoria || ''} | ${louvor.classificacao || ''}`.trim();
+  const subtituloParam = encodeURIComponent(subtituloText);
 
-    const indexCheck = isPdfAvailableInIndex(louvor.pdfId);
-    let shouldProceed = false;
-
-    if (indexCheck === true) {
-      try {
-        const { validatePdfAvailability } = await import('$lib/utils/pdfValidation');
-        const quickValidation = await validatePdfAvailability(pdfPath, louvor.pdfId);
-        if (quickValidation.available) {
-          shouldProceed = true;
-          validated = true;
-        } else if (quickValidation.needsDownload && navigator.onLine) {
-          shouldProceed = true;
-        }
-      } catch (err) {
-        console.warn('[navigateLouvorToLeitor] Quick validation failed, proceeding anyway:', err);
-        shouldProceed = true;
-      }
-    } else {
-      const isAvailable = await ensurePdfAvailable(pdfPath);
-
-      if (isAvailable) {
-        shouldProceed = true;
-        validated = true;
-      } else {
-        const { validatePdfAvailability } = await import('$lib/utils/pdfValidation');
-        const validation = await validatePdfAvailability(pdfPath, louvor.pdfId);
-        const effectiveOnline = await checkEffectiveConnectivity({ timeoutMs: 1500 });
-        if (validation.needsDownload && effectiveOnline) {
-          shouldProceed = true;
-        } else if (!effectiveOnline && validation.available === false) {
-          return { navigated: false, error: OFFLINE_ERROR };
-        } else {
-          console.warn(
-            '[navigateLouvorToLeitor] Validation uncertain, allowing navigation - leitor will handle errors'
-          );
-          shouldProceed = true;
-        }
-      }
-    }
-
-    if (shouldProceed) {
-      const fileParam = encodeURIComponent(`/${pdfPath}`);
-      const tituloParam = encodeURIComponent(louvor.nome || '');
-      const subtituloText = `${louvor.categoria || ''} | ${louvor.classificacao || ''}`.trim();
-      const subtituloParam = encodeURIComponent(subtituloText);
-      const validatedParam = validated ? '&validated=true' : '';
-      const url = `/leitor?file=${fileParam}&titulo=${tituloParam}&subtitulo=${subtituloParam}${validatedParam}`;
-      await goto(url);
-      return { navigated: true };
-    }
-  } catch (err) {
-    console.error('Erro ao validar PDF:', err);
-    const fileParam = encodeURIComponent(`/${pdfPath}`);
-    const tituloParam = encodeURIComponent(louvor.nome || '');
-    const subtituloText = `${louvor.categoria || ''} | ${louvor.classificacao || ''}`.trim();
-    const subtituloParam = encodeURIComponent(subtituloText);
-    const url = `/leitor?file=${fileParam}&titulo=${tituloParam}&subtitulo=${subtituloParam}`;
-    await goto(url);
-    return { navigated: true };
-  }
-
-  return { navigated: false };
+  await goto(`/leitor?file=${fileParam}&titulo=${tituloParam}&subtitulo=${subtituloParam}`);
+  return { navigated: true };
 }
