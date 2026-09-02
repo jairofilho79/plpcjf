@@ -49,7 +49,10 @@ export function criarStorageSomenteLeitura(inicial = {}) {
     e.name = 'QuotaExceededError';
     throw e;
   };
+  // `clear` precisa lançar também: herdá-lo do spread faria este fake apagar
+  // tudo em silêncio, provando o contrário do que o nome dele promete.
   return /** @type {any} */ ({ ...base, setItem: lancarQuota, removeItem: lancarQuota,
+    clear: lancarQuota,
     get length() { return base.length; }, key: (/** @type {number} */ i) => base.key(i),
     getItem: (/** @type {string} */ k) => base.getItem(k) });
 }

@@ -52,6 +52,16 @@ export function getStorage() {
   try {
     const storage = globalThis.localStorage;
     if (!storage) return null;
+    // Extensões de privacidade substituem `window.localStorage` por stubs. Um
+    // número, uma string ou um `{}` passam no teste de verdade e estouram no
+    // primeiro `.setItem` de quem chamou; a sonda tem de recusá-los.
+    if (
+      typeof storage.getItem !== 'function' ||
+      typeof storage.setItem !== 'function' ||
+      typeof storage.removeItem !== 'function'
+    ) {
+      return null;
+    }
     void storage.length;
     return storage;
   } catch {
@@ -76,7 +86,7 @@ export function safeGet(key) {
 /**
  * @param {string} key
  * @param {string} value
- * @returns {boolean} `true` só se gravou de facto.
+ * @returns {boolean} `true` só se gravou de fato.
  */
 export function safeSet(key, value) {
   try {
@@ -108,18 +118,20 @@ export function safeRemove(key) {
  * @returns {string[]} todas as chaves, ou `[]` se o storage não dá.
  */
 export function safeKeys() {
+  /** @type {string[]} */
+  const chaves = [];
   try {
     const storage = globalThis.localStorage;
-    if (!storage) return [];
-    const chaves = [];
-    for (let i = 0; i < storage.length; i++) {
+    if (!storage) return chaves;
+    for (let i = 0, total = storage.length; i < total; i++) {
       const chave = storage.key(i);
       if (chave !== null) chaves.push(chave);
     }
-    return chaves;
   } catch {
-    return [];
+    // Devolve o que deu para ler. Descartar o parcial faria a faxina da Fase 8
+    // concluir "nada a limpar" num storage que lança no meio da enumeração.
   }
+  return chaves;
 }
 
 /**
@@ -138,9 +150,15 @@ export function safeRemoveMany(keys) {
   const removed = [];
   /** @type {string[]} */
   const failed = [];
-  for (const key of keys) {
-    if (safeRemove(key)) removed.push(key);
-    else failed.push(key);
+  try {
+    for (const key of keys) {
+      if (safeRemove(key)) removed.push(key);
+      else failed.push(key);
+    }
+  } catch {
+    // Lista inválida (`undefined`, `null`, não-iterável). O contrato desta
+    // função é não lançar, e ela é justamente a que a limpeza de dados usa:
+    // um throw aqui reintroduziria o abandono pela metade que ela veio matar.
   }
   return { removed, failed };
 }

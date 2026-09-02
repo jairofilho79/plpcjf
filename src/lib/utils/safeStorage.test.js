@@ -47,7 +47,7 @@ function desinstalar() {
 describe('safeStorage — caminho feliz', () => {
   beforeEach(() => {
     globalThis.window = {};
-    instalar(criarFakeStorage({ a: '1', b: '2' }));
+    instalar(criarFakeStorage({ a: '1', b: '2', c: '3' }));
   });
   afterEach(desinstalar);
 
@@ -64,8 +64,8 @@ describe('safeStorage — caminho feliz', () => {
   });
 
   it('safeSet grava e devolve true', () => {
-    assert.equal(safeSet('c', '3'), true);
-    assert.equal(safeGet('c'), '3');
+    assert.equal(safeSet('d', '4'), true);
+    assert.equal(safeGet('d'), '4');
   });
 
   it('safeRemove devolve true ao remover e também quando a chave não existia', () => {
@@ -75,11 +75,11 @@ describe('safeStorage — caminho feliz', () => {
   });
 
   it('safeKeys devolve todas as chaves', () => {
-    assert.deepEqual(safeKeys().sort(), ['a', 'b']);
+    assert.deepEqual(safeKeys(), ['a', 'b', 'c']);
   });
 
   it('safeRemoveMany remove todas e não reporta falha nenhuma', () => {
-    assert.deepEqual(safeRemoveMany(['a', 'b']), { removed: ['a', 'b'], failed: [] });
+    assert.deepEqual(safeRemoveMany(['a', 'b', 'c']), { removed: ['a', 'b', 'c'], failed: [] });
     assert.deepEqual(safeKeys(), []);
   });
 });
@@ -228,5 +228,62 @@ describe('safeStorage — SSR, sem localStorage nenhum', () => {
     // havia chave nenhuma para começo de conversa.
     assert.equal(safeRemove('a'), true);
     assert.deepEqual(safeRemoveMany(['a', 'b']), { removed: ['a', 'b'], failed: [] });
+  });
+});
+
+describe('safeStorage — entradas hostis', () => {
+  afterEach(desinstalar);
+
+  for (const impostor of [42, 'abc', true, {}, { getItem: 1 }]) {
+    it(`getStorage recusa ${JSON.stringify(impostor)}: não é Storage`, () => {
+      globalThis.window = {};
+      instalar(impostor);
+      // Extensões de privacidade trocam `window.localStorage` por stubs assim.
+      // Devolvê-los faria estourar o idioma óbvio `const s = getStorage(); s.setItem(...)`.
+      assert.equal(getStorage(), null);
+    });
+  }
+
+  it('safeRemoveMany não lança com lista inválida', () => {
+    globalThis.window = {};
+    instalar(criarFakeStorage({ a: '1' }));
+    for (const invalida of [undefined, null, 42, { nao: 'iteravel' }]) {
+      assert.doesNotThrow(() => safeRemoveMany(/** @type {any} */ (invalida)));
+      assert.deepEqual(safeRemoveMany(/** @type {any} */ (invalida)), { removed: [], failed: [] });
+    }
+    // E a chave que existia continua lá: a lista inválida não removeu nada.
+    assert.equal(safeGet('a'), '1');
+  });
+
+  it('safeKeys devolve o parcial quando a enumeração lança no meio', () => {
+    const base = criarFakeStorage({ k1: '1', k2: '2', k3: '3' });
+    globalThis.window = {};
+    instalar(/** @type {any} */ ({
+      ...base,
+      get length() { return base.length; },
+      getItem: (/** @type {string} */ k) => base.getItem(k),
+      setItem: () => {},
+      removeItem: () => {},
+      key(/** @type {number} */ i) {
+        if (i === 2) throw new Error('storage bloqueado');
+        return base.key(i);
+      }
+    }));
+    // Descartar o parcial faria a faxina concluir "nada a limpar".
+    assert.deepEqual(safeKeys(), ['k1', 'k2']);
+  });
+});
+
+describe('fakeStorage — os próprios fakes', () => {
+  it('criarStorageSomenteLeitura também lança em clear', () => {
+    // Sem isto o fake apagaria tudo em silêncio, provando o contrário do nome.
+    const s = criarStorageSomenteLeitura({ a: '1' });
+    assert.throws(() => s.clear(), { name: 'QuotaExceededError' });
+    assert.equal(s.getItem('a'), '1');
+  });
+
+  it('criarStorageQueLanca lança até em length', () => {
+    const s = criarStorageQueLanca();
+    assert.throws(() => s.length, { name: 'SecurityError' });
   });
 });
