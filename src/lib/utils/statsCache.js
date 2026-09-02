@@ -8,7 +8,7 @@
  * - Migração automática entre versões
  */
 
-import { safeKeys, safeRemoveMany } from './safeStorage.js';
+import { safeKeys, safeRemove, safeRemoveMany } from './safeStorage.js';
 
 const STATS_CACHE_KEY = 'offlineStatsCache_v2';
 const STATS_CACHE_VERSION = 2;
@@ -401,8 +401,12 @@ export function invalidateCategories(categories) {
 export function clearCache() {
   try {
     memoryCache.clear();
-    localStorage.removeItem(STATS_CACHE_KEY);
-    
+    // `safeRemove` e não `localStorage.removeItem`: um throw AQUI abortava a
+    // função inteira no `catch` de baixo, e nem a enumeração nem o
+    // `safeRemoveMany` abaixo chegavam a correr — deixando inalcançável
+    // exatamente o cenário que eles vieram cobrir.
+    safeRemove(STATS_CACHE_KEY);
+
     // Limpar também caches antigos (Fase 2)
     const keysToRemove = [];
     // Mesma troca da `initStatsCache`: enumerar cru descartava a lista inteira
