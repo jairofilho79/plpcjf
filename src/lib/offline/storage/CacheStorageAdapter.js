@@ -43,7 +43,7 @@ export class CacheStorageAdapter extends CacheRepository {
    */
   startBatchMode() {
     this._inBatchMode = true;
-    logger.debug('CacheStorageAdapter', 'Batch mode started');
+    logger.debug('Batch mode started');
   }
   
   /**
@@ -51,7 +51,7 @@ export class CacheStorageAdapter extends CacheRepository {
    */
   endBatchMode() {
     this._inBatchMode = false;
-    logger.debug('CacheStorageAdapter', 'Batch mode ended');
+    logger.debug('Batch mode ended');
   }
   
   /**
@@ -109,10 +109,10 @@ export class CacheStorageAdapter extends CacheRepository {
       try {
         // Try to open with configured cache name
         const cache = await caches.open(this.cacheName);
-        logger.debug('CacheStorageAdapter', `Opened cache: ${this.cacheName}`);
+        logger.debug(`Opened cache: ${this.cacheName}`);
         return cache;
       } catch (error) {
-        logger.warn('CacheStorageAdapter', `Failed to open cache ${this.cacheName}, trying fallback`, error);
+        logger.warn(`Failed to open cache ${this.cacheName}, trying fallback`, error);
         
         // Try fallback cache names
         const fallbackNames = getConfig('ALLOWED_CACHE_NAMES') || [];
@@ -120,11 +120,11 @@ export class CacheStorageAdapter extends CacheRepository {
           if (fallbackName !== this.cacheName) {
             try {
               const cache = await caches.open(fallbackName);
-              logger.info('CacheStorageAdapter', `Using fallback cache: ${fallbackName}`);
+              logger.info(`Using fallback cache: ${fallbackName}`);
               this.cacheName = fallbackName; // Update cache name
               return cache;
             } catch (fallbackError) {
-              logger.debug('CacheStorageAdapter', `Fallback cache ${fallbackName} also failed`);
+              logger.debug(`Fallback cache ${fallbackName} also failed`);
             }
           }
         }
@@ -168,7 +168,7 @@ export class CacheStorageAdapter extends CacheRepository {
             const request = new Request(cached.url);
             const response = await cache.match(request);
             if (response) {
-              logger.debug('CacheStorageAdapter', `PDF found via variation cache: ${normalizedPath}`);
+              logger.debug(`PDF found via variation cache: ${normalizedPath}`);
               return response;
             }
           } catch (e) {
@@ -177,14 +177,14 @@ export class CacheStorageAdapter extends CacheRepository {
           }
         } else {
           // We know this path doesn't exist (cached miss)
-          logger.debug('CacheStorageAdapter', `PDF not found (cached miss): ${normalizedPath}`);
+          logger.debug(`PDF not found (cached miss): ${normalizedPath}`);
           return null;
         }
       }
 
       // Check miss cache (avoid repeated failed attempts)
       if (this._missCache.has(normalizedPath)) {
-        logger.debug('CacheStorageAdapter', `PDF in miss cache, skipping: ${normalizedPath}`);
+        logger.debug(`PDF in miss cache, skipping: ${normalizedPath}`);
         return null;
       }
 
@@ -203,7 +203,7 @@ export class CacheStorageAdapter extends CacheRepository {
               url: url,
               timestamp: Date.now()
             });
-            logger.debug('CacheStorageAdapter', `PDF encontrado no cache: ${normalizedPath}`);
+            logger.debug(`PDF encontrado no cache: ${normalizedPath}`);
             return response;
           }
         } catch {
@@ -232,10 +232,10 @@ export class CacheStorageAdapter extends CacheRepository {
         this._missCache.delete(normalizedPath);
       }, this._missCacheTTL);
 
-      logger.debug('CacheStorageAdapter', `PDF not found in cache: ${normalizedPath}`);
+      logger.debug(`PDF not found in cache: ${normalizedPath}`);
       return null;
     } catch (error) {
-      logger.error('CacheStorageAdapter', `Error getting PDF: ${pdfPath}`, error);
+      logger.error(`Error getting PDF: ${pdfPath}`, error);
       return null;
     }
   }
@@ -277,7 +277,7 @@ export class CacheStorageAdapter extends CacheRepository {
 
     await cache.put(request, response);
     
-    logger.info('CacheStorageAdapter', `PDF stored in cache: ${normalizedPath}`);
+    logger.info(`PDF stored in cache: ${normalizedPath}`);
     
     // Invalidate variation cache for this path (new PDF may match)
     this._variationCache.delete(normalizedPath);
@@ -316,7 +316,7 @@ export class CacheStorageAdapter extends CacheRepository {
             }
           });
         } catch (swError) {
-          logger.debug('CacheStorageAdapter', 'Could not notify Service Worker', swError);
+          logger.debug('Could not notify Service Worker', swError);
         }
       }
     }
@@ -344,7 +344,7 @@ export class CacheStorageAdapter extends CacheRepository {
         notifyServiceWorker: batch ? false : notifyServiceWorker 
       });
     } catch (error) {
-      logger.error('CacheStorageAdapter', `Error storing PDF: ${pdfPath}`, error);
+      logger.error(`Error storing PDF: ${pdfPath}`, error);
       throw error;
     }
   }
@@ -369,7 +369,7 @@ export class CacheStorageAdapter extends CacheRepository {
       return 0;
     }
     
-    logger.info('CacheStorageAdapter', `Starting batch storage of ${pdfs.length} PDFs`);
+    logger.info(`Starting batch storage of ${pdfs.length} PDFs`);
     
     let stored = 0;
     const storedPaths = [];
@@ -385,12 +385,12 @@ export class CacheStorageAdapter extends CacheRepository {
           stored++;
           storedPaths.push(result.normalizedPath);
         } catch (error) {
-          logger.error('CacheStorageAdapter', `Error storing PDF in batch: ${path}`, error);
+          logger.error(`Error storing PDF in batch: ${path}`, error);
           // Continue with other PDFs
         }
       }
       
-      logger.info('CacheStorageAdapter', `Batch storage completed: ${stored}/${pdfs.length} PDFs stored`);
+      logger.info(`Batch storage completed: ${stored}/${pdfs.length} PDFs stored`);
       
       // Emit events once at the end if requested
       if (emitEvents && stored > 0) {
@@ -415,14 +415,14 @@ export class CacheStorageAdapter extends CacheRepository {
               }
             });
           } catch (swError) {
-            logger.debug('CacheStorageAdapter', 'Could not notify Service Worker', swError);
+            logger.debug('Could not notify Service Worker', swError);
           }
         }
       }
       
       return stored;
     } catch (error) {
-      logger.error('CacheStorageAdapter', 'Error during batch storage', error);
+      logger.error('Error during batch storage', error);
       throw error;
     }
   }
@@ -473,7 +473,7 @@ export class CacheStorageAdapter extends CacheRepository {
       }
 
       if (deleted) {
-        logger.info('CacheStorageAdapter', `PDF deleted from cache: ${normalizedPath}`);
+        logger.info(`PDF deleted from cache: ${normalizedPath}`);
         
         // Invalidate variation cache
         this._variationCache.delete(normalizedPath);
@@ -493,7 +493,7 @@ export class CacheStorageAdapter extends CacheRepository {
 
       return deleted;
     } catch (error) {
-      logger.error('CacheStorageAdapter', `Error deleting PDF: ${pdfPath}`, error);
+      logger.error(`Error deleting PDF: ${pdfPath}`, error);
       return false;
     }
   }
@@ -525,17 +525,17 @@ export class CacheStorageAdapter extends CacheRepository {
             pdfPaths.push(normalized);
           }
         } catch (e) {
-          logger.debug('CacheStorageAdapter', `Error processing cache key: ${request.url}`, e);
+          logger.debug(`Error processing cache key: ${request.url}`, e);
         }
       }
 
       // Remove duplicates
       const uniquePaths = [...new Set(pdfPaths)];
-      logger.debug('CacheStorageAdapter', `Listed ${uniquePaths.length} PDFs from cache`);
+      logger.debug(`Listed ${uniquePaths.length} PDFs from cache`);
       
       return uniquePaths;
     } catch (error) {
-      logger.error('CacheStorageAdapter', 'Error listing PDFs', error);
+      logger.error('Error listing PDFs', error);
       return [];
     }
   }
@@ -580,14 +580,14 @@ export class CacheStorageAdapter extends CacheRepository {
       // Clear variation cache
       this._clearVariationCache();
       
-      logger.info('CacheStorageAdapter', `Cache cleared: ${this.cacheName}`);
+      logger.info(`Cache cleared: ${this.cacheName}`);
       
       // Emit event
       offlineEvents.emit(EVENTS.CACHE_CLEARED, {
         cacheName: this.cacheName
       });
     } catch (error) {
-      logger.error('CacheStorageAdapter', 'Error clearing cache', error);
+      logger.error('Error clearing cache', error);
       throw error;
     }
   }
@@ -601,7 +601,7 @@ export class CacheStorageAdapter extends CacheRepository {
     try {
       await this._verifyCacheConsistency();
     } catch (error) {
-      logger.warn('CacheStorageAdapter', 'Cache consistency check failed (non-critical)', error);
+      logger.warn('Cache consistency check failed (non-critical)', error);
     }
     
     // Emit event to notify listeners
@@ -637,7 +637,7 @@ export class CacheStorageAdapter extends CacheRepository {
         }
       }).length;
       
-      logger.debug('CacheStorageAdapter', `Cache consistency check: ${pdfCount} PDFs in cache`);
+      logger.debug(`Cache consistency check: ${pdfCount} PDFs in cache`);
       
       // Notify Service Worker to verify its cache matches
       if (typeof navigator !== 'undefined' && navigator.serviceWorker && navigator.serviceWorker.controller) {
@@ -650,11 +650,11 @@ export class CacheStorageAdapter extends CacheRepository {
             }
           });
         } catch (swError) {
-          logger.debug('CacheStorageAdapter', 'Could not request Service Worker cache verification', swError);
+          logger.debug('Could not request Service Worker cache verification', swError);
         }
       }
     } catch (error) {
-      logger.warn('CacheStorageAdapter', 'Error verifying cache consistency', error);
+      logger.warn('Error verifying cache consistency', error);
     }
   }
 }

@@ -51,11 +51,11 @@ export async function cacheAppPages(options = {}) {
     };
   }
 
-  logger.info('AppPagesCache', `Starting to cache ${APP_ROUTES.length} application pages`);
+  logger.info(`Starting to cache ${APP_ROUTES.length} application pages`);
 
   try {
     const cache = await caches.open(APP_CACHE_NAME);
-    logger.debug('AppPagesCache', `Opened cache: ${APP_CACHE_NAME}`);
+    logger.debug(`Opened cache: ${APP_CACHE_NAME}`);
     
     const results = await Promise.allSettled(
       APP_ROUTES.map(async (route, index) => {
@@ -82,8 +82,8 @@ export async function cacheAppPages(options = {}) {
             options.onProgress(route, index, APP_ROUTES.length);
           }
 
-          logger.debug('AppPagesCache', `Fetching page: ${route} (${url.href})`);
-          logger.debug('AppPagesCache', `Request details for ${route}:`, {
+          logger.debug(`Fetching page: ${route} (${url.href})`);
+          logger.debug(`Request details for ${route}:`, {
             url: url.href,
             method: request.method,
             mode: request.mode,
@@ -96,7 +96,7 @@ export async function cacheAppPages(options = {}) {
           let response;
           try {
             response = await fetch(request);
-            logger.debug('AppPagesCache', `Fetch completed for ${route}`);
+            logger.debug(`Fetch completed for ${route}`);
           } catch (fetchError) {
             // fetchError é `unknown` sob strict; acesso a .message/.name/.stack
             // preserva o comportamento de runtime já existente (property access
@@ -111,7 +111,7 @@ export async function cacheAppPages(options = {}) {
               url: url.href
             });
 
-            logger.error('AppPagesCache', `Fetch failed for ${route}:`, {
+            logger.error(`Fetch failed for ${route}:`, {
               error: err.message,
               name: err.name,
               stack: err.stack
@@ -119,11 +119,11 @@ export async function cacheAppPages(options = {}) {
             throw new Error(`Fetch failed: ${err.message}`);
           }
 
-          logger.debug('AppPagesCache', `Response for ${route}: status=${response?.status}, ok=${response?.ok}, type=${response?.type}, url=${response?.url}`);
+          logger.debug(`Response for ${route}: status=${response?.status}, ok=${response?.ok}, type=${response?.type}, url=${response?.url}`);
           
           // Check if response came from service worker cache
           if (response.type === 'opaque' || response.type === 'opaqueredirect') {
-            logger.warn('AppPagesCache', `Response for ${route} is opaque - may not be cacheable`);
+            logger.warn(`Response for ${route} is opaque - may not be cacheable`);
           }
           
           // Log response details
@@ -149,17 +149,17 @@ export async function cacheAppPages(options = {}) {
               }
               
               await cache.put(request, responseClone);
-              logger.debug('AppPagesCache', `Cache.put completed for ${route}`);
+              logger.debug(`Cache.put completed for ${route}`);
             } catch (cacheError) {
               const err = /** @type {any} */ (cacheError);
-              logger.error('AppPagesCache', `Cache.put failed for ${route}:`, err);
+              logger.error(`Cache.put failed for ${route}:`, err);
               // If cache.put fails, try with a fresh clone
               try {
                 const freshClone = response.clone();
                 await cache.put(request, freshClone);
-                logger.debug('AppPagesCache', `Cache.put succeeded with fresh clone for ${route}`);
+                logger.debug(`Cache.put succeeded with fresh clone for ${route}`);
               } catch (retryError) {
-                logger.error('AppPagesCache', `Cache.put retry also failed for ${route}:`, retryError);
+                logger.error(`Cache.put retry also failed for ${route}:`, retryError);
                 throw new Error(`Cache.put failed: ${err.message}`);
               }
             }
@@ -170,13 +170,13 @@ export async function cacheAppPages(options = {}) {
             // Verify it was cached using the same request
             const cached = await cache.match(request);
             if (cached) {
-              logger.info('AppPagesCache', `Successfully cached and verified page: ${route}`);
+              logger.info(`Successfully cached and verified page: ${route}`);
               return { success: true, route };
             } else {
               // Try matching with URL string as fallback
               const cachedByUrl = await cache.match(url.href);
               if (cachedByUrl) {
-                logger.info('AppPagesCache', `Successfully cached page (URL match): ${route}`);
+                logger.info(`Successfully cached page (URL match): ${route}`);
                 return { success: true, route };
               }
               
@@ -184,22 +184,22 @@ export async function cacheAppPages(options = {}) {
               const altRequest = new Request(url.href, { mode: 'same-origin' });
               const cachedAlt = await cache.match(altRequest);
               if (cachedAlt) {
-                logger.info('AppPagesCache', `Successfully cached page (alt request match): ${route}`);
+                logger.info(`Successfully cached page (alt request match): ${route}`);
                 return { success: true, route };
               }
               
               // List all cached keys for debugging
               const allKeys = await cache.keys();
-              logger.debug('AppPagesCache', `Cache keys for debugging: ${allKeys.map(r => r.url).join(', ')}`);
+              logger.debug(`Cache keys for debugging: ${allKeys.map(r => r.url).join(', ')}`);
               
-              logger.warn('AppPagesCache', `Cache verification failed for ${route} - may still be cached`);
+              logger.warn(`Cache verification failed for ${route} - may still be cached`);
               // Still return success since cache.put didn't throw
               return { success: true, route, warning: 'Verification failed but cache.put succeeded' };
             }
           } else {
             const status = response?.status || 'unknown';
             const statusText = response?.statusText || 'unknown';
-            logger.error('AppPagesCache', `Invalid response for ${route}:`, {
+            logger.error(`Invalid response for ${route}:`, {
               status,
               statusText,
               ok: response?.ok,
@@ -228,7 +228,7 @@ export async function cacheAppPages(options = {}) {
             route: route,
             url: url?.href
           };
-          logger.error('AppPagesCache', `Failed to cache page ${route}:`, errorDetails);
+          logger.error(`Failed to cache page ${route}:`, errorDetails);
 
           return {
             success: false,
@@ -276,7 +276,7 @@ export async function cacheAppPages(options = {}) {
       }
     });
 
-    logger.info('AppPagesCache', `Page caching complete: ${success} successful, ${failed} failed`);
+    logger.info(`Page caching complete: ${success} successful, ${failed} failed`);
 
     return {
       success,
@@ -286,7 +286,7 @@ export async function cacheAppPages(options = {}) {
     };
   } catch (error) {
     const err = /** @type {any} */ (error);
-    logger.error('AppPagesCache', 'Error caching application pages:', err);
+    logger.error('Error caching application pages:', err);
     return {
       success: 0,
       failed: APP_ROUTES.length,
@@ -313,7 +313,7 @@ export async function isRouteCached(route) {
     const cached = await cache.match(request);
     return !!cached;
   } catch (error) {
-    logger.warn('AppPagesCache', `Error checking if route is cached: ${route}`, error);
+    logger.warn(`Error checking if route is cached: ${route}`, error);
     return false;
   }
 }
@@ -343,13 +343,13 @@ export async function getCachedRoutes() {
           cachedRoutes.push(route);
         }
       } catch (error) {
-        logger.debug('AppPagesCache', `Error checking route ${route}:`, error);
+        logger.debug(`Error checking route ${route}:`, error);
       }
     }
     
     return cachedRoutes;
   } catch (error) {
-    logger.warn('AppPagesCache', 'Error getting cached routes:', error);
+    logger.warn('Error getting cached routes:', error);
     return [];
   }
 }

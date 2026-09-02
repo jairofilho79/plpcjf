@@ -105,10 +105,10 @@ class OfflineManager {
           const u = new URL(url);
           return PdfPathManager.createRequestUrl(decodeURIComponent(u.pathname), u.origin);
         });
-        logger.info('OfflineManager', `Migração NFC: ${r.migradas} migradas, ${r.mantidas} mantidas, ${r.erros} erros`);
+        logger.info(`Migração NFC: ${r.migradas} migradas, ${r.mantidas} mantidas, ${r.erros} erros`);
         if (r.erros === 0) localStorage.setItem(NFC_MIGRATION_FLAG, 'true');
       } catch (error) {
-        logger.warn('OfflineManager', 'Migração NFC falhou (não crítico)', error);
+        logger.warn('Migração NFC falhou (não crítico)', error);
       } finally {
         this._nfcMigrationPromise = null;
       }
@@ -133,10 +133,10 @@ class OfflineManager {
 
     this.initializationPromise = (async () => {
       try {
-        logger.info('OfflineManager', 'Initializing...');
+        logger.info('Initializing...');
 
         if (!browser) {
-          logger.warn('OfflineManager', 'Not in browser environment, skipping initialization');
+          logger.warn('Not in browser environment, skipping initialization');
           this.initialized = true;
           return;
         }
@@ -145,7 +145,7 @@ class OfflineManager {
         try {
           await cacheMigration.migrate();
         } catch (error) {
-          logger.warn('OfflineManager', 'Cache migration V1 failed (non-critical)', error);
+          logger.warn('Cache migration V1 failed (non-critical)', error);
         }
 
         // #22.5 / D-12: a segunda migração de cache foi aposentada. Ela
@@ -163,13 +163,13 @@ class OfflineManager {
         try {
           await cacheSync.sync();
         } catch (error) {
-          logger.warn('OfflineManager', 'Initial cache sync failed (non-critical)', error);
+          logger.warn('Initial cache sync failed (non-critical)', error);
         }
 
         this.initialized = true;
-        logger.info('OfflineManager', 'Initialization complete');
+        logger.info('Initialization complete');
       } catch (error) {
-        logger.error('OfflineManager', 'Initialization failed', error);
+        logger.error('Initialization failed', error);
         throw error;
       } finally {
         this.initializationPromise = null;
@@ -200,7 +200,7 @@ class OfflineManager {
       };
     }
 
-    logger.info('OfflineManager', `Downloading ${categories.length} categories`);
+    logger.info(`Downloading ${categories.length} categories`);
 
     // Cache all application pages before starting PDF download
     // This ensures all routes are available offline
@@ -212,25 +212,25 @@ class OfflineManager {
        * @param {number} total
        */
       onProgress: (route, index, total) => {
-        logger.debug('OfflineManager', `Caching page ${index + 1}/${total}: ${route}`);
+        logger.debug(`Caching page ${index + 1}/${total}: ${route}`);
       }
     }).then(result => {
       if (result.success > 0) {
-        logger.info('OfflineManager', `Cached ${result.success} application pages for offline access`);
+        logger.info(`Cached ${result.success} application pages for offline access`);
       }
       if (result.failed > 0) {
-        logger.warn('OfflineManager', `Failed to cache ${result.failed} application pages:`, result.errors);
+        logger.warn(`Failed to cache ${result.failed} application pages:`, result.errors);
       }
     }).catch(error => {
       // Non-blocking error - log but don't fail the download
-      logger.warn('OfflineManager', 'Error caching application pages (non-blocking):', error);
+      logger.warn('Error caching application pages (non-blocking):', error);
     });
 
     try {
       const result = await downloadManager.downloadCategories(categories, options);
       return result;
     } catch (error) {
-      logger.error('OfflineManager', 'Error downloading categories', error);
+      logger.error('Error downloading categories', error);
       throw error;
     }
   }
@@ -255,7 +255,7 @@ class OfflineManager {
       };
     }
 
-    logger.info('OfflineManager', `Downloading ${pdfPaths.length} PDFs`);
+    logger.info(`Downloading ${pdfPaths.length} PDFs`);
 
     try {
       // Note: DownloadManager.downloadPdfs() is not yet fully implemented
@@ -267,7 +267,7 @@ class OfflineManager {
       // (cast, não narrowing: preserva o comportamento atual de lançar se
       // `error` não tiver `.message`, igual ao acesso direto de antes)
       if (/** @type {any} */ (error).message.includes('not yet implemented')) {
-        logger.warn('OfflineManager', 'Individual PDF download not implemented, using category-based approach');
+        logger.warn('Individual PDF download not implemented, using category-based approach');
         
         // Extract categories from PDF paths
         const louvoresData = options.louvoresData || get(louvores);
@@ -297,7 +297,7 @@ class OfflineManager {
         }
       }
       
-      logger.error('OfflineManager', 'Error downloading PDFs', error);
+      logger.error('Error downloading PDFs', error);
       throw error;
     }
   }
@@ -307,7 +307,7 @@ class OfflineManager {
    * @returns {Promise<void>}
    */
   async cancelDownload() {
-    logger.info('OfflineManager', 'Cancelling download/import');
+    logger.info('Cancelling download/import');
     offlineBundleImporter.cancel();
     await downloadManager.cancel();
   }
@@ -322,10 +322,10 @@ class OfflineManager {
    */
   async importOfflineBundle(file, options = {}) {
     await this.ensureInitialized();
-    logger.info('OfflineManager', 'Starting offline bundle import');
+    logger.info('Starting offline bundle import');
 
     cacheAppPages().catch((error) => {
-      logger.warn('OfflineManager', 'cacheAppPages during import (non-blocking)', error);
+      logger.warn('cacheAppPages during import (non-blocking)', error);
     });
 
     const result = await offlineBundleImporter.importFromFile(file, options);
@@ -370,13 +370,13 @@ class OfflineManager {
       };
     }
 
-    logger.debug('OfflineManager', `Validating PDF: ${pdfPath}`);
+    logger.debug(`Validating PDF: ${pdfPath}`);
 
     try {
       const result = await compositeValidator.validate(pdfPath, options);
       return result;
     } catch (error) {
-      logger.error('OfflineManager', 'Error validating PDF', error);
+      logger.error('Error validating PDF', error);
       return {
         available: false,
         source: 'unknown',
@@ -407,7 +407,7 @@ class OfflineManager {
       };
     }
 
-    logger.debug('OfflineManager', `Validating category: ${category}`);
+    logger.debug(`Validating category: ${category}`);
 
     try {
       const stats = await this.getCategoryStats(category, options);
@@ -434,7 +434,7 @@ class OfflineManager {
             missingPdfs.push(pdfPath);
           }
         } catch (error) {
-          logger.debug('OfflineManager', `Error validating PDF for louvor ${louvor.id}`, error);
+          logger.debug(`Error validating PDF for louvor ${louvor.id}`, error);
         }
       }
 
@@ -446,7 +446,7 @@ class OfflineManager {
         missingPdfs
       };
     } catch (error) {
-      logger.error('OfflineManager', 'Error validating category', error);
+      logger.error('Error validating category', error);
       throw error;
     }
   }
@@ -468,13 +468,13 @@ class OfflineManager {
       return { total: 0, available: 0, missing: 0, percentage: 0 };
     }
 
-    logger.debug('OfflineManager', `Getting stats for category: ${category}`);
+    logger.debug(`Getting stats for category: ${category}`);
 
     try {
       const stats = await statsCalculator.getCategoryStats(category, options);
       return stats;
     } catch (error) {
-      logger.error('OfflineManager', 'Error getting category stats', error);
+      logger.error('Error getting category stats', error);
       throw error;
     }
   }
@@ -489,7 +489,7 @@ class OfflineManager {
   async getAllStats(options = {}) {
     await this.ensureInitialized();
 
-    logger.debug('OfflineManager', 'Getting all category stats');
+    logger.debug('Getting all category stats');
 
     try {
       const louvoresData = options.louvoresData || get(louvores);
@@ -502,14 +502,14 @@ class OfflineManager {
         try {
           stats[category] = await this.getCategoryStats(category, options);
         } catch (error) {
-          logger.warn('OfflineManager', `Error getting stats for category ${category}`, error);
+          logger.warn(`Error getting stats for category ${category}`, error);
           stats[category] = { total: 0, available: 0, missing: 0, percentage: 0 };
         }
       }
 
       return stats;
     } catch (error) {
-      logger.error('OfflineManager', 'Error getting all stats', error);
+      logger.error('Error getting all stats', error);
       throw error;
     }
   }
@@ -521,7 +521,7 @@ class OfflineManager {
   async clearCache() {
     await this.ensureInitialized();
 
-    logger.info('OfflineManager', 'Clearing cache');
+    logger.info('Clearing cache');
 
     try {
       await cacheStorageAdapter.clear();
@@ -534,7 +534,7 @@ class OfflineManager {
         timestamp: Date.now()
       });
     } catch (error) {
-      logger.error('OfflineManager', 'Error clearing cache', error);
+      logger.error('Error clearing cache', error);
       throw error;
     }
   }
@@ -548,12 +548,12 @@ class OfflineManager {
   async syncCache(options = {}) {
     await this.ensureInitialized();
 
-    logger.debug('OfflineManager', 'Syncing cache');
+    logger.debug('Syncing cache');
 
     try {
       await cacheSync.sync(options);
     } catch (error) {
-      logger.error('OfflineManager', 'Error syncing cache', error);
+      logger.error('Error syncing cache', error);
       throw error;
     }
   }
@@ -565,13 +565,13 @@ class OfflineManager {
   async listCachedPdfs() {
     await this.ensureInitialized();
 
-    logger.debug('OfflineManager', 'Listing cached PDFs');
+    logger.debug('Listing cached PDFs');
 
     try {
       const pdfs = await cacheStorageAdapter.listPdfs();
       return pdfs;
     } catch (error) {
-      logger.error('OfflineManager', 'Error listing cached PDFs', error);
+      logger.error('Error listing cached PDFs', error);
       throw error;
     }
   }
@@ -584,13 +584,13 @@ class OfflineManager {
   async getLouvoresManifest(useCache = true) {
     await this.ensureInitialized();
 
-    logger.debug('OfflineManager', 'Getting louvores manifest');
+    logger.debug('Getting louvores manifest');
 
     try {
       const manifest = await manifestRepository.getLouvoresManifest(useCache);
       return manifest;
     } catch (error) {
-      logger.error('OfflineManager', 'Error getting louvores manifest', error);
+      logger.error('Error getting louvores manifest', error);
       throw error;
     }
   }
@@ -603,13 +603,13 @@ class OfflineManager {
   async getOfflineManifest(useCache = true) {
     await this.ensureInitialized();
 
-    logger.debug('OfflineManager', 'Getting offline manifest');
+    logger.debug('Getting offline manifest');
 
     try {
       const manifest = await manifestRepository.getOfflineManifest(useCache);
       return manifest;
     } catch (error) {
-      logger.error('OfflineManager', 'Error getting offline manifest', error);
+      logger.error('Error getting offline manifest', error);
       throw error;
     }
   }
@@ -621,7 +621,7 @@ class OfflineManager {
   async validateManifests() {
     await this.ensureInitialized();
 
-    logger.debug('OfflineManager', 'Validating manifests');
+    logger.debug('Validating manifests');
 
     try {
       const louvoresManifest = await this.getLouvoresManifest();
@@ -648,7 +648,7 @@ class OfflineManager {
 
       return result;
     } catch (error) {
-      logger.error('OfflineManager', 'Error validating manifests', error);
+      logger.error('Error validating manifests', error);
       return {
         valid: false,
         errors: [/** @type {any} */ (error).message],

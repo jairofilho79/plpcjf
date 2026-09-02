@@ -73,7 +73,7 @@ export class DownloadQueue {
     this.queue.push(queueItem);
     this.queue.sort((a, b) => b.priority - a.priority); // Higher priority first
     
-    logger.debug('DownloadQueue', `Item enqueued: ${id}`, { priority: queueItem.priority });
+    logger.debug(`Item enqueued: ${id}`, { priority: queueItem.priority });
     
     // Start processing if not paused and not at max concurrency
     if (!this.isPaused && !this.isCancelled) {
@@ -109,7 +109,7 @@ export class DownloadQueue {
    */
   async _executeTask(item) {
     try {
-      logger.debug('DownloadQueue', `Executing task: ${item.id}`);
+      logger.debug(`Executing task: ${item.id}`);
       
       const result = await item.task(item.data);
       
@@ -120,14 +120,14 @@ export class DownloadQueue {
         item.onSuccess(result, item.data);
       }
       
-      logger.debug('DownloadQueue', `Task completed: ${item.id}`);
+      logger.debug(`Task completed: ${item.id}`);
     } catch (error) {
-      logger.warn('DownloadQueue', `Task failed: ${item.id}`, error);
+      logger.warn(`Task failed: ${item.id}`, error);
       
       // Check if we should retry
       if (item.retries > 0 && !this.isCancelled) {
         item.retries--;
-        logger.debug('DownloadQueue', `Retrying task: ${item.id} (${item.retries} retries left)`);
+        logger.debug(`Retrying task: ${item.id} (${item.retries} retries left)`);
         
         // Wait before retry
         await this._delay(this.retryDelay);
@@ -159,7 +159,7 @@ export class DownloadQueue {
    */
   pause() {
     this.isPaused = true;
-    logger.info('DownloadQueue', 'Queue paused');
+    logger.info('Queue paused');
   }
 
   /**
@@ -167,7 +167,7 @@ export class DownloadQueue {
    */
   resume() {
     this.isPaused = false;
-    logger.info('DownloadQueue', 'Queue resumed');
+    logger.info('Queue resumed');
     this._process();
   }
 
@@ -177,7 +177,7 @@ export class DownloadQueue {
   cancel() {
     this.isCancelled = true;
     this.queue = [];
-    logger.info('DownloadQueue', 'Queue cancelled');
+    logger.info('Queue cancelled');
   }
 
   /**
@@ -185,7 +185,7 @@ export class DownloadQueue {
    */
   clear() {
     this.queue = [];
-    logger.info('DownloadQueue', 'Queue cleared');
+    logger.info('Queue cleared');
   }
 
   /**

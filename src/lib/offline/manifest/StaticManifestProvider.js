@@ -28,7 +28,7 @@ class StaticManifestProvider {
         ? getConfig('STATIC_LOUVORES_MANIFEST_URL')
         : getConfig('STATIC_OFFLINE_MANIFEST_URL');
 
-      logger.debug('StaticManifestProvider', `Fetching ${type} manifest from static: ${url}`);
+      logger.debug(`Fetching ${type} manifest from static: ${url}`);
 
       const response = await fetch(url, {
         cache: 'no-cache',
@@ -39,7 +39,7 @@ class StaticManifestProvider {
 
       if (!response.ok) {
         if (response.status === 404) {
-          logger.warn('StaticManifestProvider', `${type} manifest not found in static (404)`);
+          logger.warn(`${type} manifest not found in static (404)`);
           return null;
         }
         throw new Error(`Failed to fetch ${type} manifest from static: ${response.status} ${response.statusText}`);
@@ -47,10 +47,10 @@ class StaticManifestProvider {
 
       const data = await response.json();
       
-      logger.info('StaticManifestProvider', `Successfully fetched ${type} manifest from static`);
+      logger.info(`Successfully fetched ${type} manifest from static`);
       return data;
     } catch (error) {
-      logger.error('StaticManifestProvider', `Error fetching ${type} manifest from static`, error);
+      logger.error(`Error fetching ${type} manifest from static`, error);
       
       // Return null instead of throwing to allow graceful degradation
       return null;

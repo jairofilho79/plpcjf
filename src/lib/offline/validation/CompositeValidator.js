@@ -69,21 +69,21 @@ export class CompositeValidator extends PdfValidator {
         const indexResult = await indexValidator.validate(pdfPath, options);
         const indexDuration = performance.now() - indexStartTime;
         
-        logger.debug('CompositeValidator', `Index validation: ${indexResult.available ? 'FOUND' : 'NOT FOUND'} (${indexDuration.toFixed(2)}ms)`);
+        logger.debug(`Index validation: ${indexResult.available ? 'FOUND' : 'NOT FOUND'} (${indexDuration.toFixed(2)}ms)`);
         
         // If index is available and gives a definitive answer, use it
         if (indexResult.error !== 'Index not available') {
           if (indexResult.available) {
             // Index says available - trust it
             const totalDuration = performance.now() - startTime;
-            logger.debug('CompositeValidator', `PDF validated via Index in ${totalDuration.toFixed(2)}ms: ${pdfPath}`);
+            logger.debug(`PDF validated via Index in ${totalDuration.toFixed(2)}ms: ${pdfPath}`);
             return indexResult;
           }
           // Index says not available - continue to cache check to be sure
         }
       } catch (error) {
         const indexDuration = performance.now() - indexStartTime;
-        logger.debug('CompositeValidator', `Index validation failed after ${indexDuration.toFixed(2)}ms, continuing to cache`, error);
+        logger.debug(`Index validation failed after ${indexDuration.toFixed(2)}ms, continuing to cache`, error);
       }
     }
 
@@ -93,19 +93,19 @@ export class CompositeValidator extends PdfValidator {
       const cacheResult = await cacheValidator.validate(pdfPath, options);
       const cacheDuration = performance.now() - cacheStartTime;
       
-      logger.debug('CompositeValidator', `Cache validation: ${cacheResult.available ? 'FOUND' : 'NOT FOUND'} (${cacheDuration.toFixed(2)}ms)`);
+      logger.debug(`Cache validation: ${cacheResult.available ? 'FOUND' : 'NOT FOUND'} (${cacheDuration.toFixed(2)}ms)`);
       
       if (cacheResult.available) {
         // Found in cache - return immediately
         const totalDuration = performance.now() - startTime;
-        logger.debug('CompositeValidator', `PDF validated via Cache in ${totalDuration.toFixed(2)}ms: ${pdfPath}`);
+        logger.debug(`PDF validated via Cache in ${totalDuration.toFixed(2)}ms: ${pdfPath}`);
         return cacheResult;
       }
       
       // Not in cache - continue to network check if enabled
     } catch (error) {
       const cacheDuration = performance.now() - cacheStartTime;
-      logger.debug('CompositeValidator', `Cache validation failed after ${cacheDuration.toFixed(2)}ms, continuing to network`, error);
+      logger.debug(`Cache validation failed after ${cacheDuration.toFixed(2)}ms, continuing to network`, error);
     }
 
     // Strategy 3: Network (fallback, only if online and enabled)
@@ -115,21 +115,21 @@ export class CompositeValidator extends PdfValidator {
         const networkResult = await networkValidator.validate(pdfPath, { checkNetwork: true });
         const networkDuration = performance.now() - networkStartTime;
         
-        logger.debug('CompositeValidator', `Network validation: ${networkResult.available ? 'FOUND' : 'NOT FOUND'} (${networkDuration.toFixed(2)}ms)`);
+        logger.debug(`Network validation: ${networkResult.available ? 'FOUND' : 'NOT FOUND'} (${networkDuration.toFixed(2)}ms)`);
         
         // Network check gives definitive answer
         const totalDuration = performance.now() - startTime;
-        logger.debug('CompositeValidator', `PDF validated via Network in ${totalDuration.toFixed(2)}ms: ${pdfPath}`);
+        logger.debug(`PDF validated via Network in ${totalDuration.toFixed(2)}ms: ${pdfPath}`);
         return networkResult;
       } catch (error) {
         const networkDuration = performance.now() - networkStartTime;
-        logger.debug('CompositeValidator', `Network validation failed after ${networkDuration.toFixed(2)}ms`, error);
+        logger.debug(`Network validation failed after ${networkDuration.toFixed(2)}ms`, error);
       }
     }
 
     // If all strategies failed or were skipped, return not available
     const totalDuration = performance.now() - startTime;
-    logger.debug('CompositeValidator', `PDF validation failed after ${totalDuration.toFixed(2)}ms: ${pdfPath}`);
+    logger.debug(`PDF validation failed after ${totalDuration.toFixed(2)}ms: ${pdfPath}`);
     
     return {
       available: false,

@@ -37,7 +37,7 @@ export class CacheMigration {
       const pdfs = await cacheStorageAdapter.listPdfs();
       return pdfs.length > 0;
     } catch (error) {
-      logger.error('CacheMigration', 'Error checking if migration needed', error);
+      logger.error('Error checking if migration needed', error);
       return false;
     }
   }
@@ -58,18 +58,18 @@ export class CacheMigration {
     // numa saída limpa (abaixo), para que um erro deixe a próxima chamada
     // tentar de novo em vez de desistir silenciosamente.
     if (localStorage.getItem(MIGRATION_COMPLETE_KEY) === 'true') {
-      logger.debug('CacheMigration', 'Migração já concluída, pulando nova varredura.');
+      logger.debug('Migração já concluída, pulando nova varredura.');
       return { migrated: 0, errors: 0 };
     }
 
-    logger.info('CacheMigration', 'Starting cache migration...');
+    logger.info('Starting cache migration...');
 
     try {
       // Get all PDFs from cache
       const pdfs = await cacheStorageAdapter.listPdfs();
       
       if (pdfs.length === 0) {
-        logger.info('CacheMigration', 'No PDFs to migrate');
+        logger.info('No PDFs to migrate');
         localStorage.setItem(MIGRATION_COMPLETE_KEY, 'true');
         return { migrated: 0, errors: 0 };
       }
@@ -79,7 +79,7 @@ export class CacheMigration {
 
       // Open cache directly to access all entries
       if (typeof caches === 'undefined') {
-        logger.warn('CacheMigration', 'Cache Storage API not available');
+        logger.warn('Cache Storage API not available');
         return { migrated: 0, errors: 0 };
       }
 
@@ -88,7 +88,7 @@ export class CacheMigration {
       const cache = await caches.open(pdfCacheName);
       const keys = await cache.keys();
 
-      logger.info('CacheMigration', `Found ${keys.length} cache entries to check`);
+      logger.info(`Found ${keys.length} cache entries to check`);
 
       for (const request of keys) {
         try {
@@ -115,12 +115,12 @@ export class CacheMigration {
             await cache.delete(request);
           } catch (e) {
             // Ignore deletion errors
-            logger.debug('CacheMigration', `Could not delete old entry: ${url}`);
+            logger.debug(`Could not delete old entry: ${url}`);
           }
 
           migrated++;
         } catch (error) {
-          logger.warn('CacheMigration', `Error migrating entry: ${request.url}`, error);
+          logger.warn(`Error migrating entry: ${request.url}`, error);
           errors++;
         }
       }
@@ -132,11 +132,11 @@ export class CacheMigration {
         localStorage.setItem(MIGRATION_COMPLETE_KEY, 'true');
       }
 
-      logger.info('CacheMigration', `Migration complete: ${migrated} migrated, ${errors} errors`);
+      logger.info(`Migration complete: ${migrated} migrated, ${errors} errors`);
 
       return { migrated, errors };
     } catch (error) {
-      logger.error('CacheMigration', 'Error during migration', error);
+      logger.error('Error during migration', error);
       return { migrated: 0, errors: 1 };
     }
   }

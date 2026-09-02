@@ -59,9 +59,9 @@ export class PackageDownloader {
       try {
         const url = new URL(packageUrl);
         normalizedUrl = url.pathname; // Extract only the pathname (e.g., /packages/file.zip)
-        logger.debug('PackageDownloader', `Normalized absolute URL: ${packageUrl} -> ${normalizedUrl}`);
+        logger.debug(`Normalized absolute URL: ${packageUrl} -> ${normalizedUrl}`);
       } catch (error) {
-        logger.warn('PackageDownloader', `Failed to parse URL: ${packageUrl}, using as-is`, error);
+        logger.warn(`Failed to parse URL: ${packageUrl}, using as-is`, error);
         // If URL parsing fails, try to extract path manually
         const match = packageUrl.match(/https?:\/\/[^\/]+(\/.*)/);
         if (match && match[1]) {
@@ -74,7 +74,7 @@ export class PackageDownloader {
       ? normalizedUrl 
       : `${this.basePath}/${normalizedUrl}`;
 
-    logger.info('PackageDownloader', `Downloading package: ${fullUrl} (original: ${packageUrl})`);
+    logger.info(`Downloading package: ${fullUrl} (original: ${packageUrl})`);
     console.log('[PackageDownloader] Starting download:', { packageUrl, fullUrl });
 
     try {
@@ -86,7 +86,7 @@ export class PackageDownloader {
           ? `${window.location.origin}${fullUrl}`
           : fullUrl;
 
-      logger.debug('PackageDownloader', `Fetching package from: ${absoluteUrl}`);
+      logger.debug(`Fetching package from: ${absoluteUrl}`);
       console.log('[PackageDownloader] Fetching package from:', absoluteUrl);
       console.log('[PackageDownloader] Window location:', typeof window !== 'undefined' ? window.location.href : 'N/A');
       console.log('[PackageDownloader] Service Worker available:', 'serviceWorker' in navigator);
@@ -104,7 +104,7 @@ export class PackageDownloader {
 
       const response = await fetch(absoluteUrl, fetchOptions);
 
-      logger.debug('PackageDownloader', `Package fetch response: ${response.status} ${response.statusText}`);
+      logger.debug(`Package fetch response: ${response.status} ${response.statusText}`);
       console.log('[PackageDownloader] Fetch response:', {
         status: response.status,
         statusText: response.statusText,
@@ -115,14 +115,14 @@ export class PackageDownloader {
 
       if (!response.ok) {
         const errorText = await response.text().catch(() => '');
-        logger.error('PackageDownloader', `Failed to download package: ${response.status} ${response.statusText}. Response: ${errorText.substring(0, 200)}`);
+        logger.error(`Failed to download package: ${response.status} ${response.statusText}. Response: ${errorText.substring(0, 200)}`);
         throw new Error(`Failed to download package: ${response.status} ${response.statusText}`);
       }
 
       const arrayBuffer = await response.arrayBuffer();
       const bytesDownloaded = arrayBuffer.byteLength;
 
-      logger.debug('PackageDownloader', `Package downloaded: ${bytesDownloaded} bytes`);
+      logger.debug(`Package downloaded: ${bytesDownloaded} bytes`);
 
       return {
         blob: new Blob([arrayBuffer], { type: 'application/zip' }),
@@ -133,7 +133,7 @@ export class PackageDownloader {
       if (isAbort || abortSignal?.aborted) {
         throw new Error('DOWNLOAD_CANCELLED');
       }
-      logger.error('PackageDownloader', `Error downloading package: ${fullUrl}`, error);
+      logger.error(`Error downloading package: ${fullUrl}`, error);
       throw error;
     }
   }
@@ -145,7 +145,7 @@ export class PackageDownloader {
    * @returns {Promise<ExtractedPdf[]>} Extracted PDFs
    */
   async extractPdfsFromZip(zipBlob, expectedPdfs = []) {
-    logger.info('PackageDownloader', `Extracting PDFs from ZIP (${zipBlob.size} bytes)`);
+    logger.info(`Extracting PDFs from ZIP (${zipBlob.size} bytes)`);
 
     try {
       // Convert blob to Uint8Array
@@ -156,7 +156,7 @@ export class PackageDownloader {
       const entries = await this._unzipEntries(buffer);
       const entryNames = Object.keys(entries);
 
-      logger.debug('PackageDownloader', `ZIP contains ${entryNames.length} entries`);
+      logger.debug(`ZIP contains ${entryNames.length} entries`);
 
       // #22.5: um Set canônico. Eram seis formas de cada caminho esperado, e
       // depois `endsWith` nas duas direções contra cada entrada do ZIP — O(n·m)
@@ -180,7 +180,7 @@ export class PackageDownloader {
 
         // #22.5: uma consulta O(1) sobre a forma canônica.
         if (expectedPdfs.length > 0 && !esperados.has(normalizedPath)) {
-          logger.debug('PackageDownloader', `Ignorando PDF não esperado: ${normalizedPath} (entrada: ${entryName})`);
+          logger.debug(`Ignorando PDF não esperado: ${normalizedPath} (entrada: ${entryName})`);
           continue;
         }
 
@@ -200,14 +200,14 @@ export class PackageDownloader {
           blob: pdfBlob
         });
 
-        logger.debug('PackageDownloader', `Extracted PDF: ${normalizedPath}`);
+        logger.debug(`Extracted PDF: ${normalizedPath}`);
       }
 
-      logger.info('PackageDownloader', `Extracted ${extractedPdfs.length} PDFs from ZIP`);
+      logger.info(`Extracted ${extractedPdfs.length} PDFs from ZIP`);
 
       return extractedPdfs;
     } catch (error) {
-      logger.error('PackageDownloader', 'Error extracting PDFs from ZIP', error);
+      logger.error('Error extracting PDFs from ZIP', error);
       throw error;
     }
   }
@@ -246,7 +246,7 @@ export class PackageDownloader {
     
     // Use batch mode for better performance when storing multiple PDFs
     if (batch && pdfs.length > 1) {
-      logger.info('PackageDownloader', `Using batch mode to store ${pdfs.length} PDFs`);
+      logger.info(`Using batch mode to store ${pdfs.length} PDFs`);
       
       // Prepare PDFs for batch storage
       const pdfsToBatch = [];
@@ -263,7 +263,7 @@ export class PackageDownloader {
         const normalizedPath = PdfPathManager.normalizeForStorage(originalPath);
         
         if (!normalizedPath) {
-          logger.warn('PackageDownloader', `Skipping PDF with invalid path: ${originalPath}`);
+          logger.warn(`Skipping PDF with invalid path: ${originalPath}`);
           continue;
         }
         
@@ -318,7 +318,7 @@ export class PackageDownloader {
             });
           }
         } catch (error) {
-          logger.error('PackageDownloader', `Error storing PDF: ${path}`, error);
+          logger.error(`Error storing PDF: ${path}`, error);
           // Continue with other PDFs
         }
       }
@@ -336,7 +336,7 @@ export class PackageDownloader {
         }
       }
       
-      logger.info('PackageDownloader', `Batch storage completed: ${storedCount}/${pdfs.length} PDFs stored`);
+      logger.info(`Batch storage completed: ${storedCount}/${pdfs.length} PDFs stored`);
       
       return storedCount;
     }
@@ -360,12 +360,12 @@ export class PackageDownloader {
         const normalizedPath = PdfPathManager.normalizeForStorage(originalPath);
         
         if (!normalizedPath) {
-          logger.warn('PackageDownloader', `Skipping PDF with invalid path: ${originalPath}`);
+          logger.warn(`Skipping PDF with invalid path: ${originalPath}`);
           continue;
         }
         
         if (isDev && (normalizedPath.includes('cifra') || normalizedPath.includes('nivel') || normalizedPath.includes('Cifra') || normalizedPath.includes('Nivel'))) {
-          logger.debug('PackageDownloader', `Storing PDF (Cifra): ${originalPath} -> ${normalizedPath}`);
+          logger.debug(`Storing PDF (Cifra): ${originalPath} -> ${normalizedPath}`);
         }
         await cacheStorageAdapter.putPdf(normalizedPath, pdf.blob);
         stored++;
@@ -379,12 +379,12 @@ export class PackageDownloader {
           });
         }
       } catch (error) {
-        logger.error('PackageDownloader', `Error storing PDF: ${pdf.originalName || pdf.normalizedPath}`, error);
+        logger.error(`Error storing PDF: ${pdf.originalName || pdf.normalizedPath}`, error);
         // Continue with other PDFs
       }
     }
 
-    logger.info('PackageDownloader', `Stored ${stored}/${pdfs.length} PDFs in cache`);
+    logger.info(`Stored ${stored}/${pdfs.length} PDFs in cache`);
     
     return stored;
   }

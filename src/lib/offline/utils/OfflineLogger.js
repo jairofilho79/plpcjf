@@ -143,22 +143,19 @@ export function debug(module, message, data = null, metrics = null) {
 }
 
 /**
- * NOTA: os métodos abaixo aceitam argumentos extras via rest (`...unknown[]`)
- * em vez de uma aridade fixa porque a grande maioria das chamadas em
- * src/lib/offline/** (~245 de 247 fora dos testes) passa o nome do módulo de
- * novo como primeiro argumento — ex.: `logger.error('CacheStorageAdapter',
- * msg, err)` — mesmo com o módulo já vinculado por `createLogger(moduleName)`.
- * O wrapper abaixo só declara 2-3 parâmetros formais, então esse argumento
- * extra hoje é descartado silenciosamente em runtime (o objeto de erro real
- * nunca chega ao `console.error`). É um bug de logging pré-existente, fora do
- * escopo desta tarefa de tipos (não mexe em normalização/URL/cache) — corrigir
- * os ~245 call sites mudaria o que é logado, então fica registrado aqui em vez
- * de "consertado por baixo do capô" por uma anotação de tipo.
+ * Assinatura exata, sem `...rest`: é ela que faz `npm run check:offline`
+ * recusar um argumento sobrando. Até 2026-09-01 o typedef aceitava rest
+ * porque 239 de 247 chamadas repassavam o nome do módulo já vinculado por
+ * `createLogger` — o argumento extra empurrava a mensagem para o lugar do
+ * dado e o objeto de erro caía fora, sem sintoma nenhum. Num sistema cujo
+ * modo de falha é o silêncio, apertar isto aqui é o que impede a regressão:
+ * qualquer chamada com um argumento a mais vira erro de tipo, não log mudo.
+ *
  * @typedef {Object} OfflineLoggerInstance
- * @property {(message: string, ...rest: unknown[]) => void} error
- * @property {(message: string, ...rest: unknown[]) => void} warn
- * @property {(message: string, ...rest: unknown[]) => void} info
- * @property {(message: string, ...rest: unknown[]) => void} debug
+ * @property {(message: string, err?: unknown) => void} error
+ * @property {(message: string, data?: unknown) => void} warn
+ * @property {(message: string, data?: unknown) => void} info
+ * @property {(message: string, data?: unknown, metrics?: Record<string, unknown> | null) => void} debug
  */
 
 /**
@@ -168,13 +165,13 @@ export function debug(module, message, data = null, metrics = null) {
  */
 export function createLogger(moduleName) {
   return {
-    /** @param {string} message @param {any} [err] */
+    /** @param {string} message @param {unknown} [err] */
     error: (message, err) => error(moduleName, message, err),
-    /** @param {string} message @param {any} [data] */
+    /** @param {string} message @param {unknown} [data] */
     warn: (message, data) => warn(moduleName, message, data),
-    /** @param {string} message @param {any} [data] */
+    /** @param {string} message @param {unknown} [data] */
     info: (message, data) => info(moduleName, message, data),
-    /** @param {string} message @param {any} [data] @param {any} [metrics] */
+    /** @param {string} message @param {unknown} [data] @param {Record<string, unknown> | null} [metrics] */
     debug: (message, data, metrics) => debug(moduleName, message, data, metrics)
   };
 }
