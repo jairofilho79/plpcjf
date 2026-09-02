@@ -2,6 +2,13 @@
  * Checksum esperado do louvores-manifest.json (Worker) e estado local para poll / backoff.
  */
 
+// A guarda `typeof localStorage === 'undefined'` que estava aqui não protegia:
+// `typeof` só suprime exceção para referência não resolvível (ECMA-262 §13.5.3),
+// e `localStorage` é resolvível — o `[[Get]]` dela é que lança. Estas leituras
+// rodam dentro de `loadLouvores()`, ou seja, no mount de `/`, `/listas`,
+// `/biblioteca` e `/offline`: era ali que o app deixava de abrir.
+import { safeGet, safeSet } from './safeStorage.js';
+
 export const LOUVORES_MANIFEST_CHECKSUM_URL = '/louvores-manifest.sha256';
 
 const LS_PREFIX = 'plpcjf:louvores:';
@@ -41,8 +48,7 @@ export function parseExpectedChecksumFromResponseBody(body) {
 
 /** @returns {number | null} */
 export function readChecksumLastOkAt() {
-  if (typeof localStorage === 'undefined') return null;
-  const v = localStorage.getItem(LS_CHECKSUM_LAST_OK_AT);
+  const v = safeGet(LS_CHECKSUM_LAST_OK_AT);
   if (v == null || v === '') return null;
   const n = Number(v);
   return Number.isFinite(n) && n > 0 ? n : null;
@@ -50,14 +56,12 @@ export function readChecksumLastOkAt() {
 
 /** @param {number} ms */
 export function writeChecksumLastOkAt(ms) {
-  if (typeof localStorage === 'undefined') return;
-  localStorage.setItem(LS_CHECKSUM_LAST_OK_AT, String(ms));
+  safeSet(LS_CHECKSUM_LAST_OK_AT, String(ms));
 }
 
 /** @returns {string | null} */
 export function readManifestBodySha256() {
-  if (typeof localStorage === 'undefined') return null;
-  const v = localStorage.getItem(LS_MANIFEST_BODY_SHA256);
+  const v = safeGet(LS_MANIFEST_BODY_SHA256);
   if (v == null) return null;
   const t = v.trim().toLowerCase();
   return HEX64.test(t) ? t : null;
@@ -65,8 +69,7 @@ export function readManifestBodySha256() {
 
 /** @param {string} hexLower */
 export function writeManifestBodySha256(hexLower) {
-  if (typeof localStorage === 'undefined') return;
-  localStorage.setItem(LS_MANIFEST_BODY_SHA256, hexLower);
+  safeSet(LS_MANIFEST_BODY_SHA256, hexLower);
 }
 
 /**
@@ -76,9 +79,10 @@ export function writeManifestBodySha256(hexLower) {
 /** @returns {ManifestSyncPenalty} */
 export function readManifestSyncPenalty() {
   const empty = { failStreak: 0, nextRetryAt: 0, cooldownUntil: 0 };
-  if (typeof localStorage === 'undefined') return empty;
   try {
-    const raw = localStorage.getItem(LS_MANIFEST_SYNC_PENALTY);
+    // `safeGet` devolve `null` tanto para chave ausente quanto para storage
+    // indisponível — os dois casos já caíam no mesmo `empty` aqui.
+    const raw = safeGet(LS_MANIFEST_SYNC_PENALTY);
     if (!raw) return empty;
     const o = JSON.parse(raw);
     return {
@@ -93,8 +97,7 @@ export function readManifestSyncPenalty() {
 
 /** @param {ManifestSyncPenalty} p */
 export function writeManifestSyncPenalty(p) {
-  if (typeof localStorage === 'undefined') return;
-  localStorage.setItem(LS_MANIFEST_SYNC_PENALTY, JSON.stringify(p));
+  safeSet(LS_MANIFEST_SYNC_PENALTY, JSON.stringify(p));
 }
 
 export function resetManifestSyncPenalty() {
