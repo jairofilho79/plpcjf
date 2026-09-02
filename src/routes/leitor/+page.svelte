@@ -112,6 +112,23 @@
   let totalPages = 0;
   let zoomPercent = 100;
   let lastLoadedFile: string | null = null;
+  // A URL cuja carga está a decorrer neste momento, ou `null`.
+  //
+  // `lastLoadedFile` sozinho nunca cobriu a janela em que a segunda entrada
+  // chega: ele só é escrito depois de o `getDocument` resolver. E há sempre duas
+  // entradas por abertura — o `onMount` atribui `viewer` depois de dois `await`
+  // do PDF.js, essa atribuição agenda o flush do Svelte, o flush corre o bloco
+  // reativo `$: if (viewer && file && file !== lastLoadedFile)` com
+  // `lastLoadedFile` ainda a `null`, e o `onMount` chama `loadDirectly` logo a
+  // seguir. Passavam as duas: dois `getDocument` sobre a mesma URL, ou seja duas
+  // descargas do mesmo PDF sempre que ele não estava em cache — a espera que o
+  // utilizador sente em dados móveis — e dois `setDocument` com `currentPage = 1`,
+  // com a segunda carga a reiniciar a página da primeira.
+  //
+  // Tem de ser `let` no corpo do componente, e não `$:`: um bloco reativo só é
+  // avaliado dentro de `$$.update()`, depois de `instance()` retornar, e quem
+  // lesse a guarda durante o `onMount` veria `undefined`.
+  let cargaEmVoo: string | null = null;
   // Preferred fit mode: 'page-width' or 'page-fit' — persistido via readerPreferences
   let preferredFitMode: 'page-width' | 'page-fit' = getFitMode();
   // Controlador de zoom: encapsula cache de escala e cálculos de page-width
@@ -251,9 +268,19 @@
     
     // Avoid duplicate loads of the same file
     if (lastLoadedFile === fileUrl && !pdfError) return;
-    
+
+    // A segunda entrada para a mesma URL sai daqui sem trabalho — e, sobretudo,
+    // sem tocar no estado da primeira: era o `setPdfUi('loading')` logo abaixo
+    // que apagava, por um instante, o `fatalError` que a primeira acabara de pôr
+    // (offline e sem cache, o utilizador via o ecrã piscar sem mensagem).
+    //
+    // Entre esta leitura e a escrita da marca não pode entrar `await` nenhum: é
+    // essa janela que deixava as duas passarem.
+    if (cargaEmVoo === fileUrl) return;
+    cargaEmVoo = fileUrl;
+
     setPdfUi('loading', null);
-    
+
     try {
       // Try to load directly - Service Worker will intercept and serve from cache if available
       perfMark('pdf-source-resolve-start')
@@ -283,6 +310,11 @@
       // If direct load fails, fall back to full validation
       await load(fileUrl);
     } finally {
+      // Só quem pôs a marca a levanta: se o utilizador já navegou para outro
+      // louvor, a marca corrente é a dele e esta carga velha não pode apagá-la.
+      // Levantar aqui, no `finally`, é também o que impede uma falha de trancar
+      // a URL para sempre.
+      if (cargaEmVoo === fileUrl) cargaEmVoo = null;
       if (pdfUiState === 'loading') {
         setPdfUi('idle', null);
       }
@@ -293,11 +325,17 @@
     const getDocument = (window as any).__pdfjsGetDocument as PDFJSGetDocument | undefined;
     if (!getDocument) return;
     
-    // Avoid duplicate loads of the same file
-    if (lastLoadedFile === fileUrl && !pdfError) return;
-    
+    // Avoid duplicate loads of the same file — exceto quando esta chamada é a
+    // continuação da carga em voo, ou seja, o `loadDirectly` a cair para cá
+    // depois de falhar. Sem a ressalva havia um beco sem saída: com
+    // `lastLoadedFile` já igual a esta URL e um erro pendente, o
+    // `setPdfUi('loading')` do `loadDirectly` limpava o `pdfError`, e o teste
+    // aqui — agora com `pdfError` nulo — mandava sair em silêncio. O `finally`
+    // do chamador punha `idle`: visualizador escondido, sem PDF e sem mensagem.
+    if (cargaEmVoo !== fileUrl && lastLoadedFile === fileUrl && !pdfError) return;
+
     setPdfUi('loading', null);
-    
+
     const { pdfPath, isCatalogAsset, originalFullUrl } = resolveCanonicalPdfUrl(fileUrl);
     lastPdfPathForRecovery = pdfPath;
     lastOriginalFullUrlForRecovery = originalFullUrl;

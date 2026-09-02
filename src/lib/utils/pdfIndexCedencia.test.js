@@ -139,11 +139,11 @@ const CAMINHO_MANIFESTO = path.join(RAIZ, 'louvores-manifest.json');
 function caminhosDoManifesto() {
   if (!fs.existsSync(CAMINHO_MANIFESTO)) return null;
   const dados = JSON.parse(fs.readFileSync(CAMINHO_MANIFESTO, 'utf8'));
-  return dados.map((/** @type {{pdfId: string}} */ l) => {
+  return /** @type {string[]} */ (dados.map((/** @type {{pdfId: string}} */ l) => {
     let p = Buffer.from(l.pdfId, 'base64').toString('utf8').replace(/^\/+/, '').trim();
     if (!p.toLowerCase().startsWith('assets/')) p = `assets/${p}`;
     return p;
-  });
+  }));
 }
 
 /** Lixo que a lista real carrega e que os dois laços têm de saltar igual. */
