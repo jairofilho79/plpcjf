@@ -387,18 +387,20 @@
    * quem decide o que aparece é o skeleton da Task 14). A ordem dos `if`
    * é a prioridade: um filtro zerado explica o vazio antes de "nada
    * encontrado" e antes do estado inicial.
-   * @type {'materiais-vazios' | 'arranjos-vazios' | 'sem-resultado' | 'inicial' | null}
+   * @type {'catalogo-vazio' | 'materiais-vazios' | 'arranjos-vazios' | 'sem-resultado' | 'inicial' | null}
    */
   $: homeEmptyState =
     !$louvoresLoaded || groupedResults.length > 0
       ? null
-      : $filters.length === 0
-        ? 'materiais-vazios'
-        : filtersInitialized && $classificationFilters.length === 0
-          ? 'arranjos-vazios'
-          : searchQuery.trim()
-            ? 'sem-resultado'
-            : 'inicial';
+      : $louvores.length === 0
+        ? 'catalogo-vazio'
+        : $filters.length === 0
+          ? 'materiais-vazios'
+          : filtersInitialized && $classificationFilters.length === 0
+            ? 'arranjos-vazios'
+            : searchQuery.trim()
+              ? 'sem-resultado'
+              : 'inicial';
 
   /** Espelha a página efetiva no input, sem atropelar quem está digitando nele. */
   let ultimaPaginaPublicada = null;
@@ -520,6 +522,21 @@
   function getGroupKey(group) {
     return group.groupId || group.materials?.[0]?.pdfId || '';
   }
+
+  // Estado do botão "Tentar novamente" do estado vazio: loadLouvores() não
+  // muda louvoresLoaded e tenta de novo sozinha com backoff (até
+  // MANIFEST_RETRY_MAX_ATTEMPTS), então sem isto o botão parece não fazer
+  // nada por vários segundos.
+  let isRetryingLouvores = false;
+
+  async function handleRetryLoadLouvores() {
+    isRetryingLouvores = true;
+    try {
+      await loadLouvores();
+    } finally {
+      isRetryingLouvores = false;
+    }
+  }
 </script>
 
 <svelte:head>
@@ -618,6 +635,18 @@
           on:first={() => setPage(1)}
           on:last={() => setPage(totalPagesHome)}
         />
+      </div>
+    {:else if homeEmptyState === 'catalogo-vazio'}
+      <div class="empty-state-message">
+        <p>Não foi possível carregar a lista de louvores.</p>
+        <button
+          type="button"
+          class="empty-state-action"
+          on:click={handleRetryLoadLouvores}
+          disabled={isRetryingLouvores}
+        >
+          {isRetryingLouvores ? 'Tentando novamente…' : 'Tentar novamente'}
+        </button>
       </div>
     {:else if homeEmptyState === 'materiais-vazios'}
       <div class="empty-state-message">

@@ -54,9 +54,11 @@ export class PdfValidator {
    * @protected
    */
   _logValidation(pdfPath, result) {
+    // `this.getName()` é a subclasse concreta, não o módulo vinculado no
+    // createLogger — por isso vai na mensagem, e não como argumento extra
+    // (que seria descartado silenciosamente).
     logger.debug(
-      this.getName(),
-      `Validation result for ${pdfPath}:`,
+      `[${this.getName()}] Validation result for ${pdfPath}:`,
       {
         available: result.available,
         source: result.source,

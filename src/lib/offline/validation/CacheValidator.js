@@ -50,7 +50,7 @@ export class CacheValidator extends PdfValidator {
       const normalizedPath = PdfPathManager.normalizeForStorage(pdfPath);
       
       if (debug) {
-        logger.debug('CacheValidator', `Validating PDF: ${pdfPath} -> ${normalizedPath}`);
+        logger.debug(`Validating PDF: ${pdfPath} -> ${normalizedPath}`);
       }
       
       if (!normalizedPath) {
@@ -68,7 +68,7 @@ export class CacheValidator extends PdfValidator {
       
       if (debug) {
         const duration = performance.now() - startTime;
-        logger.debug('CacheValidator', `Validation result for ${normalizedPath}: ${hasPdf ? 'FOUND' : 'NOT FOUND'} (${duration.toFixed(2)}ms)`);
+        logger.debug(`Validation result for ${normalizedPath}: ${hasPdf ? 'FOUND' : 'NOT FOUND'} (${duration.toFixed(2)}ms)`);
       }
       
       /** @type {import('./PdfValidator.js').ValidationResult} */
@@ -85,9 +85,9 @@ export class CacheValidator extends PdfValidator {
     } catch (error) {
       if (debug) {
         const duration = performance.now() - startTime;
-        logger.error('CacheValidator', `Error validating PDF: ${pdfPath} (${duration.toFixed(2)}ms)`, error);
+        logger.error(`Error validating PDF: ${pdfPath} (${duration.toFixed(2)}ms)`, error);
       } else {
-        logger.error('CacheValidator', `Error validating PDF: ${pdfPath}`, error);
+        logger.error(`Error validating PDF: ${pdfPath}`, error);
       }
       
       return {

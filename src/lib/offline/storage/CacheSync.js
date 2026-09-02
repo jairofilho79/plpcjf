@@ -37,25 +37,25 @@ class CacheSync {
 
     // Listen for download complete events
     offlineEvents.on(EVENTS.DOWNLOAD_COMPLETE, () => {
-      logger.debug('CacheSync', 'Download complete event received, triggering sync');
+      logger.debug('Download complete event received, triggering sync');
       this.sync().catch(err => {
-        logger.error('CacheSync', 'Error syncing after download:', err);
+        logger.error('Error syncing after download:', err);
       });
     });
 
     // Listen for cache cleared events
     offlineEvents.on(EVENTS.CACHE_CLEARED, () => {
-      logger.debug('CacheSync', 'Cache cleared event received, invalidating stats');
+      logger.debug('Cache cleared event received, invalidating stats');
       this.invalidate();
     });
 
     // Listen for PDF downloaded events (emit() sempre despacha CustomEvent)
     offlineEvents.on(EVENTS.PDF_DOWNLOADED, /** @type {EventListenerOrEventListenerObject} */ ((/** @type {CustomEvent} */ event) => {
-      logger.debug('CacheSync', 'PDF downloaded event received', event.detail);
+      logger.debug('PDF downloaded event received', event.detail);
       // Sync after a short delay to allow cache to update
       setTimeout(() => {
         this.sync().catch(err => {
-          logger.error('CacheSync', 'Error syncing after PDF download:', err);
+          logger.error('Error syncing after PDF download:', err);
         });
       }, 500);
     }));
@@ -63,9 +63,9 @@ class CacheSync {
     // Listen for cache updated events from other tabs
     if (typeof window !== 'undefined') {
       window.addEventListener('cache-sync-required', () => {
-        logger.debug('CacheSync', 'Cache sync required from another tab');
+        logger.debug('Cache sync required from another tab');
         this.sync().catch(err => {
-          logger.error('CacheSync', 'Error syncing from tab event:', err);
+          logger.error('Error syncing from tab event:', err);
         });
       });
     }
@@ -84,7 +84,7 @@ class CacheSync {
 
     // Skip sync during batch mode (unless forced)
     if (!force && batch) {
-      logger.debug('CacheSync', 'Sync skipped - batch mode active');
+      logger.debug('Sync skipped - batch mode active');
       return;
     }
 
@@ -93,7 +93,7 @@ class CacheSync {
       try {
         const cacheStorageAdapter = await import('./CacheStorageAdapter.js');
         if (cacheStorageAdapter.default && cacheStorageAdapter.default.isInBatchMode()) {
-          logger.debug('CacheSync', 'Sync skipped - CacheStorageAdapter in batch mode');
+          logger.debug('Sync skipped - CacheStorageAdapter in batch mode');
           return;
         }
       } catch (error) {
@@ -103,13 +103,13 @@ class CacheSync {
 
     // Prevent concurrent syncs
     if (this.isSyncing && !force) {
-      logger.debug('CacheSync', 'Sync already in progress, skipping');
+      logger.debug('Sync already in progress, skipping');
       return;
     }
 
     // Throttle syncs (max once per 2 seconds)
     if (!force && this.lastSyncTime && Date.now() - this.lastSyncTime < 2000) {
-      logger.debug('CacheSync', 'Sync throttled, too soon since last sync');
+      logger.debug('Sync throttled, too soon since last sync');
       return;
     }
 
@@ -117,7 +117,7 @@ class CacheSync {
     const startTime = performance.now();
 
     try {
-      logger.debug('CacheSync', 'Starting cache synchronization');
+      logger.debug('Starting cache synchronization');
 
       // 1. Get current state from Service Worker (source of truth)
       /** @type {any[]} */
@@ -126,7 +126,7 @@ class CacheSync {
         try {
           cachedPdfs = await getCachedPDFsFast();
         } catch (error) {
-          logger.warn('CacheSync', 'Failed to get cached PDFs from SW:', error);
+          logger.warn('Failed to get cached PDFs from SW:', error);
         }
       }
 
@@ -157,16 +157,16 @@ class CacheSync {
             timestamp: Date.now()
           });
         } catch (error) {
-          logger.error('CacheSync', 'Error in sync listener:', error);
+          logger.error('Error in sync listener:', error);
         }
       });
 
       this.lastSyncTime = Date.now();
       const syncTime = performance.now() - startTime;
-      logger.debug('CacheSync', `Cache synchronization completed in ${syncTime.toFixed(2)}ms`);
+      logger.debug(`Cache synchronization completed in ${syncTime.toFixed(2)}ms`);
 
     } catch (error) {
-      logger.error('CacheSync', 'Error during cache synchronization:', error);
+      logger.error('Error during cache synchronization:', error);
       throw error;
     } finally {
       this.isSyncing = false;
@@ -182,11 +182,11 @@ class CacheSync {
    */
   async syncFrom(source) {
     if (!source || !source.cachedPdfs) {
-      logger.warn('CacheSync', 'Invalid source provided for sync');
+      logger.warn('Invalid source provided for sync');
       return;
     }
 
-    logger.debug('CacheSync', `Syncing from source with ${source.cachedPdfs.length} cached PDFs`);
+    logger.debug(`Syncing from source with ${source.cachedPdfs.length} cached PDFs`);
 
     try {
       // Update cache version
@@ -218,12 +218,12 @@ class CacheSync {
             timestamp: Date.now()
           });
         } catch (error) {
-          logger.error('CacheSync', 'Error in sync listener:', error);
+          logger.error('Error in sync listener:', error);
         }
       });
 
     } catch (error) {
-      logger.error('CacheSync', 'Error syncing from source:', error);
+      logger.error('Error syncing from source:', error);
       throw error;
     }
   }
@@ -235,7 +235,7 @@ class CacheSync {
    */
   onCacheUpdate(callback) {
     if (typeof callback !== 'function') {
-      logger.warn('CacheSync', 'Listener must be a function');
+      logger.warn('Listener must be a function');
       return () => {};
     }
 
@@ -256,7 +256,7 @@ class CacheSync {
    * @returns {Promise<void>}
    */
   async invalidate() {
-    logger.debug('CacheSync', 'Invalidating all caches');
+    logger.debug('Invalidating all caches');
 
     try {
       // Clear memory cache (statsCalculationCache from offline.js)
@@ -284,10 +284,10 @@ class CacheSync {
         });
       }
 
-      logger.debug('CacheSync', 'Cache invalidation completed');
+      logger.debug('Cache invalidation completed');
 
     } catch (error) {
-      logger.error('CacheSync', 'Error invalidating caches:', error);
+      logger.error('Error invalidating caches:', error);
       throw error;
     }
   }

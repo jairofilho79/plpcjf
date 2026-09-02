@@ -44,15 +44,15 @@ class ManifestCache {
       
       // Check if expired
       if (this.isExpired(type)) {
-        logger.debug('ManifestCache', `Cache expired for ${type}, removing`);
+        logger.debug(`Cache expired for ${type}, removing`);
         this._remove(type);
         return null;
       }
 
-      logger.debug('ManifestCache', `Retrieved ${type} manifest from cache`);
+      logger.debug(`Retrieved ${type} manifest from cache`);
       return data;
     } catch (error) {
-      logger.warn('ManifestCache', `Error reading ${type} manifest from cache`, error);
+      logger.warn(`Error reading ${type} manifest from cache`, error);
       return null;
     }
   }
@@ -75,13 +75,13 @@ class ManifestCache {
       };
       
       localStorage.setItem(key, JSON.stringify(cacheEntry));
-      logger.debug('ManifestCache', `Cached ${type} manifest`);
+      logger.debug(`Cached ${type} manifest`);
     } catch (error) {
-      logger.error('ManifestCache', `Error caching ${type} manifest`, error);
+      logger.error(`Error caching ${type} manifest`, error);
 
       // If quota exceeded, try to clear expired entries
       if (error instanceof DOMException && error.name === 'QuotaExceededError') {
-        logger.warn('ManifestCache', 'localStorage quota exceeded, clearing expired entries');
+        logger.warn('localStorage quota exceeded, clearing expired entries');
         this.clearExpired();
       }
     }
@@ -110,7 +110,7 @@ class ManifestCache {
       
       return age > this.ttl;
     } catch (error) {
-      logger.warn('ManifestCache', `Error checking expiration for ${type}`, error);
+      logger.warn(`Error checking expiration for ${type}`, error);
       return true;
     }
   }
@@ -128,7 +128,7 @@ class ManifestCache {
       const key = this._getKey(type);
       localStorage.removeItem(key);
     } catch (error) {
-      logger.warn('ManifestCache', `Error removing ${type} from cache`, error);
+      logger.warn(`Error removing ${type} from cache`, error);
     }
   }
 
@@ -143,9 +143,9 @@ class ManifestCache {
     try {
       localStorage.removeItem(this._getKey('louvores'));
       localStorage.removeItem(this._getKey('offline'));
-      logger.info('ManifestCache', 'All manifest cache cleared');
+      logger.info('All manifest cache cleared');
     } catch (error) {
-      logger.error('ManifestCache', 'Error clearing cache', error);
+      logger.error('Error clearing cache', error);
     }
   }
 
@@ -168,7 +168,7 @@ class ManifestCache {
     }
 
     if (cleared > 0) {
-      logger.info('ManifestCache', `Cleared ${cleared} expired manifest(s)`);
+      logger.info(`Cleared ${cleared} expired manifest(s)`);
     }
   }
 

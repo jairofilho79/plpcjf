@@ -46,24 +46,24 @@ class ManifestRepository {
     if (useCache) {
       const cached = await manifestCache.get(type);
       if (cached !== null) {
-        logger.debug('ManifestRepository', `Using cached ${type} manifest`);
+        logger.debug(`Using cached ${type} manifest`);
         return cached;
       }
     }
 
     // 2. Try R2 provider first
-    logger.debug('ManifestRepository', `Fetching ${type} manifest from R2...`);
+    logger.debug(`Fetching ${type} manifest from R2...`);
     let data = await r2ManifestProvider.fetchManifest(type);
 
     // 3. Fallback to static if R2 fails
     if (!data) {
-      logger.debug('ManifestRepository', `R2 failed, trying static for ${type} manifest...`);
+      logger.debug(`R2 failed, trying static for ${type} manifest...`);
       data = await staticManifestProvider.fetchManifest(type);
     }
 
     // 4. If still no data, return empty structure
     if (!data) {
-      logger.warn('ManifestRepository', `No ${type} manifest available from any source`);
+      logger.warn(`No ${type} manifest available from any source`);
       
       // Return appropriate empty structure
       if (type === 'louvores') {
@@ -75,7 +75,7 @@ class ManifestRepository {
 
     // 5. Validate integrity
     if (!manifestCache.validateIntegrity(type, data)) {
-      logger.warn('ManifestRepository', `${type} manifest failed integrity check`);
+      logger.warn(`${type} manifest failed integrity check`);
       
       // Return empty structure
       if (type === 'louvores') {
@@ -125,11 +125,11 @@ class ManifestRepository {
       
       // Remove specific manifest
       manifestCache._remove(type);
-      logger.info('ManifestRepository', `Cache invalidated for ${type} manifest`);
+      logger.info(`Cache invalidated for ${type} manifest`);
     } else {
       // Clear all
       manifestCache.clear();
-      logger.info('ManifestRepository', 'All manifest cache invalidated');
+      logger.info('All manifest cache invalidated');
     }
   }
 

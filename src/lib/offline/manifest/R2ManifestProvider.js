@@ -28,7 +28,7 @@ class R2ManifestProvider {
         ? getConfig('LOUVORES_MANIFEST_URL')
         : getConfig('OFFLINE_MANIFEST_URL');
 
-      logger.debug('R2ManifestProvider', `Fetching ${type} manifest from: ${url}`);
+      logger.debug(`Fetching ${type} manifest from: ${url}`);
 
       const response = await fetch(url, {
         cache: 'no-cache',
@@ -39,7 +39,7 @@ class R2ManifestProvider {
 
       if (!response.ok) {
         if (response.status === 404) {
-          logger.warn('R2ManifestProvider', `${type} manifest not found (404)`);
+          logger.warn(`${type} manifest not found (404)`);
           return null;
         }
         throw new Error(`Failed to fetch ${type} manifest: ${response.status} ${response.statusText}`);
@@ -47,10 +47,10 @@ class R2ManifestProvider {
 
       const data = await response.json();
       
-      logger.info('R2ManifestProvider', `Successfully fetched ${type} manifest`);
+      logger.info(`Successfully fetched ${type} manifest`);
       return data;
     } catch (error) {
-      logger.error('R2ManifestProvider', `Error fetching ${type} manifest from R2`, error);
+      logger.error(`Error fetching ${type} manifest from R2`, error);
       
       // Return null instead of throwing to allow fallback
       return null;

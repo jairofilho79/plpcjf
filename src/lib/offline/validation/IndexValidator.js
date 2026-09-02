@@ -86,7 +86,7 @@ export class IndexValidator extends PdfValidator {
       this._logValidation(pdfPath, result);
       return result;
     } catch (error) {
-      logger.error('IndexValidator', `Error validating PDF: ${pdfPath}`, error);
+      logger.error(`Error validating PDF: ${pdfPath}`, error);
       
       return {
         available: false,

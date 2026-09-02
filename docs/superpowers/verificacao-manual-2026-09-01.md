@@ -73,18 +73,20 @@ projeto não usa. Isto é o que deixou de ter cobertura automatizada:
 
 ## 3. Pendências conhecidas — decididas, não esquecidas
 
-Nenhuma bloqueia o uso da branch. Todas foram encontradas durante a execução e deixadas de fora com
-razão registrada.
+Nenhuma bloqueia o uso da branch. As três que restam abaixo foram encontradas durante a execução e
+deixadas de fora com razão registrada.
+
+> Quatro destas pendências foram corrigidas em 2026-09-01 pelo plano
+> `docs/superpowers/plans/2026-09-01-pendencias-conhecidas.md`: a checagem de
+> cancelamento do download, o logger que descartava o objeto de erro, o painel
+> `/offline` que não recalculava depois do download, e a página em branco da
+> `/biblioteca`. As três que restam abaixo seguem decididas, não esquecidas.
 
 | Onde | O quê | Por que ficou |
 |---|---|---|
-| `DownloadManager.js:457` | Testa `.aborted` num `AbortController` em vez de `.signal.aborted`, então a checagem de cancelamento no laço **nunca dispara**. É a causa do "cancelar não para o download na hora" | Inerte na prática: o `signal` repassado ao `fetch` ainda cancela. Perde-se só o corte rápido. Comentário explicativo já está no código |
-| `OfflineLogger` | Descarta o objeto de erro em ~245 de 247 chamadas, por um argumento redundante | Corrigir mexe em 245 sítios. **Vale priorizar:** num sistema cujo modo de falha é o silêncio, o canal de diagnóstico estar mudo é sério |
 | `offline.js` | 20+ acessos crus a `localStorage` | Num navegador com armazenamento bloqueado (Firefox estrito, aba privada), a limpeza de dados pode lançar no meio e abortar em silêncio. Pré-existente |
-| `/offline` | O painel mostra "0 Disponíveis" até a pessoa clicar em "atualizar" | **Verificado com download real pela interface:** 1546 PDFs em cache, painel mostrando zero; após o clique, 1544/4630 correto. É defasagem por desenho, não cálculo errado — a conclusão do download marca a estatística obsoleta e nunca recalcula |
 | `normalizeForStorage` | Não é idempotente para nome de arquivo com percent-encoding aninhado | Nenhum caminho do acervo tem `%`. **Merece registro próprio:** se algum dia disparar, a migração NFC reescreve a chave **e apaga a original** — a forma exata de perda silenciosa que este plano existiu para eliminar |
 | `/` × `/biblioteca` | `resultadosProntos` é flag travada numa página e derivação viva na outra; mesmo nome, semânticas diferentes | Sem comentário dizendo isso. É o mecanismo por trás de `?arranjo=` vazio deixar `?pagina=999` preso |
-| `/biblioteca` | Com catálogo carregado e vazio (falha de manifesto), renderiza **nada** — esqueleto que resolve em página em branco | A home tem quatro estados vazios com botão de recuperação; a biblioteca tem uma frase sem saída |
 
 ---
 

@@ -90,7 +90,7 @@ export class NetworkValidator extends PdfValidator {
     } catch (error) {
       const err = /** @type {any} */ (error);
       // Network error or timeout - assume not available
-      logger.debug('NetworkValidator', `Network check failed for ${pdfPath}:`, err.message);
+      logger.debug(`Network check failed for ${pdfPath}:`, err.message);
 
       return {
         available: false,

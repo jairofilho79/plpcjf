@@ -19,6 +19,7 @@
   import LouvorPaginationControls from '$lib/components/LouvorPaginationControls.svelte';
   import { groupLouvoresByGroupId, compareLouvorNome } from '$lib/utils/groupLouvores.js';
   import LouvorListSkeleton from '$lib/components/LouvorListSkeleton.svelte';
+  import { estadoVazioBiblioteca } from '$lib/utils/estadosVazios.js';
 
   // Normalize classification by removing content in parentheses
   /**
@@ -333,6 +334,13 @@
   /** Só depois disso faz sentido corrigir a paginação (preserva `?pagina=N`). */
   $: resultadosProntos = $louvoresLoaded && $louvores.length > 0 && $classificationFilters.length > 0;
 
+  /** Qual estado a área de resultados mostra — consumido só no template (ver estadosVazios.js). */
+  $: estadoResultados = estadoVazioBiblioteca({
+    carregado: $louvoresLoaded,
+    totalCatalogo: $louvores.length,
+    totalVisivel: paginatedLouvores.length
+  });
+
   // Corrige a URL quando a página pedida não existe mais. Idempotente: depois
   // da escrita a condição é falsa, então não há laço e não há flag.
   $: if (browser && naBiblioteca && resultadosProntos && estadoUrl.pagina !== currentPage) {
@@ -548,6 +556,21 @@
     return group.groupId || group.materials?.[0]?.pdfId || '';
   }
 
+  // Estado do botão "Tentar novamente" do estado vazio: loadLouvores() não
+  // muda louvoresLoaded e tenta de novo sozinha com backoff (até
+  // MANIFEST_RETRY_MAX_ATTEMPTS), então sem isto o botão parece não fazer
+  // nada por vários segundos.
+  let isRetryingLouvores = false;
+
+  async function handleRetryLoadLouvores() {
+    isRetryingLouvores = true;
+    try {
+      await loadLouvores();
+    } finally {
+      isRetryingLouvores = false;
+    }
+  }
+
   // Handlers do filtro de arranjo especial: a única coisa que fazem é gravar a
   // URL. A seleção exibida volta pela derivação, no mesmo ciclo.
   /**
@@ -625,12 +648,12 @@
   </div>
   
   <div class="mt-8 flex justify-center">
-    {#if !$louvoresLoaded}
+    {#if estadoResultados === 'carregando'}
       <div class="louvores-container w-full max-w-4xl">
         <span class="container-tag">Louvores</span>
         <LouvorListSkeleton count={itemsPerPage} />
       </div>
-    {:else if paginatedLouvores.length > 0}
+    {:else if estadoResultados === 'com-resultados'}
       <div id="louvores" class="louvores-container w-full max-w-4xl" bind:this={louvoresContainer}>
         <span class="container-tag">Louvores</span>
         
@@ -670,8 +693,20 @@
 
         <!-- End louvores container -->
       </div>
-    {:else if $louvores.length > 0}
+    {:else if estadoResultados === 'filtros-sem-resultado'}
       <p class="text-center mt-8 no-results-message">Nenhum louvor encontrado com os filtros selecionados.</p>
+    {:else}
+      <div class="empty-state-message">
+        <p>Não foi possível carregar a lista de louvores.</p>
+        <button
+          type="button"
+          class="empty-state-action"
+          on:click={handleRetryLoadLouvores}
+          disabled={isRetryingLouvores}
+        >
+          {isRetryingLouvores ? 'Tentando novamente…' : 'Tentar novamente'}
+        </button>
+      </div>
     {/if}
   </div>
 </div>
@@ -739,6 +774,34 @@
   .no-results-message {
     color: var(--text-light);
     opacity: 0.9;
+  }
+
+  .empty-state-message {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.75rem;
+    text-align: center;
+    margin-top: 2rem;
+    color: var(--text-light);
+    opacity: 0.9;
+  }
+
+  .empty-state-action {
+    padding: 0.5rem 1rem;
+    background-color: var(--card-color);
+    color: var(--text-dark);
+    border: 2px solid var(--gold-color);
+    border-radius: 0.5rem;
+    font-size: 0.875rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s ease;
+  }
+
+  .empty-state-action:hover {
+    border-color: var(--gold-light);
+    background-color: rgba(244, 208, 63, 0.1);
   }
 
   /* Faixa de atualização do manifesto — alinhada ao tema (borgonha, dourado, creme no botão) */

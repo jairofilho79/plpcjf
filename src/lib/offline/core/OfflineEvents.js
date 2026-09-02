@@ -44,9 +44,9 @@ class OfflineEventEmitter extends EventTarget {
       });
       
       this.dispatchEvent(event);
-      logger.debug('OfflineEvents', `Event emitted: ${eventName}`, data);
+      logger.debug(`Event emitted: ${eventName}`, data);
     } catch (error) {
-      logger.error('OfflineEvents', `Error emitting event: ${eventName}`, error);
+      logger.error(`Error emitting event: ${eventName}`, error);
     }
   }
 

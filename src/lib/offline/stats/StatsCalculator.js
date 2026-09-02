@@ -63,7 +63,7 @@ class StatsCalculator {
       const cached = this.memoryCache.get(category);
       // Check if cache is still valid (basic check)
       if (cached && cached.timestamp && Date.now() - cached.timestamp < 60000) {
-        logger.debug('StatsCalculator', `Memory cache hit for category: ${category}`);
+        logger.debug(`Memory cache hit for category: ${category}`);
         return cached.stats;
       }
     }
@@ -77,7 +77,7 @@ class StatsCalculator {
           stats: cached,
           timestamp: Date.now()
         });
-        logger.debug('StatsCalculator', `Persistent cache hit for category: ${category}`);
+        logger.debug(`Persistent cache hit for category: ${category}`);
         return /** @type {CategoryStats} */ (cached);
       }
     }
@@ -116,7 +116,7 @@ class StatsCalculator {
       }
 
       if (!louvores || !Array.isArray(louvores)) {
-        logger.warn('StatsCalculator', 'No louvores data available');
+        logger.warn('No louvores data available');
         return { total: 0, available: 0, missing: 0, percentage: 0 };
       }
 
@@ -173,11 +173,11 @@ class StatsCalculator {
       this._cacheResult(category, result, louvores.length, cachedPdfsList.length);
 
       const calculationTime = performance.now() - startTime;
-      logger.debug('StatsCalculator', `Calculated stats for ${category} in ${calculationTime.toFixed(2)}ms`);
+      logger.debug(`Calculated stats for ${category} in ${calculationTime.toFixed(2)}ms`);
 
       return result;
     } catch (error) {
-      logger.error('StatsCalculator', `Error calculating stats for ${category}:`, error);
+      logger.error(`Error calculating stats for ${category}:`, error);
       return { total: 0, available: 0, missing: 0, percentage: 0 };
     } finally {
       this.calculationInProgress.delete(category);
@@ -206,7 +206,7 @@ class StatsCalculator {
     }
 
     if (!louvores || !Array.isArray(louvores)) {
-      logger.warn('StatsCalculator', 'No louvores data available');
+      logger.warn('No louvores data available');
       return {};
     }
 
@@ -258,7 +258,7 @@ class StatsCalculator {
     // Invalidate persistent cache
     invalidateCategory(category);
 
-    logger.debug('StatsCalculator', `Invalidated stats for category: ${category}`);
+    logger.debug(`Invalidated stats for category: ${category}`);
   }
 
   /**
@@ -273,7 +273,7 @@ class StatsCalculator {
     const categories = Object.keys(allCached);
     invalidateCategories(categories);
 
-    logger.debug('StatsCalculator', 'Invalidated all stats');
+    logger.debug('Invalidated all stats');
   }
 
   /**
@@ -283,7 +283,7 @@ class StatsCalculator {
    * @returns {Promise<void>}
    */
   async sync(cachedPdfs = null) {
-    logger.debug('StatsCalculator', 'Syncing stats with cache state');
+    logger.debug('Syncing stats with cache state');
 
     // Get current cached PDFs if not provided
     let currentCachedPdfs = cachedPdfs;
@@ -299,7 +299,7 @@ class StatsCalculator {
     // In the future, we could do incremental sync
     this.invalidateAll();
 
-    logger.debug('StatsCalculator', 'Stats sync completed');
+    logger.debug('Stats sync completed');
   }
 
   /**

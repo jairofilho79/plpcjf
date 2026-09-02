@@ -164,7 +164,7 @@ export class DownloadProgressTracker {
   _emitProgress() {
     const progress = this.getProgress();
     offlineEvents.emit(EVENTS.DOWNLOAD_PROGRESS, progress);
-    logger.debug('DownloadProgress', 'Progress updated', progress);
+    logger.debug('Progress updated', progress);
   }
 
   /**

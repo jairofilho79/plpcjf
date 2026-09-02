@@ -6,6 +6,7 @@
 import packageDownloader from './PackageDownloader.js';
 import DownloadProgressTracker from './DownloadProgress.js';
 import DownloadQueue from './DownloadQueue.js';
+import { isAborted } from './partProgress.js';
 import cacheStorageAdapter from '../storage/CacheStorageAdapter.js';
 import manifestRepository from '../manifest/ManifestRepository.js';
 import { findMissingPdfs, findRequiredPackages } from '$lib/utils/pdfValidation.js';
@@ -105,7 +106,7 @@ export class DownloadManager {
     this.abortController = new AbortController();
 
     try {
-      logger.info('DownloadManager', `Starting download for ${categories.length} categories`);
+      logger.info(`Starting download for ${categories.length} categories`);
 
       // Emit start event
       offlineEvents.emit(EVENTS.DOWNLOAD_STARTED, { categories });
@@ -163,14 +164,14 @@ export class DownloadManager {
         const { getCachedPDFsFast } = await import('$lib/utils/swRegistration.js');
         cachedPdfs = await getCachedPDFsFast();
       } catch (error) {
-        logger.warn('DownloadManager', 'Could not get cached PDFs, using empty array', error);
+        logger.warn('Could not get cached PDFs, using empty array', error);
         cachedPdfs = [];
       }
 
       // Identify missing PDFs
       const missingPdfs = findMissingPdfs(filteredLouvores, cachedPdfs);
       
-      logger.info('DownloadManager', `Found ${missingPdfs.length} missing PDFs out of ${filteredLouvores.length} total`);
+      logger.info(`Found ${missingPdfs.length} missing PDFs out of ${filteredLouvores.length} total`);
 
       if (missingPdfs.length === 0) {
         return {
@@ -193,11 +194,11 @@ export class DownloadManager {
       const requiredParts = findRequiredPackages(missingPdfs, manifest);
       
       if (requiredParts.length === 0) {
-        logger.warn('DownloadManager', 'No packages found for missing PDFs, falling back to full category download');
+        logger.warn('No packages found for missing PDFs, falling back to full category download');
         return await this._downloadFullCategories(categories, filteredLouvores);
       }
 
-      logger.info('DownloadManager', `Identified ${requiredParts.length} package parts needed`);
+      logger.info(`Identified ${requiredParts.length} package parts needed`);
 
       // Group parts by category
       /** @type {Record<string, any[]>} */
@@ -281,7 +282,7 @@ export class DownloadManager {
       };
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : undefined;
-      logger.error('DownloadManager', 'Error downloading categories', error);
+      logger.error('Error downloading categories', error);
 
       // Update state with error
       this._updateOfflineState({
@@ -338,7 +339,7 @@ export class DownloadManager {
     this.abortController = new AbortController();
 
     try {
-      logger.info('DownloadManager', `Starting download for ${pdfPaths.length} PDFs`);
+      logger.info(`Starting download for ${pdfPaths.length} PDFs`);
 
       offlineEvents.emit(EVENTS.DOWNLOAD_STARTED, { pdfCount: pdfPaths.length });
 
@@ -347,7 +348,7 @@ export class DownloadManager {
       throw new Error('Individual PDF download not yet implemented');
 
     } catch (error) {
-      logger.error('DownloadManager', 'Error downloading PDFs', error);
+      logger.error('Error downloading PDFs', error);
       throw error;
     } finally {
       this.isDownloading = false;
@@ -363,7 +364,7 @@ export class DownloadManager {
       return;
     }
 
-    logger.info('DownloadManager', 'Cancelling download');
+    logger.info('Cancelling download');
 
     if (this.abortController) {
       this.abortController.abort();
@@ -431,7 +432,7 @@ export class DownloadManager {
     }
 
     const totalPackages = packagesInfo.length;
-    logger.debug('DownloadManager', `Prepared ${totalPackages} packages for download`);
+    logger.debug(`Prepared ${totalPackages} packages for download`);
 
     // Start batch mode to avoid individual events during storage
     cacheStorageAdapter.startBatchMode();
@@ -450,18 +451,19 @@ export class DownloadManager {
     try {
       // Process each package using indexed loop to track package info
       for (let packageIndex = 0; packageIndex < packagesInfo.length; packageIndex++) {
-        // ACHADO (não corrigido: mudaria comportamento, fora do escopo desta
-        // tarefa de tipos): `AbortController` não tem `.aborted` — isso é
-        // `AbortController.signal.aborted`. Essa checagem de cancelamento no
-        // laço nunca dispara em runtime (sempre undefined); reportado à parte.
-        if (/** @type {any} */ (this.abortController)?.aborted) {
+        // O cancelamento é lido do SINAL, não do controlador: `AbortController`
+        // não tem `.aborted`. Até 2026-09-01 esta linha era
+        // `this.abortController?.aborted` — sempre undefined, nunca disparava,
+        // e o corte só acontecia lá no fetch. É a causa do "cancelar não para
+        // o download na hora".
+        if (isAborted(this.abortController?.signal)) {
           throw new Error('DOWNLOAD_CANCELLED');
         }
 
         const packageInfo = packagesInfo[packageIndex];
         const { category, part } = packageInfo;
 
-        logger.debug('DownloadManager', `Downloading package ${packageIndex + 1}/${totalPackages} for category: ${category}`);
+        logger.debug(`Downloading package ${packageIndex + 1}/${totalPackages} for category: ${category}`);
         console.log('[DownloadManager] Downloading package:', {
           packageIndex: packageIndex + 1,
           totalPackages,
@@ -573,7 +575,7 @@ export class DownloadManager {
             });
           }
 
-          logger.debug('DownloadManager', `Stored ${stored} PDFs from package ${packageIndex + 1}/${totalPackages}: ${part.filename}`);
+          logger.debug(`Stored ${stored} PDFs from package ${packageIndex + 1}/${totalPackages}: ${part.filename}`);
           
           // Clean up package ZIP from cache after extraction
           // Packages are temporary and should not remain in cache storage
@@ -589,19 +591,19 @@ export class DownloadManager {
               const packageRequest = new Request(fullPackageUrl);
               const deleted = await cache.delete(packageRequest);
               if (deleted) {
-                logger.debug('DownloadManager', `Removed package ZIP from cache: ${part.filename}`);
+                logger.debug(`Removed package ZIP from cache: ${part.filename}`);
               }
             }
           } catch (error) {
             // Non-critical error - package might not be in cache or cache API might not be available
-            logger.debug('DownloadManager', `Could not remove package ZIP from cache (non-critical): ${part.filename}`, error);
+            logger.debug(`Could not remove package ZIP from cache (non-critical): ${part.filename}`, error);
           }
         } catch (error) {
           if (error instanceof Error && error.message === 'DOWNLOAD_CANCELLED') {
             throw error;
           }
 
-          logger.error('DownloadManager', `Error downloading package ${packageIndex + 1}/${totalPackages}: ${part.filename}`, error);
+          logger.error(`Error downloading package ${packageIndex + 1}/${totalPackages}: ${part.filename}`, error);
           failed++;
           this.progress.incrementFailed();
         }
@@ -610,7 +612,7 @@ export class DownloadManager {
       // FASE 4: Invalidate stats for affected categories before emitting event
       // This ensures stats are invalidated and will be recalculated on next access
       if (categories && categories.length > 0) {
-        logger.debug('DownloadManager', `Invalidating stats for ${categories.length} categories`);
+        logger.debug(`Invalidating stats for ${categories.length} categories`);
         invalidateCategories(categories);
         // Also invalidate via StatsCalculator to clear memory cache
         categories.forEach(category => {
@@ -671,7 +673,7 @@ export class DownloadManager {
   async _downloadFullCategories(categories, louvores) {
     // This is a fallback - would need to implement full category download
     // For now, return error
-    logger.warn('DownloadManager', 'Full category download fallback not yet implemented');
+    logger.warn('Full category download fallback not yet implemented');
     return {
       success: false,
       completed: 0,
@@ -696,13 +698,13 @@ export class DownloadManager {
         if (offline.updateState) {
           offline.updateState(updates);
         } else {
-          logger.warn('DownloadManager', 'Offline store updateState method not available');
+          logger.warn('Offline store updateState method not available');
         }
       }).catch(error => {
-        logger.warn('DownloadManager', 'Could not update offline state', error);
+        logger.warn('Could not update offline state', error);
       });
     } catch (error) {
-      logger.warn('DownloadManager', 'Could not update offline state', error);
+      logger.warn('Could not update offline state', error);
     }
   }
 
@@ -734,9 +736,9 @@ export class DownloadManager {
         timestamp: Date.now()
       });
 
-      logger.info('DownloadManager', `Cache synced for ${categories.length} categories`);
+      logger.info(`Cache synced for ${categories.length} categories`);
     } catch (error) {
-      logger.error('DownloadManager', 'Error syncing cache', error);
+      logger.error('Error syncing cache', error);
     }
   }
 
