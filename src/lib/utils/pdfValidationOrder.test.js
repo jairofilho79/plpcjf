@@ -5,7 +5,7 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { resolveAvailabilityInOrder, ensureAvailability } from './pdfValidationOrder.js';
+import { resolveAvailabilityInOrder } from './pdfValidationOrder.js';
 
 /** @typedef {import('./pdfValidationOrder.js').ValidationResult} ValidationResult */
 /** @typedef {{ useIndex: boolean, checkNetwork: boolean, pdfId?: string }} ValidateOptions */
@@ -52,7 +52,7 @@ describe('resolveAvailabilityInOrder', () => {
     const validator = createValidatorDouble({ semRede: DISPONIVEL, comRede: DISPONIVEL });
     const probe = createConnectivityDouble(true);
 
-    const result = await resolveAvailabilityInOrder({
+    const { result } = await resolveAvailabilityInOrder({
       validate: validator.validate,
       checkConnectivity: probe.check,
       pdfId: 'abc'
@@ -86,7 +86,7 @@ describe('resolveAvailabilityInOrder', () => {
     const validator = createValidatorDouble({ semRede: AUSENTE, comRede: DISPONIVEL });
     const probe = createConnectivityDouble(true);
 
-    const result = await resolveAvailabilityInOrder({
+    const { result } = await resolveAvailabilityInOrder({
       validate: validator.validate,
       checkConnectivity: probe.check,
       pdfId: 'abc'
@@ -102,7 +102,7 @@ describe('resolveAvailabilityInOrder', () => {
     const validator = createValidatorDouble({ semRede: AUSENTE, comRede: DISPONIVEL });
     const probe = createConnectivityDouble(false);
 
-    const result = await resolveAvailabilityInOrder({
+    const { result } = await resolveAvailabilityInOrder({
       validate: validator.validate,
       checkConnectivity: probe.check,
       pdfId: 'abc'
@@ -134,7 +134,7 @@ describe('resolveAvailabilityInOrder', () => {
     const validator = createValidatorDouble({ semRede: DISPONIVEL, comRede: DISPONIVEL });
     const probe = createConnectivityDouble(true);
 
-    const result = await resolveAvailabilityInOrder({
+    const { result } = await resolveAvailabilityInOrder({
       validate: validator.validate,
       checkConnectivity: probe.check
     });
@@ -144,47 +144,52 @@ describe('resolveAvailabilityInOrder', () => {
   });
 });
 
-describe('ensureAvailability', () => {
-  it('encaminha pdfPath e pdfId ao validador', async () => {
-    /** @type {{ pdfPath: string, pdfId: string | null | undefined }[]} */
-    const calls = [];
-    /** @param {string} pdfPath @param {string | null} [pdfId] */
-    const validate = async (pdfPath, pdfId) => {
-      calls.push({ pdfPath, pdfId });
-      return DISPONIVEL;
-    };
+describe('veredito de conectividade devolvido a quem chama', () => {
+  // Sem isto, o leitor sondava a rede uma segunda vez para descobrir o que esta
+  // função já tinha descoberto — 1,5 s de ecrã morto para repetir uma pergunta
+  // já respondida.
 
-    const available = await ensureAvailability('assets/ColAdultos/001.pdf', 'id-do-pdf', validate);
+  it('cache hit não sonda, e diz que não sondou', async () => {
+    const validator = createValidatorDouble({ semRede: DISPONIVEL, comRede: DISPONIVEL });
+    const probe = createConnectivityDouble(true);
 
-    assert.equal(available, true);
-    assert.deepEqual(calls, [{ pdfPath: 'assets/ColAdultos/001.pdf', pdfId: 'id-do-pdf' }]);
+    const { effectiveOnline } = await resolveAvailabilityInOrder({
+      validate: validator.validate,
+      checkConnectivity: probe.check,
+      pdfId: 'abc'
+    });
+
+    assert.equal(probe.count, 0);
+    assert.equal(effectiveOnline, undefined, 'não sondou, logo não tem veredito a dar');
   });
 
-  it('sem pdfId, deixa o default do validador valer', async () => {
-    /** @type {{ pdfPath: string, pdfId: string | null }[]} */
-    const calls = [];
-    /** @param {string} pdfPath @param {string | null} [pdfId] */
-    const validate = async (pdfPath, pdfId = null) => {
-      calls.push({ pdfPath, pdfId });
-      return AUSENTE;
-    };
+  it('sem cache e offline, devolve o veredito negativo', async () => {
+    const validator = createValidatorDouble({ semRede: AUSENTE, comRede: DISPONIVEL });
+    const probe = createConnectivityDouble(false);
 
-    const available = await ensureAvailability('assets/ColAdultos/001.pdf', undefined, validate);
+    const { result, effectiveOnline } = await resolveAvailabilityInOrder({
+      validate: validator.validate,
+      checkConnectivity: probe.check,
+      pdfId: 'abc'
+    });
 
-    assert.equal(available, false);
-    assert.equal(calls[0].pdfId, null, 'undefined deixa o parâmetro default de validate assumir');
+    assert.equal(result.available, false);
+    assert.equal(effectiveOnline, false);
+    assert.equal(probe.count, 1, 'uma sonda, e uma só — o chamador reutiliza este veredito');
   });
 
-  it('não baixa nada: uma só chamada ao validador, mesmo indisponível', async () => {
-    let count = 0;
-    const validate = async () => {
-      count++;
-      return AUSENTE;
-    };
+  it('sem cache e online, devolve o veredito positivo', async () => {
+    const validator = createValidatorDouble({ semRede: AUSENTE, comRede: AUSENTE });
+    const probe = createConnectivityDouble(true);
 
-    const available = await ensureAvailability('assets/ColAdultos/001.pdf', 'abc', validate);
+    const { result, effectiveOnline } = await resolveAvailabilityInOrder({
+      validate: validator.validate,
+      checkConnectivity: probe.check,
+      pdfId: 'abc'
+    });
 
-    assert.equal(available, false);
-    assert.equal(count, 1, 'sem auto-download, não há revalidação');
+    assert.equal(result.available, false);
+    assert.equal(effectiveOnline, true);
+    assert.equal(probe.count, 1);
   });
 });

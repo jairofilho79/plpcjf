@@ -22,11 +22,17 @@
  * de imediato. Invertido: a rede só entra quando o cache falhou, que é o único
  * caso em que ela pode acrescentar alguma coisa.
  *
+ * Devolve também o veredito da sonda, porque quem chama precisa dele a seguir e
+ * não deve voltar a perguntar: o leitor sondava uma segunda vez para decidir se
+ * podia baixar o PDF, e essa repetição custava mais 1,5 s de ecrã morto a quem
+ * já estava sem rede. `effectiveOnline` é `undefined` quando a sonda não chegou
+ * a correr — houve resposta em cache, e não há veredito nenhum a dar.
+ *
  * @param {Object} deps
  * @param {(options: { useIndex: boolean, checkNetwork: boolean, pdfId?: string }) => Promise<ValidationResult>} deps.validate
  * @param {() => Promise<boolean>} deps.checkConnectivity
  * @param {string | null} [deps.pdfId]
- * @returns {Promise<ValidationResult>}
+ * @returns {Promise<{ result: ValidationResult, effectiveOnline: boolean | undefined }>}
  */
 export async function resolveAvailabilityInOrder({ validate, checkConnectivity, pdfId = null }) {
   // `undefined`, não `null`: é a ausência que as opções do CompositeValidator
@@ -35,7 +41,7 @@ export async function resolveAvailabilityInOrder({ validate, checkConnectivity, 
 
   const semRede = await validate({ useIndex: true, checkNetwork: false, pdfId: id });
   if (semRede?.available) {
-    return semRede;
+    return { result: semRede, effectiveOnline: undefined };
   }
 
   // Só agora a sonda vale o que custa: sem cache, a resposta depende mesmo de
@@ -44,30 +50,9 @@ export async function resolveAvailabilityInOrder({ validate, checkConnectivity, 
   if (!online) {
     // Repetir com `checkNetwork: true` estando offline daria exatamente o mesmo
     // resultado — o validador de rede é pulado quando não há rede.
-    return semRede;
+    return { result: semRede, effectiveOnline: false };
   }
 
-  return await validate({ useIndex: true, checkNetwork: true, pdfId: id });
-}
-
-/**
- * Contrato de `ensurePdfAvailable`: uma pergunta, uma resposta.
- *
- * Já não baixa o ficheiro. Quem abre um PDF não precisa de o ter em cache
- * antes de o ver: o Service Worker busca-o da rede ao renderizar, e o
- * auto-download que estava aqui fazia o mesmo ficheiro ser transferido duas
- * vezes — a primeira só para que a segunda pudesse começar.
- *
- * O `pdfId` viaja porque é ele que autoriza a memorização do resultado. Sem
- * ele, um PDF disponível nunca era memorizado e o custo repetia-se em cada
- * clique, para sempre.
- *
- * @param {string} pdfPath
- * @param {string | null | undefined} pdfId
- * @param {(pdfPath: string, pdfId?: string | null) => Promise<ValidationResult>} validate
- * @returns {Promise<boolean>}
- */
-export async function ensureAvailability(pdfPath, pdfId, validate) {
-  const validation = await validate(pdfPath, pdfId);
-  return validation?.available === true;
+  const comRede = await validate({ useIndex: true, checkNetwork: true, pdfId: id });
+  return { result: comRede, effectiveOnline: true };
 }
