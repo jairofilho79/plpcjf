@@ -8,7 +8,10 @@
     buildOnlineReaderUrl,
     openPdfNewTabOfflineFirst
   } from '$lib/utils/pdfUtils';
-  import { navigateLouvorToLeitor } from '$lib/utils/navigateLouvorToLeitor';
+  import {
+    navigateLouvorToLeitor,
+    ERRO_IDENTIFICADOR_INVALIDO
+  } from '$lib/utils/navigateLouvorToLeitor';
   import { carousel } from '$lib/stores/carousel';
   import { pdfViewer } from '$lib/stores/pdfViewer';
   import {
@@ -91,6 +94,18 @@
     const path = getPdfRelPath(item);
     const mode = $pdfViewer;
 
+    // A guarda é do clique, não de um modo. Pô-la só no ramo do leitor deixava
+    // a mesma assimetria viva nos outros três: `online` construía a URL do
+    // leitor externo com `null` lá dentro, `newtab` abria `/null`, e
+    // `share`/`save` caíam no `catch` e faziam `window.open(null)` — três
+    // maneiras diferentes de o utilizador levar com uma janela vazia sem
+    // explicação. Sem caminho não há nada que qualquer modo possa pedir, e
+    // `rememberOpened` também não deve gravar como aberto o que não abriu.
+    if (!path) {
+      pdfError = ERRO_IDENTIFICADOR_INVALIDO;
+      return;
+    }
+
     if (mode === 'share' || mode === 'save') {
       if (mode === 'share') {
         isSharing = true;
@@ -133,8 +148,11 @@
       // leitor culpava o PDF ("não está disponível offline") por um problema
       // que é do identificador, mandando o utilizador baixar um ficheiro que
       // nunca ia resolver nada. Com uma só função, não podem voltar a divergir.
-      // Só se regista como "último material aberto" o que se conseguiu abrir.
-      if (path) rememberOpened(item);
+      rememberOpened(item);
+      // A guarda acima já garante que há caminho; este ramo fica na mesma
+      // porque é `navigateLouvorToLeitor` quem decide, e é dela que vem a
+      // mensagem — duplicar a decisão aqui era como os dois caminhos se
+      // separaram da primeira vez.
       const result = await navigateLouvorToLeitor(item);
       if (!result.navigated) pdfError = result.error;
       return;
