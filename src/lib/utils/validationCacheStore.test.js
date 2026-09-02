@@ -159,13 +159,23 @@ describe('validationCacheStore', () => {
     assert.notEqual(legacy.getItem('pdfValidation_b'), null);
   });
 
-  it('migra por lotes: mais chaves do que o tamanho do lote sai tudo', () => {
-    // 450 > 200, portanto três lotes. É o caso do aparelho real (milhares de
-    // chaves), e é a passagem por lotes que faz cada apagamento libertar
-    // espaço para a gravação seguinte, em vez de um pico único que não cabe.
+  it('migra por lotes: grava mais do que uma vez, e cada gravação já encontra menos chaves antigas', () => {
+    // Contar 450 migradas no fim NÃO prova lotagem nenhuma: uma passagem única
+    // também migra 450. E a lotagem é o coração desta correção, porque o
+    // defeito nunca foi "não migra", foi o PICO de ocupação — gravar o registo
+    // consolidado inteiro com as chaves antigas todas ainda presentes, que é
+    // precisamente o que não cabe no aparelho no teto de ~5 MB.
+    //
+    // O que se observa aqui é essa propriedade e não o resultado: quantas
+    // chaves antigas ainda estavam no storage no momento de cada gravação. Com
+    // lotes, a segunda gravação já encontra menos do que a primeira — ou seja,
+    // o apagamento do lote anterior libertou espaço antes dela. Voltar à
+    // passagem única, ou pôr o lote maior do que o acervo, faz este teste
+    // falhar em vez de passar em silêncio.
+    const TOTAL = 450;
     /** @type {Record<string, string>} */
     const inicial = {};
-    for (let i = 0; i < 450; i++) {
+    for (let i = 0; i < TOTAL; i++) {
       inicial[`pdfValidation_k${i}`] = JSON.stringify({
         available: true,
         url: `/k${i}.pdf`,
@@ -174,9 +184,44 @@ describe('validationCacheStore', () => {
     }
     const legacy = createStorage(inicial);
 
+    /** Chaves antigas ainda presentes no instante de cada gravação do registo. */
+    /** @type {number[]} */
+    const antigasPorGravacao = [];
+    const originalSetItem = legacy.setItem.bind(legacy);
+    /** @param {string} key @param {string} value */
+    legacy.setItem = (key, value) => {
+      if (key === VALIDATION_CACHE_KEY) {
+        antigasPorGravacao.push(
+          Object.keys(legacy._dump()).filter((/** @type {string} */ k) =>
+            k.startsWith('pdfValidation_')
+          ).length
+        );
+      }
+      originalSetItem(key, value);
+    };
+
     const { removidas, restantes } = migrateLegacyValidationKeys(legacy);
 
-    assert.equal(removidas, 450);
+    assert.ok(
+      antigasPorGravacao.length > 1,
+      `passagem única: houve ${antigasPorGravacao.length} gravação do registo, logo o pico ` +
+        'de ocupação continua a ser o total — é este o defeito que a lotagem corrige'
+    );
+    assert.equal(
+      antigasPorGravacao[0],
+      TOTAL,
+      'a primeira gravação ainda vê todas as chaves antigas: é o pico'
+    );
+    for (let i = 1; i < antigasPorGravacao.length; i++) {
+      assert.ok(
+        antigasPorGravacao[i] < antigasPorGravacao[i - 1],
+        `a gravação ${i + 1} tinha de encontrar menos chaves antigas do que a ${i}, ` +
+          `mas viu ${antigasPorGravacao[i]} contra ${antigasPorGravacao[i - 1]}`
+      );
+    }
+
+    // E o resultado, que continua a valer.
+    assert.equal(removidas, TOTAL);
     assert.equal(restantes, 0);
     assert.deepEqual(Object.keys(legacy._dump()), [VALIDATION_CACHE_KEY]);
     assert.deepEqual(readValidationEntry(legacy, 'k0', NOW), { available: true, url: '/k0.pdf' });

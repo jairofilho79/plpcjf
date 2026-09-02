@@ -131,10 +131,17 @@ const MIGRATION_BATCH_SIZE = 200;
  * cada sessão, para sempre, sem libertar um byte.
  *
  * Por lotes, o apagamento de cada lote liberta espaço para a gravação do
- * seguinte, e o pior caso deixa de ser "não liberta nada". O que se perde
- * quando um lote não cabe são entradas de um cache reconstruível com TTL de
- * 24 h; o que se ganha são megabytes que de outro modo ficavam presos para
- * sempre. A troca é deliberada e não é simétrica.
+ * seguinte, e o pior caso deixa de ser "não liberta nada".
+ *
+ * **O que se perde quando um lote não cabe é mais do que esse lote.** O
+ * fallback de `writeAll` descarta o registro **inteiro** e regrava-o vazio,
+ * portanto um lote que estoure a meio leva com ele tudo o que os lotes
+ * anteriores já tinham consolidado. Na prática, uma falha tardia aproxima-se
+ * de "perdeu-se o cache todo". Continua a ser um cache reconstruível com TTL
+ * de 24 h — o custo é revalidar, não perder dado do utilizador — contra
+ * megabytes que de outro modo ficavam presos para sempre. A troca é
+ * deliberada e não é simétrica; quem a quiser mudar tem de mudar antes o
+ * fallback de `writeAll`, não este laço.
  *
  * @param {Storage} storage
  * @returns {{ removidas: number, restantes: number }}

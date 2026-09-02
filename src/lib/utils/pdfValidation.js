@@ -78,11 +78,17 @@ export async function checkEffectiveConnectivity(options = {}) {
  * Os dois métodos de escrita **lançam** quando a operação falha, e isso é
  * deliberado: `writeAll`, em `validationCacheStore.js`, usa a exceção como
  * canal de erro — é assim que ele reconhece cota estourada, descarta o registro
- * inteiro e tenta de novo, e é assim que `migrateLegacyValidationKeys` sabe que
- * não pode apagar as chaves antigas. Um `setItem` que falhasse em silêncio
- * deixaria o cache grande e inútil para sempre. Nenhuma exceção escapa daqui:
- * todos os usos destes três métodos naquele arquivo estão dentro de `try/catch`
+ * inteiro e tenta de novo. Um `setItem` que falhasse em silêncio deixaria o
+ * cache grande e inútil para sempre. Nenhuma exceção escapa daqui: todos os
+ * usos destes três métodos naquele arquivo estão dentro de `try/catch`
  * próprios.
+ *
+ * O que a exceção **não** faz é vetar o apagamento das chaves antigas.
+ * `migrateLegacyValidationKeys` apaga o lote mesmo quando a gravação
+ * consolidada falha — é o apagamento que liberta espaço, e condicioná-lo ao
+ * sucesso da gravação era o que trancava justamente o aparelho cheio, o único
+ * que precisa da limpeza. O sucesso de `writeAll` decide se o dado foi
+ * preservado, não se as chaves saem.
  *
  * @type {Storage}
  */
@@ -163,16 +169,20 @@ export function invalidateValidationCache(pdfId) {
  * usou a app. Versões antigas gravavam uma chave `pdfValidation_<pdfId>` por
  * PDF — milhares delas, a encostar no teto de ~5 MB por origem — e
  * `clearValidationCache` não lhes toca: só remove a chave consolidada. Quem as
- * apaga é `migrateLegacyValidationKeys`, que as recolhe para o registro único
- * e só então as remove.
+ * apaga é `migrateLegacyValidationKeys`, em lotes: recolhe cada lote para o
+ * registro único, tenta gravá-lo, e apaga as chaves desse lote **quer a
+ * gravação tenha corrido bem quer não**. Não é "recolhe e só então remove" —
+ * essa ordem, condicionada ao sucesso da gravação, era exatamente o que não
+ * libertava nada no aparelho com o storage cheio.
  *
  * Essa migração corria por dentro de `getCachedValidation`/`cacheValidation`.
  * Quando o clique deixou de validar, as duas ficaram sem caminho quente e a
  * limpeza deixou de acontecer em aparelhos reais — o lixo antigo ficou lá,
  * sem ninguém para o apagar. Estas seis chamadas vivas (`stores/offline.js` e
  * `routes/leitor/+page.svelte`) são agora o gatilho. A enumeração do storage é
- * síncrona, mas `ensureLegacyMigration` corre uma vez por sessão e, feita a
- * migração, as chaves antigas deixam de existir para sempre.
+ * síncrona; `ensureLegacyMigration` corre uma vez por sessão quando a migração
+ * fica completa, e volta a tentar dentro da mesma sessão enquanto sobrar
+ * alguma chave antiga por remover.
  */
 export function clearAllValidationCache() {
   ensureLegacyMigration();
