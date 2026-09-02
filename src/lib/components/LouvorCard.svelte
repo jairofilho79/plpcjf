@@ -11,13 +11,6 @@
   import { goto } from '$app/navigation';
   import { carousel } from '$lib/stores/carousel';
   import { pdfViewer } from '$lib/stores/pdfViewer';
-  import { isPdfAvailableInIndex } from '$lib/utils/pdfIndex';
-  import {
-    ensurePdfAvailable,
-    validatePdfAvailability,
-    getCachedValidation,
-    checkEffectiveConnectivity
-  } from '$lib/utils/pdfValidation';
   import {
     groupMaterialsByClassificacao,
     pickPreferredMaterial,
@@ -52,11 +45,12 @@
   // ponytail: Set so {#each} {@const} sees $carousel changes (fn call hid the dep)
   $: carouselPdfIds = new Set(($carousel || []).map((c) => c.pdfId).filter(Boolean));
 
-  let isCheckingAvailability = false;
-  let availabilityError = null;
   let cardElement;
   let isSharing = false;
   let isSaving = false;
+  // Só `share` e `save` continuam a ter estado ocupado: esses esperam mesmo por
+  // um blob antes de poderem fazer o que quer que seja. Abrir no leitor não
+  // espera por nada.
   /** @type {string | null} */
   let busyPdfId = null;
 
@@ -117,91 +111,18 @@
     }
 
     if (mode === 'leitor') {
-      isCheckingAvailability = true;
-      availabilityError = null;
-      busyPdfId = item.pdfId;
-
-      try {
-        let validated = false;
-        const cached = getCachedValidation(item.pdfId);
-        if (cached && cached.available) {
-          rememberOpened(item);
-          const fileParam = encodeURIComponent(`/${path}`);
-          const tituloParam = encodeURIComponent(item.nome || '');
-          const subtituloText = `${item.categoria || ''} | ${item.classificacao || ''}`.trim();
-          const subtituloParam = encodeURIComponent(subtituloText);
-          const url = `/leitor?file=${fileParam}&titulo=${tituloParam}&subtitulo=${subtituloParam}&validated=true`;
-          goto(url);
-          isCheckingAvailability = false;
-          busyPdfId = null;
-          return;
-        }
-
-        const indexCheck = isPdfAvailableInIndex(item.pdfId);
-        let shouldProceed = false;
-
-        if (indexCheck === true) {
-          try {
-            const quickValidation = await validatePdfAvailability(path, item.pdfId);
-            if (quickValidation.available) {
-              shouldProceed = true;
-              validated = true;
-            } else if (quickValidation.needsDownload && navigator.onLine) {
-              shouldProceed = true;
-            }
-          } catch (err) {
-            console.warn('[LouvorCard] Quick validation failed, proceeding anyway:', err);
-            shouldProceed = true;
-          }
-        } else {
-          const isAvailable = await ensurePdfAvailable(path);
-
-          if (isAvailable) {
-            shouldProceed = true;
-            validated = true;
-          } else {
-            const validation = await validatePdfAvailability(path, item.pdfId);
-            const effectiveOnline = await checkEffectiveConnectivity({ timeoutMs: 1500 });
-            if (validation.needsDownload && effectiveOnline) {
-              shouldProceed = true;
-            } else if (!effectiveOnline && validation.available === false) {
-              availabilityError =
-                'PDF não está disponível offline. Por favor, baixe primeiro na página de configuração offline.';
-              isCheckingAvailability = false;
-              busyPdfId = null;
-              return;
-            } else {
-              console.warn(
-                '[LouvorCard] Validation uncertain, allowing navigation - leitor will handle errors'
-              );
-              shouldProceed = true;
-            }
-          }
-        }
-
-        if (shouldProceed) {
-          rememberOpened(item);
-          const fileParam = encodeURIComponent(`/${path}`);
-          const tituloParam = encodeURIComponent(item.nome || '');
-          const subtituloText = `${item.categoria || ''} | ${item.classificacao || ''}`.trim();
-          const subtituloParam = encodeURIComponent(subtituloText);
-          const validatedParam = validated ? '&validated=true' : '';
-          const url = `/leitor?file=${fileParam}&titulo=${tituloParam}&subtitulo=${subtituloParam}${validatedParam}`;
-          goto(url);
-        }
-      } catch (err) {
-        console.error('Erro ao validar PDF:', err);
-        rememberOpened(item);
-        const fileParam = encodeURIComponent(`/${path}`);
-        const tituloParam = encodeURIComponent(item.nome || '');
-        const subtituloText = `${item.categoria || ''} | ${item.classificacao || ''}`.trim();
-        const subtituloParam = encodeURIComponent(subtituloText);
-        const url = `/leitor?file=${fileParam}&titulo=${tituloParam}&subtitulo=${subtituloParam}`;
-        goto(url);
-      } finally {
-        isCheckingAvailability = false;
-        busyPdfId = null;
-      }
+      // O clique navega, e mais nada. Validar aqui custava duas sondas de
+      // conectividade e cinco pedidos do mesmo PDF — incluindo baixá-lo
+      // inteiro — com o cartão em `pointer-events: none` durante tudo isso: é
+      // daí que vinha o "o primeiro clique só marca, não abre". O leitor
+      // resolve a origem sozinho e é ele quem sabe diagnosticar a falha, que é
+      // o caso raro.
+      rememberOpened(item);
+      const fileParam = encodeURIComponent(`/${path}`);
+      const tituloParam = encodeURIComponent(item.nome || '');
+      const subtituloText = `${item.categoria || ''} | ${item.classificacao || ''}`.trim();
+      const subtituloParam = encodeURIComponent(subtituloText);
+      goto(`/leitor?file=${fileParam}&titulo=${tituloParam}&subtitulo=${subtituloParam}`);
       return;
     }
 
@@ -247,12 +168,9 @@
 </script>
 
 <div class="louvor-card" class:grouped={isGrouped} bind:this={cardElement}>
-  {#if availabilityError}
-    <div class="availability-error" role="alert">
-      {availabilityError}
-    </div>
-  {/if}
-
+  <!-- O aviso de indisponibilidade saiu daqui: o cartão já não sabe se o PDF
+       existe, e passar a saber era exatamente o que atrasava o clique. Quem
+       mostra a mensagem — e o caminho para /offline — é o leitor. -->
   {#if isGrouped}
     <div class="louvor-info header-only">
       <div class="louvor-title">
@@ -281,7 +199,6 @@
               href={itemPath}
               class="material-open"
               class:busy={busyPdfId === item.pdfId}
-              class:checking={isCheckingAvailability && busyPdfId === item.pdfId}
               title={`Abrir ${materialButtonLabel(item)}`}
               on:click|preventDefault={() => openLouvor(item)}
             >
@@ -316,7 +233,6 @@
       href={pdfPath}
       on:click|preventDefault={handleCardClick}
       class="louvor-info"
-      class:checking={isCheckingAvailability}
       class:processing={isSharing || isSaving}
     >
       <div class="louvor-title">
@@ -542,8 +458,9 @@
     background: rgba(212, 175, 55, 0.28);
   }
 
-  .material-open.busy,
-  .material-open.checking {
+  /* `pointer-events: none` só enquanto se espera por um blob (share/save). No
+     modo leitor não há espera nenhuma, e era esta regra que engolia o clique. */
+  .material-open.busy {
     opacity: 0.6;
     cursor: wait;
     pointer-events: none;
@@ -583,19 +500,6 @@
     transform: none;
   }
 
-  .availability-error {
-    grid-column: 1 / -1;
-    padding: 0.5rem;
-    margin-bottom: 0.5rem;
-    background-color: rgba(220, 38, 38, 0.1);
-    border: 1px solid rgba(220, 38, 38, 0.3);
-    border-radius: 0.25rem;
-    color: var(--text-light);
-    font-size: 0.875rem;
-    text-align: center;
-  }
-
-  .louvor-info.checking,
   .louvor-info.processing {
     opacity: 0.6;
     cursor: wait;
