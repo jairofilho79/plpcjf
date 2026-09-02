@@ -13,7 +13,7 @@ import {
   getFitMode, setFitMode,
   getNavigationMode, setNavigationMode,
   getBrightness, setBrightness,
-  DEFAULT_BRIGHTNESS
+  BRIGHTNESS_PRESETS, DEFAULT_BRIGHTNESS
 } from './readerPreferences.js';
 
 const original = Object.getOwnPropertyDescriptor(globalThis, 'localStorage');
@@ -103,5 +103,26 @@ describe('readerPreferences — storage normal', () => {
   it('getBrightness não aceita o "" que vira 0 no Number()', () => {
     instalar(criarFakeStorage({ pdfReaderBrightness: '' }));
     assert.equal(getBrightness(), DEFAULT_BRIGHTNESS);
+  });
+
+  it('persiste na chave pdfReaderBrightness', () => {
+    setBrightness(130);
+    assert.equal(globalThis.localStorage.getItem('pdfReaderBrightness'), '130');
+  });
+
+  it('não interfere na preferência de fitMode (chaves distintas)', () => {
+    setFitMode('page-width');
+    setBrightness(60);
+    assert.equal(getFitMode(), 'page-width');
+    assert.equal(getBrightness(), 60);
+  });
+});
+
+describe('readerPreferences — contrato de BRIGHTNESS_PRESETS', () => {
+  it('expõe as três predefinições esperadas, na ordem do ciclo', () => {
+    // `cycleBrightness()` em routes/leitor/+page.svelte anda nesta lista por
+    // índice — trocar a ordem muda o comportamento do botão sem que nenhum
+    // outro teste avise.
+    assert.deepEqual(BRIGHTNESS_PRESETS, [100, 60, 130]);
   });
 });
