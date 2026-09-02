@@ -16,11 +16,11 @@
   import { ViewerAdapter } from '$lib/pdf-reader/viewerAdapter';
   import PdfPathManager from '$lib/offline/utils/PdfPathManager.js';
   import { createPdfTouchGestureHandlers } from '$lib/utils/pdfTouchGestures.js';
+  import { safeGet, safeSet } from '$lib/utils/safeStorage.js';
+  import { IS_LEITOR_OFFLINE_KEY } from '$lib/utils/storageKeys.js';
 
   // ── Performance Debug ────────────────────────────────────────────────────────
-  const _perfEnabled = () =>
-    typeof window !== 'undefined' &&
-    localStorage.getItem('plpcjf_perf_debug') === '1'
+  const _perfEnabled = () => safeGet('plpcjf_perf_debug') === '1'
 
   function perfMark(name: string) {
     if (!_perfEnabled()) return
@@ -548,11 +548,11 @@
   }
 
   onMount(async () => {
-    // Set IS_LEITOR_OFFLINE flag when accessing the leitor route
-    if (typeof window !== 'undefined') {
-      localStorage.setItem('IS_LEITOR_OFFLINE', 'true');
-    }
-    
+    // Marca que o utilizador entrou no leitor. `safeSet` em vez de
+    // `localStorage.setItem`: com dados bloqueados o throw abortava o resto
+    // deste onMount — inclusive a montagem do viewer.
+    safeSet(IS_LEITOR_OFFLINE_KEY, 'true');
+
     // Sempre garantir que a barra esteja visível ao carregar a página
     isToolbarVisible = true;
 
