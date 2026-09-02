@@ -6,7 +6,10 @@
 // não baixa nada.
 import { getCachedPDFsFast, waitForServiceWorker, invalidateCachedPDFsLocal, getCachedPDFs } from '$lib/utils/swRegistration';
 import { getPdfRelPath } from '$lib/utils/pathUtils';
-import { isPdfAvailableInIndex } from '$lib/utils/pdfIndex';
+// `isPdfAvailableInIndex` saiu daqui com `validatePdfAvailabilityFast`, a única
+// coisa neste ficheiro que consultava o índice diretamente. Quem ainda o usa é
+// `IndexValidator.js`, por dentro do `CompositeValidator` — este ficheiro chega
+// lá pelo validador composto, não por atalho.
 import compositeValidator from '$lib/offline/validation/CompositeValidator.js';
 import cacheStorageAdapter from '$lib/offline/storage/CacheStorageAdapter.js';
 import PdfPathManager from '$lib/offline/utils/PdfPathManager.js';
@@ -17,8 +20,10 @@ import { resolveAvailabilityInOrder } from './pdfValidationOrder.js';
 // (ECMA-262 §13.5.3), e é o `[[Get]]` de `localStorage` que lança no Firefox
 // com dados de site bloqueados. Nenhuma destas quatro lança.
 import { getStorage, safeGet, safeSet, safeRemove } from './safeStorage.js';
+// `readValidationEntry` deixou de ser importada com a saída de
+// `getCachedValidation`; continua exportada e testada em
+// `validationCacheStore.js`, que não se mexeu.
 import {
-  readValidationEntry,
   writeValidationEntry,
   removeValidationEntry,
   clearValidationCache,
@@ -73,11 +78,17 @@ export async function checkEffectiveConnectivity(options = {}) {
  * Os dois métodos de escrita **lançam** quando a operação falha, e isso é
  * deliberado: `writeAll`, em `validationCacheStore.js`, usa a exceção como
  * canal de erro — é assim que ele reconhece cota estourada, descarta o registro
- * inteiro e tenta de novo, e é assim que `migrateLegacyValidationKeys` sabe que
- * não pode apagar as chaves antigas. Um `setItem` que falhasse em silêncio
- * deixaria o cache grande e inútil para sempre. Nenhuma exceção escapa daqui:
- * todos os usos destes três métodos naquele arquivo estão dentro de `try/catch`
+ * inteiro e tenta de novo. Um `setItem` que falhasse em silêncio deixaria o
+ * cache grande e inútil para sempre. Nenhuma exceção escapa daqui: todos os
+ * usos destes três métodos naquele arquivo estão dentro de `try/catch`
  * próprios.
+ *
+ * O que a exceção **não** faz é vetar o apagamento das chaves antigas.
+ * `migrateLegacyValidationKeys` apaga o lote mesmo quando a gravação
+ * consolidada falha — é o apagamento que liberta espaço, e condicioná-lo ao
+ * sucesso da gravação era o que trancava justamente o aparelho cheio, o único
+ * que precisa da limpeza. O sucesso de `writeAll` decide se o dado foi
+ * preservado, não se as chaves saem.
  *
  * @type {Storage}
  */
@@ -109,23 +120,26 @@ function ensureLegacyMigration() {
   if (legacyMigrationDone) return;
   const storage = getStorage();
   if (!storage) return;
-  legacyMigrationDone = true;
-  const removed = migrateLegacyValidationKeys(storage);
-  if (removed > 0) {
-    console.info(`[PDF Validation] ${removed} chaves de cache antigas consolidadas`);
+
+  const { removidas, restantes } = migrateLegacyValidationKeys(storage);
+
+  // A marca vem DEPOIS da migração, e só quando não sobrou chave antiga
+  // nenhuma. Marcá-la antes — como estava — transformava qualquer tentativa
+  // falhada num "já foi" definitivo para o resto da sessão, e o aparelho onde
+  // a migração falha é precisamente o único que precisa mesmo dela: o que tem
+  // o storage cheio de chaves antigas.
+  legacyMigrationDone = restantes === 0;
+
+  if (removidas > 0) {
+    console.info(`[PDF Validation] ${removidas} chaves de cache antigas consolidadas`);
   }
 }
 
-/**
- * Obtém resultado de validação do cache
- * @param {string} pdfId - PDF ID (base64)
- * @returns {{available: boolean, url: string} | null} - Resultado do cache ou null se não encontrado/expirado
- */
-export function getCachedValidation(pdfId) {
-  if (!pdfId) return null;
-  ensureLegacyMigration();
-  return readValidationEntry(registroDeValidacao, pdfId, Date.now());
-}
+// `getCachedValidation` foi removida: o seu único leitor era
+// `validatePdfAvailabilityFast`, que saiu junto. O consumidor quente — o
+// caminho rápido do clique em `LouvorCard` — tinha desaparecido antes, quando o
+// clique passou a navegar sem validar. Ler um cache que ninguém escreve para
+// responder a ninguém era só peso.
 
 /**
  * Armazena resultado de validação no cache
@@ -148,62 +162,38 @@ export function invalidateValidationCache(pdfId) {
 }
 
 /**
- * Limpa todo o cache de validação
+ * Limpa todo o cache de validação.
+ *
+ * Migra antes de limpar, e é aqui que está o ponto: o registro único
+ * (`pdfValidationCache_v1`) não é o único lixo no `localStorage` de quem já
+ * usou a app. Versões antigas gravavam uma chave `pdfValidation_<pdfId>` por
+ * PDF — milhares delas, a encostar no teto de ~5 MB por origem — e
+ * `clearValidationCache` não lhes toca: só remove a chave consolidada. Quem as
+ * apaga é `migrateLegacyValidationKeys`, em lotes: recolhe cada lote para o
+ * registro único, tenta gravá-lo, e apaga as chaves desse lote **quer a
+ * gravação tenha corrido bem quer não**. Não é "recolhe e só então remove" —
+ * essa ordem, condicionada ao sucesso da gravação, era exatamente o que não
+ * libertava nada no aparelho com o storage cheio.
+ *
+ * Essa migração corria por dentro de `getCachedValidation`/`cacheValidation`.
+ * Quando o clique deixou de validar, as duas ficaram sem caminho quente e a
+ * limpeza deixou de acontecer em aparelhos reais — o lixo antigo ficou lá,
+ * sem ninguém para o apagar. Estas seis chamadas vivas (`stores/offline.js` e
+ * `routes/leitor/+page.svelte`) são agora o gatilho. A enumeração do storage é
+ * síncrona; `ensureLegacyMigration` corre uma vez por sessão quando a migração
+ * fica completa, e volta a tentar dentro da mesma sessão enquanto sobrar
+ * alguma chave antiga por remover.
  */
 export function clearAllValidationCache() {
+  ensureLegacyMigration();
   clearValidationCache(registroDeValidacao);
 }
 
-/**
- * Validates PDF availability with fast optimization using index and validation cache
- * Checks cache first, then index, then falls back to full validation if needed
- * @param {string} pdfPath - Relative path of the PDF
- * @param {string} pdfId - Optional PDF ID for cache and index lookup
- * @returns {Promise<{available: boolean, needsDownload: boolean, url: string}>}
- */
-export async function validatePdfAvailabilityFast(pdfPath, pdfId = null) {
-  if (!pdfPath) {
-    return { available: false, needsDownload: false, url: null };
-  }
-
-  // #22.1: um só construtor de URL de PDF em todo o cliente.
-  const normalizedPath = PdfPathManager.normalizeForStorage(pdfPath);
-  const fullUrl = PdfPathManager.createRequestUrl(pdfPath, window.location.origin);
-
-  // Strategy 1: Check validation cache (if PDF ID is provided) - Fase 2
-  if (pdfId) {
-    const cached = getCachedValidation(pdfId);
-    if (cached) {
-      const effectiveOnline = await checkEffectiveConnectivity({ timeoutMs: 1000 });
-      return {
-        available: cached.available,
-        needsDownload: !cached.available && effectiveOnline,
-        url: cached.url || fullUrl
-      };
-    }
-  }
-
-  // Strategy 2: Use CompositeValidator with optimized options
-  const result = await compositeValidator.validate(normalizedPath, {
-    useIndex: true,
-    checkNetwork: false, // Skip network for fast validation
-    pdfId: pdfId
-  });
-  
-  // Convert ValidationResult to legacy format
-  const legacyResult = {
-    available: result.available,
-    needsDownload: result.needsDownload,
-    url: result.url || fullUrl
-  };
-  
-  // Cache the result if PDF ID is provided
-  if (pdfId && legacyResult.url) {
-    cacheValidation(pdfId, { available: legacyResult.available, url: legacyResult.url });
-  }
-  
-  return legacyResult;
-}
+// `validatePdfAvailabilityFast` foi removida: zero chamadores em todo o `src/`.
+// Era o caminho rápido do clique, e o clique deixou de validar. O que ela fazia
+// de diferente — consultar o cache de validação antes do validador composto —
+// não tem hoje quem o peça; quem valida é o leitor, uma vez, por
+// `validatePdfAvailability`.
 
 /**
  * Validates if a PDF is available in cache
@@ -216,7 +206,15 @@ export async function validatePdfAvailabilityFast(pdfPath, pdfId = null) {
  */
 export async function validatePdfAvailability(pdfPath, pdfId = null) {
   if (!pdfPath) {
-    return { available: false, needsDownload: false, url: null };
+    // `effectiveOnline` explícito porque este é o único retorno que o omitia,
+    // e a diferença entre "campo ausente" e "campo `undefined`" é invisível a
+    // quem lê o objeto mas não a quem o declara: o leitor faz
+    // `validation.effectiveOnline ?? await checkEffectiveConnectivity(1500)`,
+    // e um retorno sem o campo mandava-o sondar a rede 1,5 s para saber o que
+    // já se sabe — que não há caminho nenhum para validar. Hoje inalcançável
+    // (o leitor chega sempre com caminho); fechado na mesma, porque o custo de
+    // o deixar aberto é uma espera de 1,5 s e o de o fechar é uma linha.
+    return { available: false, needsDownload: false, url: null, effectiveOnline: false };
   }
 
   // #22.1: um só construtor de URL de PDF em todo o cliente.

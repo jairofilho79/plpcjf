@@ -20,6 +20,7 @@ import {
   podeEscreverNaUrl
 } from './urlParams.js';
 import PdfPathManager from '../offline/utils/PdfPathManager.js';
+import { getPdfRelPath, __resetPdfRelPathCache } from './pathUtils.js';
 
 /** As três categorias de material (src/lib/stores/filters.js:6). */
 const CATEGORIAS = ['Partitura', 'Cifra', 'Gestos em Gravura'];
@@ -237,33 +238,44 @@ describe('§5.3 paginação e ordenação', () => {
 
 describe('§5.5 a fronteira do PDF — não pode quebrar', () => {
   // O /leitor NÃO usa parseUrlParams: lê com URLSearchParams direto
-  // (src/routes/leitor/+page.svelte:100-104). O contrato congelado é esse.
+  // (src/routes/leitor/+page.svelte:102-105). O contrato congelado é esse.
+  // `validated` saiu do espelho porque saiu do leitor: quando o clique deixou
+  // de validar antes de navegar, ninguém mais tinha o que declarar com ele.
+  // Continuar a lê-lo aqui fazia este ficheiro documentar como vivo um
+  // contrato que já não existe em lado nenhum do `src/`.
   const lerLeitor = (/** @type {string} */ href) => {
     const sp = new URLSearchParams(new URL(href, 'https://plpcg.com').search);
     return {
       file: sp.get('file') ?? '/pdfs/exemplo.pdf',
       titulo: sp.get('titulo') ?? '',
-      subtitulo: sp.get('subtitulo') ?? '',
-      skipValidation: sp.get('validated') === 'true'
+      subtitulo: sp.get('subtitulo') ?? ''
     };
   };
 
   it('R1: link completo com acento, cedilha e barra vertical', () => {
     assert.deepEqual(
       lerLeitor(
-        '/leitor?file=%2F04112025%2FConhe%C3%A7amos%20e%20prossigamos%2FCifra.pdf&titulo=Conhe%C3%A7amos%20e%20prossigamos&subtitulo=Cifra%20%7C%20PES%20CIAs&validated=true'
+        '/leitor?file=%2F04112025%2FConhe%C3%A7amos%20e%20prossigamos%2FCifra.pdf&titulo=Conhe%C3%A7amos%20e%20prossigamos&subtitulo=Cifra%20%7C%20PES%20CIAs'
       ),
       {
         file: '/04112025/Conheçamos e prossigamos/Cifra.pdf',
         titulo: 'Conheçamos e prossigamos',
-        subtitulo: 'Cifra | PES CIAs',
-        skipValidation: true
+        subtitulo: 'Cifra | PES CIAs'
       }
     );
   });
 
-  it('R2: sem &validated=true, a validação não é pulada', () => {
-    assert.equal(lerLeitor('/leitor?file=%2Fassets%2FColCIAs%2F001.pdf').skipValidation, false);
+  it('R2: um `&validated=true` remanescente de link antigo é ignorado, não quebra', () => {
+    // Ligações partilhadas antes da remoção do parâmetro continuam a circular.
+    // O que se exige delas é que abram na mesma — o parâmetro sobra e é lixo.
+    assert.deepEqual(
+      lerLeitor('/leitor?file=%2Fassets%2FColCIAs%2F001.pdf&titulo=Meu%20Deus&validated=true'),
+      {
+        file: '/assets/ColCIAs/001.pdf',
+        titulo: 'Meu Deus',
+        subtitulo: ''
+      }
+    );
   });
 
   it('R3: /leitor sem params cai no PDF de exemplo', () => {
@@ -426,5 +438,39 @@ describe('§4.10 duplo decode — o valor já vem decodificado de URLSearchParam
     assert.deepEqual(parseUrlParams(url('/?arranjo=100%25,x')).arranjo, ['100%', 'x']);
     assert.equal(parseUrlParams(url('/?comoAbrir=100%25')).comoAbrir, '100%');
     assert.equal(parseUrlParams(url('/?ordenar=100%25')).ordenar, '100%');
+  });
+});
+
+describe('§5.5c o pdfId que não decodifica — a pré-condição da guarda do clique', () => {
+  // Porquê aqui: antes desta guarda, um pdfId corrompido produzia a URL
+  // `/leitor?file=%2Fnull`. O leitor recebia isso e dizia "PDF não está
+  // disponível offline" — uma mentira: o PDF não é o problema, o identificador
+  // é. Estes casos fixam quando `getPdfRelPath` devolve `null`, que é
+  // exatamente quando `LouvorCard` e `navigateLouvorToLeitor` têm de recusar
+  // navegar em vez de inventar um caminho.
+  it('pdfId ausente, vazio ou não-string não dá caminho', () => {
+    __resetPdfRelPathCache();
+    assert.equal(getPdfRelPath(null), null);
+    assert.equal(getPdfRelPath({}), null);
+    assert.equal(getPdfRelPath({ pdfId: '' }), null);
+    assert.equal(getPdfRelPath({ pdfId: 123 }), null);
+  });
+
+  it('pdfId que não é base64 válido não dá caminho, e não lança', () => {
+    __resetPdfRelPathCache();
+    assert.equal(getPdfRelPath({ pdfId: '!!! isto não é base64 !!!' }), null);
+  });
+
+  it('pdfId que decodifica para caminho vazio não dá caminho', () => {
+    __resetPdfRelPathCache();
+    // Depois de tirar barras iniciais e espaços, não sobra nada para pedir.
+    assert.equal(getPdfRelPath({ pdfId: btoa('/') }), null);
+    assert.equal(getPdfRelPath({ pdfId: btoa('   ') }), null);
+  });
+
+  it('pdfId válido continua a dar o caminho, com prefixo assets/', () => {
+    __resetPdfRelPathCache();
+    assert.equal(getPdfRelPath({ pdfId: btoa('assets/ColCIAs/001.pdf') }), 'assets/ColCIAs/001.pdf');
+    assert.equal(getPdfRelPath({ pdfId: btoa('/ColCIAs/001.pdf') }), 'assets/ColCIAs/001.pdf');
   });
 });

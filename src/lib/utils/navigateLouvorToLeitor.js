@@ -2,6 +2,15 @@ import { goto } from '$app/navigation';
 import { getPdfRelPath } from '$lib/utils/pathUtils';
 
 /**
+ * A mensagem é sobre o identificador, não sobre o PDF. Navegar na mesma dava
+ * `/leitor?file=%2Fnull`, e o leitor concluía "PDF não está disponível
+ * offline" — diagnóstico errado, que ainda mandava o utilizador para /offline
+ * baixar um ficheiro que nunca ia resolver o problema.
+ */
+export const ERRO_IDENTIFICADOR_INVALIDO =
+  'Este material tem um identificador inválido e não pode ser aberto.';
+
+/**
  * @typedef {{
  *   pdfId: string;
  *   nome?: string;
@@ -22,13 +31,19 @@ import { getPdfRelPath } from '$lib/utils/pathUtils';
  * `CarouselChips.svelte` e `/listas` esperam receber, e `error` continua
  * possível para o único caso que ainda existe — não haver caminho de PDF.
  *
+ * Esse caso passou a trazer `error` sempre. Antes devolvia `{ navigated: false }`
+ * seco, e ambos os consumidores só mostram alguma coisa quando há `error`: o
+ * clique não abria nada e também não dizia nada, e o utilizador só via o mesmo
+ * ecrã de onde tinha clicado. `error` a mais é compatível com quem já lê
+ * `result.error`; era a sua ausência que partia o contrato na prática.
+ *
  * @param {LouvorNav} louvor
- * @returns {Promise<{ navigated: true } | { navigated: false, error?: string }>}
+ * @returns {Promise<{ navigated: true } | { navigated: false, error: string }>}
  */
 export async function navigateLouvorToLeitor(louvor) {
   const pdfPath = getPdfRelPath(louvor);
   if (!pdfPath) {
-    return { navigated: false };
+    return { navigated: false, error: ERRO_IDENTIFICADOR_INVALIDO };
   }
 
   const fileParam = encodeURIComponent(`/${pdfPath}`);

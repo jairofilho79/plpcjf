@@ -109,11 +109,44 @@ export function clearValidationCache(storage) {
 }
 
 /**
+ * Quantas chaves antigas por lote de migração. Ver `migrateLegacyValidationKeys`.
+ */
+const MIGRATION_BATCH_SIZE = 200;
+
+/**
  * Move as chaves antigas `pdfValidation_*` para o registro único e as apaga.
  * Roda uma vez por sessão; é barato quando não há nada a migrar.
  *
+ * Migra **por lotes**, e apaga as chaves de cada lote mesmo quando a gravação
+ * consolidada falha. As duas coisas existem pela mesma razão, e é o aparelho
+ * com o problema que as exige: quem tem milhares de chaves antigas é
+ * exatamente quem está encostado ao teto de ~5 MB por origem.
+ *
+ * A versão anterior montava o registro inteiro e gravava-o de uma vez, com
+ * todas as chaves antigas ainda no storage — o pico de ocupação era
+ * "antigo + consolidado", que é justamente o que não cabe. O `setItem`
+ * estourava, o fallback de `writeAll` descartava o registro, e a função saía
+ * com `return 0` sem apagar nada. Nesse aparelho a limpeza nunca acontecia:
+ * pagava-se a enumeração do storage e um `JSON.stringify` de vários MB em
+ * cada sessão, para sempre, sem libertar um byte.
+ *
+ * Por lotes, o apagamento de cada lote liberta espaço para a gravação do
+ * seguinte, e o pior caso deixa de ser "não liberta nada".
+ *
+ * **O que se perde quando um lote não cabe é mais do que esse lote.** O
+ * fallback de `writeAll` descarta o registro **inteiro** e regrava-o vazio,
+ * portanto um lote que estoure a meio leva com ele tudo o que os lotes
+ * anteriores já tinham consolidado. Na prática, uma falha tardia aproxima-se
+ * de "perdeu-se o cache todo". Continua a ser um cache reconstruível com TTL
+ * de 24 h — o custo é revalidar, não perder dado do utilizador — contra
+ * megabytes que de outro modo ficavam presos para sempre. A troca é
+ * deliberada e não é simétrica; quem a quiser mudar tem de mudar antes o
+ * fallback de `writeAll`, não este laço.
+ *
  * @param {Storage} storage
- * @returns {number} quantidade de chaves antigas removidas
+ * @returns {{ removidas: number, restantes: number }}
+ *   `restantes > 0` é uma tentativa incompleta: quem chama **não** deve marcar
+ *   a migração como feita.
  */
 export function migrateLegacyValidationKeys(storage) {
   /** @type {string[]} */
@@ -126,38 +159,46 @@ export function migrateLegacyValidationKeys(storage) {
       }
     }
   } catch {
-    return 0;
+    // Sem conseguir enumerar não há nada a migrar nem nada a apagar.
+    return { removidas: 0, restantes: 0 };
   }
 
-  if (legacyKeys.length === 0) return 0;
+  if (legacyKeys.length === 0) return { removidas: 0, restantes: 0 };
 
-  const data = readAll(storage);
-  for (const key of legacyKeys) {
-    try {
-      const raw = storage.getItem(key);
-      if (raw) {
-        const { available, url, timestamp } = JSON.parse(raw);
-        const pdfId = key.slice(LEGACY_PREFIX.length);
-        data.entries[pdfId] = [available ? 1 : 0, url || '', timestamp || 0];
+  let removidas = 0;
+
+  for (let inicio = 0; inicio < legacyKeys.length; inicio += MIGRATION_BATCH_SIZE) {
+    const lote = legacyKeys.slice(inicio, inicio + MIGRATION_BATCH_SIZE);
+
+    const data = readAll(storage);
+    for (const key of lote) {
+      try {
+        const raw = storage.getItem(key);
+        if (raw) {
+          const { available, url, timestamp } = JSON.parse(raw);
+          const pdfId = key.slice(LEGACY_PREFIX.length);
+          data.entries[pdfId] = [available ? 1 : 0, url || '', timestamp || 0];
+        }
+      } catch {
+        // entrada ilegível: apenas descartar
       }
-    } catch {
-      // entrada ilegível: apenas descartar
+    }
+
+    // O resultado de `writeAll` diz se o dado foi preservado, não se o lote
+    // sai. O lote sai sempre — é o apagamento que liberta o espaço, e negá-lo
+    // por a gravação ter falhado era o que trancava o aparelho cheio.
+    writeAll(storage, data);
+
+    for (const key of lote) {
+      try {
+        storage.removeItem(key);
+        removidas++;
+      } catch {
+        // Chave que resistiu: fica contada em `restantes` e tenta-se de novo
+        // na próxima sessão.
+      }
     }
   }
 
-  // Grava o registro consolidado ANTES de apagar as chaves antigas: se a
-  // gravação falhar (cota estourada, storage bloqueado), aborta sem apagar
-  // nada — o pior caso vira "migra de novo na próxima sessão", nunca "perdeu
-  // o dado porque a chave antiga já tinha sumido antes do registro existir".
-  if (!writeAll(storage, data)) return 0;
-
-  for (const key of legacyKeys) {
-    try {
-      storage.removeItem(key);
-    } catch {
-      // ignorar
-    }
-  }
-
-  return legacyKeys.length;
+  return { removidas, restantes: legacyKeys.length - removidas };
 }
