@@ -8,7 +8,7 @@
     buildOnlineReaderUrl,
     openPdfNewTabOfflineFirst
   } from '$lib/utils/pdfUtils';
-  import { goto } from '$app/navigation';
+  import { navigateLouvorToLeitor } from '$lib/utils/navigateLouvorToLeitor';
   import { carousel } from '$lib/stores/carousel';
   import { pdfViewer } from '$lib/stores/pdfViewer';
   import {
@@ -53,6 +53,11 @@
   // espera por nada.
   /** @type {string | null} */
   let busyPdfId = null;
+  // Não volta a ser o aviso de "PDF indisponível" que saiu daqui: só aparece
+  // quando o clique é recusado antes de sair do cartão, o que hoje acontece
+  // num único caso — o pdfId não decodifica. Sem isto o clique seria silencioso.
+  /** @type {string | null} */
+  let pdfError = null;
 
   function getCategoryIcon(category) {
     if (!category) return null;
@@ -80,6 +85,9 @@
    */
   async function openLouvor(item) {
     if (!item) return;
+    // Limpo aqui, e não no ramo do leitor, para que trocar de modo de abertura
+    // depois de uma recusa não deixe o aviso pendurado no cartão.
+    pdfError = null;
     const path = getPdfRelPath(item);
     const mode = $pdfViewer;
 
@@ -117,12 +125,18 @@
       // daí que vinha o "o primeiro clique só marca, não abre". O leitor
       // resolve a origem sozinho e é ele quem sabe diagnosticar a falha, que é
       // o caso raro.
-      rememberOpened(item);
-      const fileParam = encodeURIComponent(`/${path}`);
-      const tituloParam = encodeURIComponent(item.nome || '');
-      const subtituloText = `${item.categoria || ''} | ${item.classificacao || ''}`.trim();
-      const subtituloParam = encodeURIComponent(subtituloText);
-      goto(`/leitor?file=${fileParam}&titulo=${tituloParam}&subtitulo=${subtituloParam}`);
+      //
+      // A construção da URL passou a ser a de `navigateLouvorToLeitor`, a
+      // mesma que /listas e os chips do carrossel usam. Era aqui que os dois
+      // caminhos de clique divergiam: este não tinha guarda nenhuma e, com um
+      // pdfId que não decodifica, navegava para `/leitor?file=%2Fnull` — e o
+      // leitor culpava o PDF ("não está disponível offline") por um problema
+      // que é do identificador, mandando o utilizador baixar um ficheiro que
+      // nunca ia resolver nada. Com uma só função, não podem voltar a divergir.
+      // Só se regista como "último material aberto" o que se conseguiu abrir.
+      if (path) rememberOpened(item);
+      const result = await navigateLouvorToLeitor(item);
+      if (!result.navigated) pdfError = result.error;
       return;
     }
 
@@ -170,7 +184,14 @@
 <div class="louvor-card" class:grouped={isGrouped} bind:this={cardElement}>
   <!-- O aviso de indisponibilidade saiu daqui: o cartão já não sabe se o PDF
        existe, e passar a saber era exatamente o que atrasava o clique. Quem
-       mostra a mensagem — e o caminho para /offline — é o leitor. -->
+       mostra a mensagem — e o caminho para /offline — é o leitor.
+       O que sobra é a recusa local: quando nem sequer há caminho para pedir,
+       o clique não navega, e tem de dizer porquê em vez de não fazer nada. -->
+  {#if pdfError}
+    <div class="pdf-error-banner" role="alert">
+      {pdfError}
+    </div>
+  {/if}
   {#if isGrouped}
     <div class="louvor-info header-only">
       <div class="louvor-title">
@@ -276,6 +297,22 @@
 </div>
 
 <style>
+  /* Mesmo desenho do banner de `CarouselChips.svelte`: é o mesmo erro, vindo
+     da mesma função, e ver duas caixas diferentes para a mesma recusa era
+     confuso. `grid-column: 1 / -1` porque o cartão é uma grelha de duas
+     colunas e o aviso tem de atravessar as duas. */
+  .pdf-error-banner {
+    grid-column: 1 / -1;
+    padding: 0.5rem;
+    margin-bottom: 0.5rem;
+    background-color: rgba(220, 38, 38, 0.1);
+    border: 1px solid rgba(220, 38, 38, 0.3);
+    border-radius: 0.25rem;
+    color: var(--text-light);
+    font-size: 0.875rem;
+    text-align: center;
+  }
+
   .louvor-card {
     display: grid;
     grid-template-columns: 1fr auto;
