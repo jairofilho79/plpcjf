@@ -2,6 +2,10 @@
 // Handles synchronization between tabs and Service Worker notifications
 
 import { getConfig } from '$lib/offline/core/OfflineConfig.js';
+// `typeof localStorage === 'undefined'` não protegia nada: no Firefox com dados
+// bloqueados é o getter global que lança, e a própria guarda lançava. Ver o
+// comentário de topo de `safeStorage.js`.
+import { getStorage, safeGet, safeSet, safeRemove } from '$lib/utils/safeStorage.js';
 
 const CACHE_SYNC_CHANNEL = 'pdf-cache-sync';
 const CACHE_VERSION_KEY = 'pdfCacheVersion';
@@ -161,28 +165,28 @@ async function simpleHash(str) {
  * @returns {Promise<boolean>}
  */
 export async function checkCacheVersionChanged() {
-  if (typeof window === 'undefined' || typeof localStorage === 'undefined') {
+  if (typeof window === 'undefined' || !getStorage()) {
     return false;
   }
 
   try {
     const currentVersion = await getCacheVersion();
-    
+
     if (!currentVersion) {
       return false;
     }
 
-    const storedVersion = localStorage.getItem(CACHE_VERSION_KEY);
-    
+    const storedVersion = safeGet(CACHE_VERSION_KEY);
+
     if (!storedVersion) {
       // First time, store current version
-      localStorage.setItem(CACHE_VERSION_KEY, currentVersion);
+      safeSet(CACHE_VERSION_KEY, currentVersion);
       return false;
     }
 
     if (storedVersion !== currentVersion) {
       // Version changed, update stored version
-      localStorage.setItem(CACHE_VERSION_KEY, currentVersion);
+      safeSet(CACHE_VERSION_KEY, currentVersion);
       console.log('[Cache Sync] Cache version changed');
       return true;
     }
@@ -199,14 +203,14 @@ export async function checkCacheVersionChanged() {
  * @returns {Promise<void>}
  */
 export async function updateCacheVersion() {
-  if (typeof window === 'undefined' || typeof localStorage === 'undefined') {
+  if (typeof window === 'undefined' || !getStorage()) {
     return;
   }
 
   try {
     const version = await getCacheVersion();
     if (version) {
-      localStorage.setItem(CACHE_VERSION_KEY, version);
+      safeSet(CACHE_VERSION_KEY, version);
     }
   } catch (error) {
     console.error('[Cache Sync] Failed to update cache version:', error);
@@ -217,13 +221,18 @@ export async function updateCacheVersion() {
  * Clear cache version (useful when cache is cleared)
  */
 export function clearCacheVersion() {
-  if (typeof window === 'undefined' || typeof localStorage === 'undefined') {
+  if (typeof window === 'undefined' || !getStorage()) {
     return;
   }
 
   try {
-    localStorage.removeItem(CACHE_VERSION_KEY);
-    console.log('[Cache Sync] Cache version cleared');
+    // `safeRemove` devolve `false` só quando o acesso lançou — é o mesmo caso
+    // que antes caía no `catch` abaixo, e continua a ser logado como erro.
+    if (safeRemove(CACHE_VERSION_KEY)) {
+      console.log('[Cache Sync] Cache version cleared');
+    } else {
+      console.error('[Cache Sync] Failed to clear cache version: acesso ao localStorage lançou');
+    }
   } catch (error) {
     console.error('[Cache Sync] Failed to clear cache version:', error);
   }
