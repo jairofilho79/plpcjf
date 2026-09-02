@@ -170,20 +170,30 @@ describe('a migração não apaga quando a mudança não é só de forma Unicode
     assert.equal(cache.mapa.get(JA_OK), 'pdf-b');
   });
 
-  it('sem a guarda, a chave sobrevivente seria uma que ninguém reconstrói', async () => {
-    // Prova de que o dano é real e não teórico: a chave nova não é o que uma
-    // leitura fresca do caminho cru calcula.
+  it('depois da migração, a chave que uma leitura fresca reconstrói ainda está no cache', async () => {
+    // A propriedade que interessa ao usuário, afirmada contra a migração de
+    // verdade: seja qual for a chave que a migração escolher gravar, a chave
+    // que `createRequestUrl` recalcula do caminho cru tem de continuar servindo
+    // o PDF. (Versão anterior deste teste só comparava strings de
+    // `PdfPathManager` e passava com a guarda neutralizada — não testava nada.)
     const cru = `assets/a${camadas(3)}b.pdf`;
     const K_ORIG = await semRuido(async () => PdfPathManager.createRequestUrl(cru, ORIGEM));
+    const cache = cacheFalso([[K_ORIG, 'pdf-a']]);
+
+    await semRuido(() => migrarChavesPdfParaNfc(/** @type {any} */ (cache), canonicalizarReal));
+
+    const K_LEITURA = await semRuido(async () => PdfPathManager.createRequestUrl(cru, ORIGEM));
+    assert.equal(cache.mapa.get(K_LEITURA), 'pdf-a', 'a chave que o app pede sumiu do cache');
+    // E o dano que a guarda evita é real: a chave que a migração gravou não é
+    // a que qualquer leitura futura constrói.
     const K_NOVA = await semRuido(async () => canonicalizarReal(K_ORIG));
-    const K_RELEITURA = await semRuido(async () => PdfPathManager.createRequestUrl(cru, ORIGEM));
-    assert.equal(K_RELEITURA, K_ORIG);
-    assert.notEqual(K_RELEITURA, K_NOVA);
+    assert.notEqual(K_LEITURA, K_NOVA);
   });
 
   it('a guarda óbvia do ponto fixo não pegaria este caso', async () => {
-    // Documenta por que a guarda implementada é a da forma Unicode, e não
-    // "só apague se a chave nova for ponto fixo de canonicalizar".
+    // DOCUMENTAL, de propósito: não exercita a migração nem a guarda. Só
+    // registra a medição que descartou "só apague se a chave nova for ponto
+    // fixo de canonicalizar" — ela dá `true` para a chave corrompida.
     const cru = `assets/a${camadas(3)}b.pdf`;
     const K_ORIG = await semRuido(async () => PdfPathManager.createRequestUrl(cru, ORIGEM));
     const K_NOVA = await semRuido(async () => canonicalizarReal(K_ORIG));
@@ -210,6 +220,42 @@ describe('a migração não apaga quando a mudança não é só de forma Unicode
       );
       assert.equal(cache.mapa.get(K_ORIG), 'pdf-a', `chave boa apagada com ${n} camadas`);
       assert.equal(r.preservadas, 1);
+      assert.equal(r.migradas, 0);
+    }
+  });
+
+  it('uma chave terminada em `?` mantém as duas — o delimitador vazio não engana a guarda', async () => {
+    // O falso negativo que a revisão da fase apanhou: `URL.search` devolve `''`
+    // tanto para "não tem query" quanto para um `?` final vazio. Comparar
+    // `search` dos dois lados dava `'' === ''`, as `pathname` batiam, e a
+    // guarda autorizava apagar a chave que a leitura reconstrói.
+    const cru = 'assets/x.pdf%3F';
+    const K_ORIG = await semRuido(async () => PdfPathManager.createRequestUrl(cru, ORIGEM));
+    assert.equal(K_ORIG, 'https://plpcg.com/assets/x.pdf?');
+    assert.equal(new URL(K_ORIG).search, '', 'a premissa do defeito: search vem vazio');
+
+    const cache = cacheFalso([[K_ORIG, 'pdf-a']]);
+    const r = await semRuido(() =>
+      migrarChavesPdfParaNfc(/** @type {any} */ (cache), canonicalizarReal)
+    );
+
+    assert.equal(cache.mapa.get(K_ORIG), 'pdf-a', 'a chave boa foi apagada');
+    assert.equal(r.preservadas, 1);
+    assert.equal(r.migradas, 0);
+    // As duas ficam: a antiga é a que a leitura reconstrói, a nova perdeu o `?`.
+    assert.equal(cache.mapa.get('https://plpcg.com/assets/x.pdf'), 'pdf-a');
+    assert.equal(cache.mapa.size, 2);
+  });
+
+  it('o mesmo para `#` final e para `?`/`#` no meio do nome', async () => {
+    for (const cru of ['assets/x.pdf%23', 'assets/a%3Fb.pdf', 'assets/a%23b.pdf']) {
+      const K_ORIG = await semRuido(async () => PdfPathManager.createRequestUrl(cru, ORIGEM));
+      const cache = cacheFalso([[K_ORIG, 'pdf-a']]);
+      const r = await semRuido(() =>
+        migrarChavesPdfParaNfc(/** @type {any} */ (cache), canonicalizarReal)
+      );
+      assert.equal(cache.mapa.get(K_ORIG), 'pdf-a', `a chave boa foi apagada para ${cru}`);
+      assert.equal(r.preservadas, 1, `esperava preservação para ${cru}`);
       assert.equal(r.migradas, 0);
     }
   });

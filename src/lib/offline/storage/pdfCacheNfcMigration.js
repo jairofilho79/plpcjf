@@ -52,10 +52,25 @@ export const NFC_MIGRATION_FLAG = 'plpc_pdf_cache_nfc_migration_v1';
  */
 function soMudouAFormaUnicode(urlAntiga, urlNova) {
   try {
+    // Uma chave de PDF não tem query nem fragmento. `createRequestUrl` codifica
+    // com `createUrlUtf8`, que — como `encodeURI` — deixa `?` e `#` passarem sem
+    // escape: um nome de arquivo com um deles vira delimitador de URL de
+    // verdade. A partir daí `pathname` deixa de ser o caminho inteiro, e
+    // comparar só `pathname` esconderia justamente o pedaço que sumiu.
+    //
+    // Comparar `search`/`hash` NÃO fecha o buraco: os dois devolvem `''` tanto
+    // para "não tem" quanto para um delimitador final vazio. Numa chave
+    // `https://plpcg.com/assets/x.pdf?` (caminho cru terminado em `%3F`), a
+    // canonicalização engole o `?`, os dois lados dão `''`, as `pathname`
+    // batem — e a guarda autorizaria apagar a chave que a leitura reconstrói.
+    // Era o único falso negativo que sobrou na varredura adversarial.
+    //
+    // Sem conseguir provar nada, não se apaga.
+    if (/[?#]/.test(urlAntiga) || /[?#]/.test(urlNova)) return false;
+
     const antiga = new URL(urlAntiga);
     const nova = new URL(urlNova);
     if (antiga.origin !== nova.origin) return false;
-    if (antiga.search !== nova.search || antiga.hash !== nova.hash) return false;
     return (
       decodeURIComponent(antiga.pathname).normalize('NFC') ===
       decodeURIComponent(nova.pathname).normalize('NFC')
