@@ -5,6 +5,8 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import PdfPathManager from '../utils/PdfPathManager.js';
 import { migrarChavesPdfParaNfc } from './pdfCacheNfcMigration.js';
 
 /**
@@ -35,13 +37,53 @@ function cacheFalso(entradas) {
 }
 
 /**
- * Canonicalizador injetado: decodifica, aplica NFC, recodifica.
+ * Canonicalizador de brinquedo: decodifica UMA vez e recodifica. Serve para os
+ * casos de acentuação, mas é seguro demais para expor o caminho destrutivo —
+ * para isso existe `canonicalizarReal` abaixo.
  * @param {string} url
  */
 function canonicalizar(url) {
   const u = new URL(url);
   const caminho = decodeURIComponent(u.pathname).normalize('NFC');
   return `${u.origin}${encodeURI(caminho)}`;
+}
+
+/**
+ * O canonicalizador REAL, cópia literal do que
+ * `OfflineManager.ensureNfcMigration` injeta em produção. Não dá para importar
+ * `OfflineManager.js` aqui: ele puxa `$app/environment` e `$lib`, aliases que
+ * só existem dentro do Vite. A cópia é conferida contra o original pelo teste
+ * "o canonicalizador copiado ainda é o de produção".
+ *
+ * A diferença que importa em relação ao de brinquedo: `createRequestUrl`
+ * decodifica DE NOVO por dentro, então este aqui decodifica duas vezes.
+ * @param {string} url
+ */
+function canonicalizarReal(url) {
+  const u = new URL(url);
+  return PdfPathManager.createRequestUrl(decodeURIComponent(u.pathname), u.origin);
+}
+
+/** Um `%` embrulhado em `n` camadas de `encodeURIComponent`. @param {number} n */
+function camadas(n) {
+  let s = '%';
+  for (let i = 0; i < n; i++) s = encodeURIComponent(s);
+  return s;
+}
+
+/**
+ * `decodeUrlComponentUtf8` grita no console ao cair no decode manual, o que é
+ * esperado nos casos adversariais e só enche a saída de `npm test`.
+ * @template T @param {() => Promise<T>} fn @returns {Promise<T>}
+ */
+async function semRuido(fn) {
+  const original = console.warn;
+  console.warn = () => {};
+  try {
+    return await fn();
+  } finally {
+    console.warn = original;
+  }
 }
 
 const NFD = 'https://plpcg.com/assets/PES/Alto%20prec%CC%A7o%20-%20CIFRA.pdf';
@@ -52,7 +94,7 @@ describe('migrarChavesPdfParaNfc', () => {
   it('reescreve a chave NFD sob a forma NFC e apaga a antiga', async () => {
     const cache = cacheFalso([[NFD, 'pdf-a'], [JA_OK, 'pdf-b']]);
     const r = await migrarChavesPdfParaNfc(/** @type {any} */ (cache), canonicalizar);
-    assert.deepEqual(r, { migradas: 1, mantidas: 1, erros: 0 });
+    assert.deepEqual(r, { migradas: 1, mantidas: 1, preservadas: 0, erros: 0 });
     assert.equal(cache.mapa.get(NFC), 'pdf-a');
     assert.equal(cache.mapa.has(NFD), false);
     assert.equal(cache.mapa.get(JA_OK), 'pdf-b');
@@ -61,14 +103,14 @@ describe('migrarChavesPdfParaNfc', () => {
   it('não toca em nada quando tudo já está canônico', async () => {
     const cache = cacheFalso([[NFC, 'pdf-a'], [JA_OK, 'pdf-b']]);
     const r = await migrarChavesPdfParaNfc(/** @type {any} */ (cache), canonicalizar);
-    assert.deepEqual(r, { migradas: 0, mantidas: 2, erros: 0 });
+    assert.deepEqual(r, { migradas: 0, mantidas: 2, preservadas: 0, erros: 0 });
   });
 
   it('é idempotente: rodar duas vezes dá o mesmo cache', async () => {
     const cache = cacheFalso([[NFD, 'pdf-a']]);
     await migrarChavesPdfParaNfc(/** @type {any} */ (cache), canonicalizar);
     const r = await migrarChavesPdfParaNfc(/** @type {any} */ (cache), canonicalizar);
-    assert.deepEqual(r, { migradas: 0, mantidas: 1, erros: 0 });
+    assert.deepEqual(r, { migradas: 0, mantidas: 1, preservadas: 0, erros: 0 });
     assert.equal(cache.mapa.size, 1);
   });
 
@@ -84,5 +126,107 @@ describe('migrarChavesPdfParaNfc', () => {
     assert.equal(cache.mapa.has(NFC), true);
     assert.equal(cache.mapa.has(NFD), true);
     assert.equal(r.erros, 1);
+  });
+});
+
+describe('a migração não apaga quando a mudança não é só de forma Unicode', () => {
+  // ENTRADA ADVERSARIAL / SINTÉTICA: nenhum dos 4629 caminhos do acervo tem
+  // um `%`. Estes casos usam o canonicalizador REAL (o de brinquedo acima
+  // decodifica uma vez só e por isso nunca expõe o problema).
+
+  const ORIGEM = 'https://plpcg.com';
+
+  it('o canonicalizador copiado ainda é o de produção', () => {
+    // Se `OfflineManager.ensureNfcMigration` mudar a expressão, a cópia aqui
+    // deixa de provar o que diz provar. Este teste quebra antes disso passar
+    // despercebido.
+    const fonte = fs.readFileSync(new URL('../core/OfflineManager.js', import.meta.url), 'utf8');
+    assert.ok(
+      fonte.includes('PdfPathManager.createRequestUrl(decodeURIComponent(u.pathname), u.origin)'),
+      'o canonicalizador de OfflineManager.js mudou — atualize canonicalizarReal'
+    );
+  });
+
+  it('mantém as duas chaves quando o `%` aninhado corrompe o caminho', async () => {
+    // A chave que o app grava e recalcula a cada leitura, a partir do caminho
+    // cru — a única que qualquer leitura futura volta a construir.
+    const cru = `assets/a${camadas(3)}b.pdf`;
+    const K_ORIG = await semRuido(async () => PdfPathManager.createRequestUrl(cru, ORIGEM));
+    assert.equal(K_ORIG, 'https://plpcg.com/assets/a%25b.pdf');
+
+    const cache = cacheFalso([[K_ORIG, 'pdf-a'], [JA_OK, 'pdf-b']]);
+    const r = await semRuido(() =>
+      migrarChavesPdfParaNfc(/** @type {any} */ (cache), canonicalizarReal)
+    );
+
+    // O ponto inteiro da fase: a original CONTINUA lá.
+    assert.equal(cache.mapa.get(K_ORIG), 'pdf-a', 'a chave boa foi apagada');
+    assert.deepEqual(r, { migradas: 0, mantidas: 1, preservadas: 1, erros: 0 });
+
+    // E a chave nova, que ninguém volta a pedir, ficou junto — inofensiva.
+    const K_NOVA = await semRuido(async () => canonicalizarReal(K_ORIG));
+    assert.notEqual(K_NOVA, K_ORIG);
+    assert.equal(cache.mapa.get(K_NOVA), 'pdf-a');
+    assert.equal(cache.mapa.get(JA_OK), 'pdf-b');
+  });
+
+  it('sem a guarda, a chave sobrevivente seria uma que ninguém reconstrói', async () => {
+    // Prova de que o dano é real e não teórico: a chave nova não é o que uma
+    // leitura fresca do caminho cru calcula.
+    const cru = `assets/a${camadas(3)}b.pdf`;
+    const K_ORIG = await semRuido(async () => PdfPathManager.createRequestUrl(cru, ORIGEM));
+    const K_NOVA = await semRuido(async () => canonicalizarReal(K_ORIG));
+    const K_RELEITURA = await semRuido(async () => PdfPathManager.createRequestUrl(cru, ORIGEM));
+    assert.equal(K_RELEITURA, K_ORIG);
+    assert.notEqual(K_RELEITURA, K_NOVA);
+  });
+
+  it('a guarda óbvia do ponto fixo não pegaria este caso', async () => {
+    // Documenta por que a guarda implementada é a da forma Unicode, e não
+    // "só apague se a chave nova for ponto fixo de canonicalizar".
+    const cru = `assets/a${camadas(3)}b.pdf`;
+    const K_ORIG = await semRuido(async () => PdfPathManager.createRequestUrl(cru, ORIGEM));
+    const K_NOVA = await semRuido(async () => canonicalizarReal(K_ORIG));
+    assert.equal(await semRuido(async () => canonicalizarReal(K_NOVA)), K_NOVA);
+  });
+
+  it('a guarda não estorva a migração NFD que a fase existe para preservar', async () => {
+    // Com o canonicalizador REAL, o caso de acentuação continua migrando e
+    // apagando a chave antiga: é só a forma Unicode que muda.
+    const cache = cacheFalso([[NFD, 'pdf-a'], [JA_OK, 'pdf-b']]);
+    const r = await migrarChavesPdfParaNfc(/** @type {any} */ (cache), canonicalizarReal);
+    assert.deepEqual(r, { migradas: 1, mantidas: 1, preservadas: 0, erros: 0 });
+    assert.equal(cache.mapa.get(NFC), 'pdf-a');
+    assert.equal(cache.mapa.has(NFD), false);
+  });
+
+  it('4 e 5 camadas de `%` também são preservadas', async () => {
+    for (const n of [4, 5]) {
+      const cru = `assets/a${camadas(n)}b.pdf`;
+      const K_ORIG = await semRuido(async () => PdfPathManager.createRequestUrl(cru, ORIGEM));
+      const cache = cacheFalso([[K_ORIG, 'pdf-a']]);
+      const r = await semRuido(() =>
+        migrarChavesPdfParaNfc(/** @type {any} */ (cache), canonicalizarReal)
+      );
+      assert.equal(cache.mapa.get(K_ORIG), 'pdf-a', `chave boa apagada com ${n} camadas`);
+      assert.equal(r.preservadas, 1);
+      assert.equal(r.migradas, 0);
+    }
+  });
+
+  it('rodar de novo não apaga a chave boa numa segunda passada', async () => {
+    // A migração roda uma vez por aparelho, mas a flag só é gravada quando
+    // não há erro — e `preservadas` não é erro. Uma segunda passada tem de
+    // continuar preservando, nunca apagando.
+    const cru = `assets/a${camadas(3)}b.pdf`;
+    const K_ORIG = await semRuido(async () => PdfPathManager.createRequestUrl(cru, ORIGEM));
+    const cache = cacheFalso([[K_ORIG, 'pdf-a']]);
+    await semRuido(() => migrarChavesPdfParaNfc(/** @type {any} */ (cache), canonicalizarReal));
+    const r = await semRuido(() =>
+      migrarChavesPdfParaNfc(/** @type {any} */ (cache), canonicalizarReal)
+    );
+    assert.equal(cache.mapa.get(K_ORIG), 'pdf-a');
+    assert.equal(r.preservadas, 1);
+    assert.equal(cache.mapa.size, 2);
   });
 });
