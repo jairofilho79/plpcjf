@@ -265,7 +265,10 @@ export default {
       acao: async (p, ui) => {
         await garantirHorizontal(p, ui);
         await ui.toqueLongo('#viewerContainer', 800);
-        await ui.pausa(1200);
+        // Segura a tela cheia tempo suficiente para se ver. Com 1200 ms a
+        // barra escondia-se por 1,5 s dentro de uma fala de 9 s: o espectador
+        // ouvia falar do efeito e mal o via acontecer.
+        await ui.pausa(3500);
 
         // Medir AQUI, e nao no fim do beat: logo a seguir o FAB traz a barra
         // de volta — que e o certo para o video — e uma verificacao no fim
