@@ -72,15 +72,23 @@
             </div>
           {:else}
             <!-- svelte-ignore a11y-media-has-caption -->
+            <!--
+              `src` no próprio <video>, e não num <source> filho.
+              Quando um <source> falha, o evento `error` dispara NO <source> e
+              nunca sobe até ao <video> — o que fazia este fallback não
+              disparar nunca. Testado: com /videos/ a devolver 404, a página
+              mostrava cinco players quebrados e nenhum aviso. Como só servimos
+              mp4, não há motivo para ter <source> nenhum.
+            -->
             <video
               class="video-player"
               controls
               playsinline
               preload="metadata"
               poster="{BASE}/{video.id}.jpg"
+              src="{BASE}/{video.id}.mp4"
               on:error={() => marcarFalha(video.id)}
             >
-              <source src="{BASE}/{video.id}.mp4" type="video/mp4" />
               <track
                 kind="captions"
                 srclang="pt-BR"

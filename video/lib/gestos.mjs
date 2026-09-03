@@ -166,6 +166,27 @@ export function criarGestos(page, cliente) {
     async rolar(px) {
       await page.mouse.wheel(0, px);
       await pausa(420);
+    },
+
+    /**
+     * Rola suavemente ate o elemento ficar no meio do ecra.
+     *
+     * Onde o zoom nao serve, isto serve. Nesta app quase tudo sao cartoes de
+     * largura inteira, para os quais o fator de zoom honesto e 1 - e um beat
+     * sem zoom e sem interacao produz uma imagem PARADA: o video 5 saiu com 19
+     * quadros em 55 segundos, e os unicos pixels que mudavam eram a legenda.
+     * Trazer o assunto para o meio da tela dirige a atencao e da movimento.
+     *
+     * `scrollIntoView` e nao `scrollIntoViewIfNeeded`: este ultimo espera o
+     * elemento ficar estavel, e as animacoes desta pagina nunca param.
+     */
+    async trazerParaOMeio(seletor) {
+      if (!(await this.existe(seletor))) return false;
+      await page.locator(seletor).first().evaluate((el) =>
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      );
+      await pausa(900);   // o `smooth` do navegador leva-se o seu tempo
+      return true;
     }
   };
 }
