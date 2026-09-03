@@ -14,7 +14,7 @@ import { mkdir, copyFile, writeFile, access } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { sintetizar, configuracaoPadrao, escolherModelo, MODELOS } from './lib/vozes.mjs';
-import { duracaoSegundos } from './lib/pcm.mjs';
+import { duracaoSegundos, recortarSilencio } from './lib/pcm.mjs';
 
 const CACHE = 'video/.cache';
 
@@ -99,8 +99,14 @@ export async function narrar(idRoteiro) {
       sintetizadas++;
     }
 
+    // Recorta o silencio das pontas ao copiar para o build.
+    //
+    // A duracao do beat E a duracao da fala, entao silencio no fim do ficheiro
+    // vira tempo morto no video: uma fala de 6 s dentro de um wav de 15 s
+    // segurava a tela parada por nove segundos sem ninguem falar. O cache
+    // guarda o original; so a copia de trabalho e recortada.
     const destino = join(dir, `fala-${beat.id}.wav`);
-    await copyFile(noCache, destino);
+    await recortarSilencio(noCache, destino).catch(() => copyFile(noCache, destino));
     falas[beat.id] = {
       caminho: destino,
       duracao: await duracaoSegundos(destino),

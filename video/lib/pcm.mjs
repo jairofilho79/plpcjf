@@ -53,4 +53,46 @@ export async function duracaoSegundos(caminho) {
   return d;
 }
 
+/**
+ * Mede quanto do ficheiro e VOZ, ignorando o silencio do fim.
+ *
+ * O `silencedetect` escreve no stderr, nao no stdout — ler so o stdout devolve
+ * sempre "nao ha silencio", que e como tres falas truncadas passaram
+ * despercebidas. Mesmo tropecao que a medicao de pico ja tinha dado.
+ */
+export async function medirFala(caminho) {
+  const total = await duracaoSegundos(caminho);
+  const { err } = await correr(
+    'ffmpeg',
+    ['-hide_banner', '-nostdin', '-i', caminho, '-af', 'silencedetect=noise=-45dB:d=0.4', '-f', 'null', '-'],
+    null,
+    { comErro: true }
+  ).catch((e) => ({ err: e.message }));
+
+  const texto = err || '';
+  const inicios = [...texto.matchAll(/silence_start: ([\d.]+)/g)].map((m) => Number(m[1]));
+  const fins = [...texto.matchAll(/silence_end: ([\d.]+)/g)].map((m) => Number(m[1]));
+
+  // So conta o silencio que vai ate ao fim do ficheiro: pausas no meio da
+  // frase sao fala, nao corte.
+  let fala = total;
+  if (inicios.length && (fins.length === 0 || fins.at(-1) >= total - 0.05)) {
+    fala = inicios.at(-1);
+  }
+  return { total, fala: Math.max(0, fala) };
+}
+
+/** Corta o silencio das duas pontas, mantendo uma margem curta. */
+export async function recortarSilencio(origem, destino) {
+  await correr('ffmpeg', [
+    '-hide_banner', '-loglevel', 'error', '-nostdin', '-y', '-i', origem,
+    '-af',
+    'silenceremove=start_periods=1:start_threshold=-45dB:start_silence=0.1:detection=peak,' +
+      'areverse,' +
+      'silenceremove=start_periods=1:start_threshold=-45dB:start_silence=0.25:detection=peak,' +
+      'areverse',
+    destino
+  ]);
+}
+
 export { correr };

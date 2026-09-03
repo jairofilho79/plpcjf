@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { extrairAudioSSE } from './sseAudio.mjs';
 import { divergencia } from './divergencia.mjs';
-import { escreverWav, converterParaWav, correr } from './pcm.mjs';
+import { escreverWav, converterParaWav, correr, medirFala } from './pcm.mjs';
 
 // Em ordem de preferência: o `mini` é ~4x mais barato e chega para locução.
 // O irmão maior existe como degrau, porque o `mini` já ficou indisponível a
@@ -18,6 +18,17 @@ export const MODELOS = ['openai/gpt-audio-mini', 'openai/gpt-audio'];
 // problema que isto resolve. Ver `divergencia.test.js`.
 const RAZAO_MAXIMA = 0.35;
 const PALAVRAS_TOLERADAS = 2;
+
+/**
+ * Ritmo acima do qual a fala so pode estar cortada.
+ *
+ * Medido no corpo real das 56 falas destes videos: a mediana e 12,8 caracteres
+ * por segundo e a mais rapida das boas fica em 16. Tres falas gravadas durante
+ * a instabilidade do OpenRouter saiam a 22, 28 e 35 car/s — o modelo parava a
+ * meio da frase e o resto do ficheiro vinha em silencio. A legenda mostrava a
+ * frase inteira e a voz dizia so o comeco.
+ */
+const RITMO_MAXIMO_CAR_POR_SEG = 20;
 
 // A instrução vive no `system` e o texto vai cru no `user`.
 //
@@ -95,7 +106,18 @@ async function viaOpenRouter(texto, voz, sistema = SISTEMA, modelo = MODELOS[0])
   if (erro) throw new Error(`OpenRouter devolveu erro no fluxo: ${JSON.stringify(erro)}`);
   if (pcmBase64.length === 0) throw new Error('OpenRouter não devolveu áudio nenhum');
 
-  if (transcricao && excedeu(texto, transcricao)) {
+  // Transcricao vazia nao pode ser passe livre.
+  //
+  // O guarda de divergencia so corria `if (transcricao && ...)`: quando o
+  // modelo devolvia audio sem transcricao nenhuma, a verificacao era saltada
+  // por completo — que e exatamente o caso em que ela era mais precisa.
+  if (!transcricao) {
+    const e = new Error('o modelo devolveu audio sem transcricao; nao da para conferir o que foi dito');
+    e.deConteudo = true;
+    throw e;
+  }
+
+  if (excedeu(texto, transcricao)) {
     const e = new Error(
       `o modelo não leu o que foi pedido (divergência ${divergencia(texto, transcricao).toFixed(2)}).\n` +
       `  pedido: ${texto}\n  dito:   ${transcricao}`
@@ -125,6 +147,32 @@ async function viaMacos(texto, voz, destino) {
  * para validar o encanamento sem gastar e sem rede — as vozes do `say` foram
  * ouvidas e reprovadas.
  */
+/**
+ * Reprova uma fala cortada a meio.
+ *
+ * Um fluxo interrompido devolve audio parcial sem erro nenhum: o ficheiro fica
+ * com o comeco da frase e silencio ate ao fim. Comparar os caracteres do texto
+ * com os segundos de VOZ (sem o silencio final) apanha isso — ninguem fala a
+ * 35 caracteres por segundo.
+ */
+async function conferirRitmo(texto, caminho) {
+  const { fala } = await medirFala(caminho);
+  if (fala <= 0.2) {
+    const e = new Error('a fala saiu em silencio');
+    e.deConteudo = true;
+    throw e;
+  }
+  const ritmo = texto.length / fala;
+  if (ritmo > RITMO_MAXIMO_CAR_POR_SEG) {
+    const e = new Error(
+      `a fala saiu cortada: ${texto.length} caracteres em ${fala.toFixed(2)} s de voz ` +
+      `(${ritmo.toFixed(1)} car/s; o maximo plausivel e ${RITMO_MAXIMO_CAR_POR_SEG})`
+    );
+    e.deConteudo = true;
+    throw e;
+  }
+}
+
 export async function sintetizar(texto, { provedor, voz, destino, modelo = MODELOS[0], tentativas = 3 }) {
   if (provedor === 'macos') {
     await viaMacos(texto, voz, destino);
@@ -146,6 +194,7 @@ export async function sintetizar(texto, { provedor, voz, destino, modelo = MODEL
     try {
       const pcm = await viaOpenRouter(texto, voz, sistema, modelo);
       await escreverWav(pcm, destino);
+      await conferirRitmo(texto, destino);
       return;
     } catch (e) {
       ultima = e;
