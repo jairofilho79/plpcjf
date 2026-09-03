@@ -10,7 +10,7 @@ import { escreverWav, converterParaWav, correr } from './pcm.mjs';
 // O irmão maior existe como degrau, porque o `mini` já ficou indisponível a
 // meio de uma gravação — pendurado, sem devolver nada e sem fechar a ligação,
 // enquanto o `gpt-audio` respondia em 1,2 s.
-const MODELOS = ['openai/gpt-audio-mini', 'openai/gpt-audio'];
+export const MODELOS = ['openai/gpt-audio-mini', 'openai/gpt-audio'];
 
 // Quanto o modelo pode desviar-se do texto pedido antes de abortarmos.
 // Razão de 35%, mas nunca menos que 2 palavras: numa fala de quatro palavras

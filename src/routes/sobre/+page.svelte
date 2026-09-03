@@ -1,4 +1,29 @@
 <script>
+  // Os vídeos vivem no R2 e são servidos por `/videos/` (ver `hooks.server.js`),
+  // e não em `static/`: cinco vídeos passam de 50 MB, e no repositório isso
+  // incharia o git, o deploy e o bundle offline — que existe para caber num
+  // pendrive.
+  const BASE = '/videos';
+
+  const VIDEOS = [
+    { id: '01-uso-basico', titulo: 'Uso básico da aplicação:' },
+    { id: '02-offline', titulo: 'Uso Offline:' },
+    { id: '03-biblioteca', titulo: 'Uso da Biblioteca:' },
+    { id: '04-listas', titulo: 'Uso das Listas:' },
+    { id: '05-problemas', titulo: 'Problemas conhecidos:' }
+  ];
+
+  // Esta página é cacheada para uso offline, mas os vídeos no R2 não são. Um
+  // `<video>` cuja fonte falha desenha um retângulo preto morto, sem explicar
+  // nada. Por isso o aviso antigo não foi apagado: ele passou a ser o que
+  // aparece quando o vídeo não carrega.
+  /** @type {Record<string, boolean>} */
+  let falhou = {};
+
+  /** @param {string} id */
+  function marcarFalha(id) {
+    falhou = { ...falhou, [id]: true };
+  }
 </script>
 
 <svelte:head>
@@ -34,70 +59,40 @@
   <section class="content-section">
     <h2 class="section-title">Como usar</h2>
     
-    <!-- Uso básico -->
-    <div class="subsection">
-      <h3 class="subsection-title">Uso básico da aplicação:</h3>
-      <div class="video-container">
-        <div class="video-placeholder">
-          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="video-icon">
-            <path stroke-linecap="round" stroke-linejoin="round" d="M5.25 5.653c0-.856.917-1.398 1.667-.986l11.54 6.348a1.125 1.125 0 010 1.971l-11.54 6.347a1.125 1.125 0 01-1.667-.986V5.653z" />
-          </svg>
-          <p class="video-placeholder-text">Vídeo que será adicionado posteriormente</p>
+    {#each VIDEOS as video (video.id)}
+      <div class="subsection">
+        <h3 class="subsection-title">{video.titulo}</h3>
+        <div class="video-container">
+          {#if falhou[video.id]}
+            <div class="video-placeholder">
+              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="video-icon">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M5.25 5.653c0-.856.917-1.398 1.667-.986l11.54 6.348a1.125 1.125 0 010 1.971l-11.54 6.347a1.125 1.125 0 01-1.667-.986V5.653z" />
+              </svg>
+              <p class="video-placeholder-text">Este vídeo precisa de internet para tocar.</p>
+            </div>
+          {:else}
+            <!-- svelte-ignore a11y-media-has-caption -->
+            <video
+              class="video-player"
+              controls
+              playsinline
+              preload="metadata"
+              poster="{BASE}/{video.id}.jpg"
+              on:error={() => marcarFalha(video.id)}
+            >
+              <source src="{BASE}/{video.id}.mp4" type="video/mp4" />
+              <track
+                kind="captions"
+                srclang="pt-BR"
+                label="Português"
+                default
+                src="{BASE}/{video.id}.vtt"
+              />
+            </video>
+          {/if}
         </div>
       </div>
-    </div>
-
-    <!-- Uso Offline -->
-    <div class="subsection">
-      <h3 class="subsection-title">Uso Offline:</h3>
-      <div class="video-container">
-        <div class="video-placeholder">
-          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="video-icon">
-            <path stroke-linecap="round" stroke-linejoin="round" d="M5.25 5.653c0-.856.917-1.398 1.667-.986l11.54 6.348a1.125 1.125 0 010 1.971l-11.54 6.347a1.125 1.125 0 01-1.667-.986V5.653z" />
-          </svg>
-          <p class="video-placeholder-text">Vídeo que será adicionado posteriormente</p>
-        </div>
-      </div>
-    </div>
-
-    <!-- Uso da Biblioteca -->
-    <div class="subsection">
-      <h3 class="subsection-title">Uso da Biblioteca:</h3>
-      <div class="video-container">
-        <div class="video-placeholder">
-          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="video-icon">
-            <path stroke-linecap="round" stroke-linejoin="round" d="M5.25 5.653c0-.856.917-1.398 1.667-.986l11.54 6.348a1.125 1.125 0 010 1.971l-11.54 6.347a1.125 1.125 0 01-1.667-.986V5.653z" />
-          </svg>
-          <p class="video-placeholder-text">Vídeo que será adicionado posteriormente</p>
-        </div>
-      </div>
-    </div>
-
-    <!-- Uso das Listas -->
-    <div class="subsection">
-      <h3 class="subsection-title">Uso das Listas:</h3>
-      <div class="video-container">
-        <div class="video-placeholder">
-          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="video-icon">
-            <path stroke-linecap="round" stroke-linejoin="round" d="M5.25 5.653c0-.856.917-1.398 1.667-.986l11.54 6.348a1.125 1.125 0 010 1.971l-11.54 6.347a1.125 1.125 0 01-1.667-.986V5.653z" />
-          </svg>
-          <p class="video-placeholder-text">Vídeo que será adicionado posteriormente</p>
-        </div>
-      </div>
-    </div>
-
-    <!-- Problemas conhecidos -->
-    <div class="subsection">
-      <h3 class="subsection-title">Problemas conhecidos:</h3>
-      <div class="video-container">
-        <div class="video-placeholder">
-          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="video-icon">
-            <path stroke-linecap="round" stroke-linejoin="round" d="M5.25 5.653c0-.856.917-1.398 1.667-.986l11.54 6.348a1.125 1.125 0 010 1.971l-11.54 6.347a1.125 1.125 0 01-1.667-.986V5.653z" />
-          </svg>
-          <p class="video-placeholder-text">Vídeo que será adicionado posteriormente</p>
-        </div>
-      </div>
-    </div>
+    {/each}
   </section>
 
   <!-- Footer -->
@@ -158,9 +153,25 @@
     margin-top: 1rem;
   }
 
+  /* Retrato 820x1180, que é como os vídeos foram gravados. Em largura total
+     num ecrã grande isto ficaria gigante, daí o teto — dá a um vídeo de tablet
+     em pé o tamanho de um tablet em pé. */
+  .video-player {
+    display: block;
+    width: 100%;
+    max-width: 380px;
+    margin: 0 auto;
+    aspect-ratio: 82 / 118;
+    background-color: #000;
+    border: 2px solid var(--gold-color);
+    border-radius: 0.5rem;
+  }
+
   .video-placeholder {
     width: 100%;
-    aspect-ratio: 16 / 9;
+    max-width: 380px;
+    margin: 0 auto;
+    aspect-ratio: 82 / 118;
     background-color: rgba(0, 0, 0, 0.1);
     border: 2px dashed var(--gold-color);
     border-radius: 0.5rem;

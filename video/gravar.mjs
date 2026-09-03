@@ -176,7 +176,7 @@ function escalarZoom(zoom, fator, dimensao) {
   return { x, y, w, h };
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const id = process.argv[2];
   if (!id) {
     process.stderr.write('uso: node video/gravar.mjs <id-do-roteiro>\n');

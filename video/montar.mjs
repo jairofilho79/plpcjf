@@ -118,7 +118,7 @@ export async function montar(idRoteiro, { limpar = true } = {}) {
   return { mp4, jpg, duracao: r.duracao, tamanho };
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const id = process.argv[2];
   if (!id) {
     process.stderr.write('uso: node video/montar.mjs <id-do-roteiro>\n');

@@ -29,7 +29,7 @@ export async function pipeline(id) {
   return r;
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const id = process.argv[2];
   if (!id) {
     process.stderr.write('uso: npm run video <id-do-roteiro>\n');

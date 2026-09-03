@@ -1,5 +1,6 @@
 import { error } from '@sveltejs/kit';
 import { resolvePdfKey } from '$lib/server/pdfKeyResolution.js';
+import { analisarRange } from '$lib/server/rangeHeader.js';
 
 /** @type {import('@sveltejs/kit').Handle} */
 export async function handle({ event, resolve }) {
@@ -26,6 +27,15 @@ export async function handle({ event, resolve }) {
 
   if (url.pathname.startsWith('/packages/') && url.pathname.endsWith('.zip')) {
     return await serveZipPackage(url.pathname, event.platform);
+  }
+
+  // Vídeos tutoriais da página Sobre, servidos do mesmo R2 dos PDFs.
+  //
+  // Ficam no bucket e não em `static/` de propósito: cinco vídeos passam de
+  // 50 MB, e no repositório isso incharia o git, o deploy do Pages e o bundle
+  // offline — que existe justamente para caber num pendrive.
+  if (url.pathname.startsWith('/videos/')) {
+    return await serveVideo(url.pathname, event.platform, event.request.headers.get('range'));
   }
 
   // Pass other requests to SvelteKit
@@ -82,6 +92,78 @@ async function servePdf(pathname, platform) {
 }
 
 
+
+/** @type {Record<string, string>} */
+const TIPOS_VIDEO = {
+  '.mp4': 'video/mp4',
+  '.jpg': 'image/jpeg',
+  '.vtt': 'text/vtt; charset=utf-8'
+};
+
+/**
+ * Serve os vídeos tutoriais, os cartazes e as legendas a partir do R2.
+ *
+ * Responde a `Range` porque um `<video>` pede pedaços: sem isso o navegador
+ * teria de baixar o ficheiro inteiro antes de começar a tocar, e não daria
+ * para saltar no meio. O R2 aceita o cabeçalho diretamente, então o trabalho
+ * aqui é só repassá-lo e devolver 206 com o `Content-Range` certo.
+ *
+ * @param {string} pathname
+ * @param {any} platform
+ * @param {string | null} range
+ */
+async function serveVideo(pathname, platform, range) {
+  const corsHeaders = {
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Methods': 'GET, HEAD, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type, Range',
+    'Access-Control-Expose-Headers': 'Content-Length, Content-Range, Accept-Ranges'
+  };
+
+  const extensao = pathname.slice(pathname.lastIndexOf('.'));
+  const tipo = TIPOS_VIDEO[extensao];
+  if (!tipo) {
+    return new Response('Tipo não suportado', { status: 404, headers: corsHeaders });
+  }
+
+  try {
+    if (!platform?.env?.LOUVORES_BUCKET) {
+      console.error('LOUVORES_BUCKET not configured');
+      return new Response('Backend not configured', { status: 503, headers: corsHeaders });
+    }
+
+    const r2Key = decodeURIComponent(pathname.substring(1));
+    const pedido = analisarRange(range);
+    const object = await platform.env.LOUVORES_BUCKET.get(
+      r2Key,
+      pedido ? { range: pedido } : undefined
+    );
+
+    if (!object) {
+      return new Response('Vídeo não encontrado', { status: 404, headers: corsHeaders });
+    }
+
+    /** @type {Record<string, string>} */
+    const cabecalhos = {
+      ...corsHeaders,
+      'Content-Type': tipo,
+      'Accept-Ranges': 'bytes',
+      'Cache-Control': 'public, max-age=86400, stale-while-revalidate=604800'
+    };
+
+    if (object.range && object.size !== undefined) {
+      const inicio = object.range.offset ?? 0;
+      const comprimento = object.range.length ?? object.size - inicio;
+      cabecalhos['Content-Range'] = `bytes ${inicio}-${inicio + comprimento - 1}/${object.size}`;
+      return new Response(object.body, { status: 206, headers: cabecalhos });
+    }
+
+    return new Response(object.body, { headers: cabecalhos });
+  } catch (e) {
+    console.error('Erro ao servir vídeo:', e);
+    return new Response('Erro interno', { status: 500, headers: corsHeaders });
+  }
+}
 
 async function serveZipPackage(pathname, platform) {
   const corsHeaders = {

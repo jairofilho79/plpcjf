@@ -56,7 +56,7 @@ export async function legendar(idRoteiro) {
   return { total: trabalhos.length, cortadas: compridas.length };
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const id = process.argv[2];
   if (!id) {
     process.stderr.write('uso: node video/legendar.mjs <id-do-roteiro>\n');

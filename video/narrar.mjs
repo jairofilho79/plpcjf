@@ -13,7 +13,7 @@ import { createHash } from 'node:crypto';
 import { mkdir, copyFile, writeFile, access } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { sintetizar, configuracaoPadrao, escolherModelo } from './lib/vozes.mjs';
+import { sintetizar, configuracaoPadrao, escolherModelo, MODELOS } from './lib/vozes.mjs';
 import { duracaoSegundos } from './lib/pcm.mjs';
 
 const CACHE = 'video/.cache';
@@ -27,6 +27,42 @@ async function existe(caminho) {
   }
 }
 
+function hashDaFala(provedor, modelo, voz, fala) {
+  return createHash('sha256')
+    .update(`${provedor} ${modelo} ${voz} ${fala}`)
+    .digest('hex')
+    .slice(0, 32);
+}
+
+/**
+ * Devolve o primeiro modelo cujo áudio já está inteiro em cache, ou null.
+ *
+ * Existe para que refazer um vídeo sem mudar uma vírgula da narração não toque
+ * na rede. Sem isto, uma indisponibilidade do OpenRouter impede de re-montar um
+ * vídeo cuja voz já está toda gravada em disco — que foi exatamente o que
+ * aconteceu.
+ */
+async function modeloJaEmCache(roteiro, provedor, voz) {
+  if (process.env.VIDEO_MODELO) {
+    const m = process.env.VIDEO_MODELO;
+    const todos = await Promise.all(
+      roteiro.beats.map((b) => existe(join(CACHE, `${hashDaFala(provedor, m, voz, b.fala)}.wav`)))
+    );
+    return todos.every(Boolean) ? m : null;
+  }
+
+  for (const modelo of MODELOS) {
+    const todos = await Promise.all(
+      roteiro.beats.map((b) => existe(join(CACHE, `${hashDaFala(provedor, modelo, voz, b.fala)}.wav`)))
+    );
+    if (todos.every(Boolean)) {
+      process.stderr.write(`  modelo: ${modelo} (tudo em cache, sem rede)\n`);
+      return modelo;
+    }
+  }
+  return null;
+}
+
 export async function narrar(idRoteiro) {
   const { provedor, voz } = configuracaoPadrao();
   const alvo = pathToFileURL(resolve(`video/roteiros/${idRoteiro}.mjs`)).href;
@@ -36,10 +72,16 @@ export async function narrar(idRoteiro) {
   await mkdir(dir, { recursive: true });
   await mkdir(CACHE, { recursive: true });
 
-  // O modelo é sondado uma vez e vale para o vídeo inteiro, para o timbre não
+  // O modelo é escolhido uma vez e vale para o vídeo inteiro, para o timbre não
   // mudar entre um beat e o seguinte. Entra no hash do cache pela mesma razão:
   // misturar áudio de dois modelos no mesmo vídeo soa partido.
-  const modelo = provedor === 'macos' ? 'say' : await escolherModelo(voz);
+  //
+  // A escolha começa pelo disco e só depois vai à rede. Sondar primeiro fazia
+  // uma narração inteiramente em cache falhar quando o OpenRouter estava fora
+  // — pedir rede para não usar rede nenhuma.
+  const modelo = provedor === 'macos'
+    ? 'say'
+    : (await modeloJaEmCache(roteiro, provedor, voz)) || (await escolherModelo(voz));
 
   const falas = {};
   let sintetizadas = 0;
@@ -48,10 +90,7 @@ export async function narrar(idRoteiro) {
     if (!beat.fala || !beat.fala.trim()) {
       throw new Error(`beat "${beat.id}" nao tem fala - a fala e que dita a duracao do beat`);
     }
-    const hash = createHash('sha256')
-      .update(`${provedor} ${modelo} ${voz} ${beat.fala}`)
-      .digest('hex')
-      .slice(0, 32);
+    const hash = hashDaFala(provedor, modelo, voz, beat.fala);
     const noCache = join(CACHE, `${hash}.wav`);
 
     if (!(await existe(noCache))) {
@@ -80,7 +119,7 @@ export async function narrar(idRoteiro) {
   return falas;
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const id = process.argv[2];
   if (!id) {
     process.stderr.write('uso: node video/narrar.mjs <id-do-roteiro>\n');
