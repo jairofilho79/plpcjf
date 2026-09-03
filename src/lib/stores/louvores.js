@@ -1,6 +1,7 @@
 import { writable, get } from 'svelte/store';
 import { browser } from '$app/environment';
 import { clearLouvoresManifestFromSwCache } from '$lib/utils/swRegistration';
+import { guardarManifestNoCatalogo } from '$lib/offline/storage/catalogoCache.js';
 import { dismissSnackbar, showErrorSnackbar, showInfoSnackbar, showSuccessSnackbar } from '$lib/utils/appSnackbar.js';
 import {
   LOUVORES_MANIFEST_CHECKSUM_URL,
@@ -145,6 +146,18 @@ async function fetchLouvoresManifestOnce(init) {
     if (!Array.isArray(data)) {
       return { kind: 'shape' };
     }
+
+    // Guarda o catálogo no cache protegido com o texto que já está na mão.
+    //
+    // Na primeira visita o Service Worker ainda está instalando quando esta
+    // requisição sai, então ela não passa por ele e o catálogo não é guardado
+    // por ninguém — quem instalava a app e perdia a conexão em seguida
+    // encontrava /biblioteca e /listas vazias. Não espera o resultado: é
+    // melhor esforço e não pode atrasar a tela. Ver `catalogoCache.js`.
+    guardarManifestNoCatalogo('/louvores-manifest.json', text).then((r) => {
+      if (r === 'guardado') console.info('[Louvores] catálogo guardado para uso offline');
+    });
+
     return { kind: 'ok', data, rawSha256 };
   } catch {
     return { kind: 'transport' };
