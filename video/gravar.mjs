@@ -78,6 +78,24 @@ export async function gravar(idRoteiro, { headless = true } = {}) {
         avisos.push(`beat "${beat.id}" falhou: ${e.message.split('\n')[0]}`);
       }
 
+      // Um beat pode declarar o que tem de ser verdade quando ele acaba.
+      //
+      // Sem isto, um gesto que faz a coisa ERRADA grava-se em silencio e so se
+      // descobre a ver o video: no leitor, o toque longo do meio saltava para a
+      // ultima pagina em vez de esconder a barra, e a gravacao nao tinha como
+      // saber. E um aviso e nao uma falha, porque a app pode mudar e derrubar
+      // uma gravacao de quatro minutos por causa de uma asercao seria pior.
+      if (beat.verificar) {
+        try {
+          const veredito = await beat.verificar(page, ui);
+          if (veredito !== true) {
+            avisos.push(`beat "${beat.id}" nao verificou: ${veredito || 'a condicao nao se cumpriu'}`);
+          }
+        } catch (e) {
+          avisos.push(`beat "${beat.id}" nao verificou: ${e.message.split('\n')[0]}`);
+        }
+      }
+
       const urlDepois = caminhoDe(page.url());
       if (urlAntes !== urlDepois) {
         // Um beat que navega muda o que esta no ecra a partir dali. Isto nao e

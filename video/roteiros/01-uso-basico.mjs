@@ -121,6 +121,11 @@ export default {
       id: 'abrir-leitor',
       fala: 'Toque no material e o louvor abre no leitor.',
       zoom: null,
+      verificar: async (p) => {
+        const t = await p.locator('.indicator .total').innerText().catch(() => '');
+        const n = parseInt(t.replace(/[^0-9]/g, ''), 10);
+        return n > 1 || `o PDF aberto tem ${n || '?'} pagina(s); os beats de navegacao nao mostram nada`;
+      },
       acao: async (p, ui) => {
         // `.material-open` e nunca um seletor com virgula: no cartao agrupado o
         // `.louvor-info` e so o cabecalho, sem `href` e sem navegacao, e vem
@@ -147,6 +152,8 @@ export default {
       id: 'leitor-primeira-ultima',
       fala: 'Toque e segure numa seta para saltar direto para a primeira ou para a última página.',
       zoom: null,
+      verificar: async (p) =>
+        (await p.locator('.indicator').count()) > 0 || 'o indicador de pagina desapareceu',
       acao: async (p, ui) => {
         await ui.toqueLongo('.page-nav-next');
         await ui.pausa(900);
@@ -209,12 +216,28 @@ export default {
         await ui.deslizar('#viewerContainer', 'esquerda');
         await ui.pausa(500);
         await ui.pincar('#viewerContainer', 1.6);
+        await ui.pausa(900);
+        // Repor o ajuste automatico antes do beat seguinte. Deixar a pagina
+        // ampliada muda o que o toque longo do meio faz, e o espectador
+        // acabaria a ver a app saltar para a ultima pagina em vez de esconder
+        // a barra. Repor tambem e o que um utilizador faria.
+        if (await ui.existe('.btn.zoom-fit')) {
+          await ui.tocar('.btn.zoom-fit');
+          await ui.pausa(700);
+        }
       }
     },
     {
       id: 'leitor-fullscreen',
       fala: 'Toque e segure na página para esconder a barra e usar a tela toda. O botão no canto traz a barra de volta.',
       zoom: null,
+      // O toque longo do meio tem de ESCONDER a barra. Se cair nas zonas
+      // laterais ele salta de pagina, que foi o que aconteceu quando a pagina
+      // ficou ampliada — e a gravacao nao tinha como saber.
+      verificar: async (p) =>
+        (await p.locator('.fab-exit-fullscreen').count()) > 0 ||
+        (await p.locator('.toolbar.hidden').count()) > 0 ||
+        'a barra nao chegou a esconder',
       acao: async (p, ui) => {
         await ui.toqueLongo('#viewerContainer', 800);
         await ui.pausa(1200);

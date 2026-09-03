@@ -28,7 +28,28 @@ export function criarGestos(page, cliente) {
 
     const caixa = await alvo.boundingBox();
     if (!caixa) throw new Error(`sem caixa para "${seletor}" - esta visivel mas nao tem area`);
-    return { x: caixa.x + caixa.width / 2, y: caixa.y + caixa.height / 2, caixa };
+
+    // O centro do que se VE, e nao o centro do elemento.
+    //
+    // Um container com conteudo ampliado fica maior que o ecra: no leitor, com
+    // a pagina a 165%, o `#viewerContainer` mede 1353 px de largura e o centro
+    // dele cai em x=676 - fora do ecra de 820, e dentro da zona de 75% a 100%
+    // que o leitor usa para "ultima pagina". O toque longo que devia esconder
+    // a barra saltava para a ultima pagina, e o video mostrava isso.
+    //
+    // Intersetar com a janela antes de tirar o centro resolve a classe toda:
+    // um toque fora do ecra nunca faz o que se espera, seja qual for o alvo.
+    const janela = page.viewportSize() || { width: 820, height: 1180 };
+    const x1 = Math.max(0, caixa.x);
+    const y1 = Math.max(0, caixa.y);
+    const x2 = Math.min(janela.width, caixa.x + caixa.width);
+    const y2 = Math.min(janela.height, caixa.y + caixa.height);
+    if (x2 <= x1 || y2 <= y1) {
+      throw new Error(`"${seletor}" esta fora do ecra (caixa ${JSON.stringify(caixa)})`);
+    }
+
+    const visivel = { x: x1, y: y1, width: x2 - x1, height: y2 - y1 };
+    return { x: x1 + visivel.width / 2, y: y1 + visivel.height / 2, caixa: visivel };
   }
 
   async function pausa(ms) {
