@@ -43,6 +43,29 @@ async function abrirComVariasPaginas(p, ui, maxTentativas = 4) {
   return 1;
 }
 
+/**
+ * O toque longo do meio so esconde a barra no modo HORIZONTAL.
+ *
+ * As `.navigation-zone` (esquerda=primeira pagina, centro=fullscreen,
+ * direita=ultima pagina) so existem nesse modo — ver leitor/+page.svelte:1938.
+ * No modo vertical nao ha zona nenhuma e o gesto nao faz nada.
+ */
+async function garantirHorizontal(p, ui) {
+  for (let i = 0; i < 3; i++) {
+    if ((await p.locator('.navigation-zone').count()) > 0) return true;
+    if (!(await ui.existe('.btn.nav-mode-toggle'))) return false;
+    await ui.tocar('.btn.nav-mode-toggle');
+    // Trocar de modo RECRIA o visualizador. Com 900 ms o toque seguinte caia
+    // enquanto ele reconstruia, e o leitor ficava em vertical sem que nada
+    // avisasse — foi assim que o beat do fullscreen gravou um gesto morto.
+    await ui.pausa(1800);
+  }
+  return (await p.locator('.navigation-zone').count()) > 0;
+}
+
+/** Guarda o que aconteceu no meio do beat, para a verificacao ver o instante certo. */
+let barraEscondeu = false;
+
 export default {
   id: '01-uso-basico',
   titulo: 'Uso básico da aplicação',
@@ -203,10 +226,14 @@ export default {
       acao: async (p, ui) => {
         if (await ui.existe('.btn.nav-mode-toggle')) {
           await ui.tocar('.btn.nav-mode-toggle');
-          await ui.pausa(900);
+          await ui.pausa(1800);   // trocar de modo recria o visualizador
           await ui.tocar('.btn.nav-mode-toggle');
+          await ui.pausa(1800);
         }
-      }
+      },
+      verificar: async (p) =>
+        (await p.locator('.navigation-zone').count()) > 0 ||
+        'ficou em modo vertical; os gestos de zona nao existem la'
     },
     {
       id: 'leitor-swipe',
@@ -234,15 +261,22 @@ export default {
       // O toque longo do meio tem de ESCONDER a barra. Se cair nas zonas
       // laterais ele salta de pagina, que foi o que aconteceu quando a pagina
       // ficou ampliada — e a gravacao nao tinha como saber.
-      verificar: async (p) =>
-        (await p.locator('.fab-exit-fullscreen').count()) > 0 ||
-        (await p.locator('.toolbar.hidden').count()) > 0 ||
-        'a barra nao chegou a esconder',
+      verificar: async () => barraEscondeu || 'a barra nao chegou a esconder',
       acao: async (p, ui) => {
+        await garantirHorizontal(p, ui);
         await ui.toqueLongo('#viewerContainer', 800);
         await ui.pausa(1200);
+
+        // Medir AQUI, e nao no fim do beat: logo a seguir o FAB traz a barra
+        // de volta — que e o certo para o video — e uma verificacao no fim
+        // veria a barra ja restaurada e reprovaria um beat que correu bem.
+        barraEscondeu =
+          (await p.locator('.fab-exit-fullscreen').count()) > 0 ||
+          (await p.locator('.toolbar.hidden').count()) > 0;
+
         if (await ui.existe('.fab-exit-fullscreen')) {
           await ui.tocar('.fab-exit-fullscreen');
+          await ui.pausa(700);
         }
       }
     },
