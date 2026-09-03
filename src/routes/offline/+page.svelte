@@ -1462,14 +1462,17 @@
         on:refresh={() => loadCategoryStats(true)}
       />
 
-      <!-- Info about category persistence and cache limitation -->
+      <!-- O que o download faz, e o que ele ainda não desfaz. A escolha de
+           categorias saiu da tela há tempos (a seção abaixo está `display: none`),
+           mas este texto continuou a prometê-la até 2026-09-03. -->
       <div class="info-box">
         <Info class="w-5 h-5 info-icon" />
         <div class="info-text">
           <p class="info-title">Sobre downloads automáticos e remoção</p>
           <p class="info-description">
-            As categorias selecionadas serão salvas e usadas para downloads automáticos de novos PDFs.
-            Novos PDFs serão baixados automaticamente apenas das categorias que você escolher.
+            “Disponibilizar offline” baixa o acervo inteiro — não há escolha de categorias.
+            Feito isso, os louvores publicados depois são baixados automaticamente, e
+            “Baixar PDFs faltantes” completa o que tiver ficado para trás.
           </p>
           <p class="info-description">
             <strong>Atenção:</strong> Ainda não há funcionalidade para remover downloads pré-baixados individualmente.

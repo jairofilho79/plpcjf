@@ -24,3 +24,7 @@ dist/
 .plpc-offline-bundle*/
 .offline-bundle-*/
 plpc-offline-bundle.zip
+
+# Pipeline de vídeo: saídas e cache nunca entram no histórico
+video/build/
+video/.cache/
