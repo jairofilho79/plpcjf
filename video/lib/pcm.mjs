@@ -5,7 +5,7 @@ import { spawn } from 'node:child_process';
  * código de saída não é zero. Um ffmpeg que falha em silêncio produz vídeo
  * mudo, e isso só se descobre no fim — daí a rejeição explícita.
  */
-function correr(bin, args, entrada = null) {
+function correr(bin, args, entrada = null, { comErro = false } = {}) {
   return new Promise((resolve, reject) => {
     const p = spawn(bin, args);
     let out = '';
@@ -14,7 +14,10 @@ function correr(bin, args, entrada = null) {
     p.stderr.on('data', (d) => (err += d));
     p.on('error', reject);
     p.on('close', (codigo) => {
-      if (codigo === 0) resolve(out);
+      // `comErro` porque o ffmpeg escreve os relatorios de analise (volumedetect,
+      // ebur128) no stderr, nao no stdout. Ler so o stdout fazia a checagem de
+      // pico de audio nunca disparar - ela existia e nunca correu.
+      if (codigo === 0) resolve(comErro ? { out, err } : out);
       else reject(new Error(`${bin} saiu com ${codigo}: ${err.slice(-800)}`));
     });
     if (entrada) {

@@ -11,7 +11,12 @@ import { pathToFileURL } from 'node:url';
 import { quebrar } from './lib/quebraLinha.mjs';
 import { correr } from './lib/pcm.mjs';
 
-const LARGURA_CARACTERES = 38;
+// 40 caracteres em ate 4 linhas.
+//
+// Com 38 em 3 linhas, tres falas da Biblioteca nao cabiam e sairam cortadas com
+// reticencias - a legenda dizia menos do que a voz. Como a app deixa a metade
+// de baixo do ecra vazia na maioria das telas, a quarta linha nao tapa nada.
+const LARGURA_CARACTERES = 40;
 
 function carimbo(s) {
   const ms = Math.max(0, Math.round(s * 1000));

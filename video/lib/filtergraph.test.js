@@ -22,10 +22,21 @@ const OPC = {
 };
 
 describe('construirGrafo', () => {
-  test('a primeira entrada e a sequencia de quadros e a musica e a ultima', () => {
+  test('a primeira entrada e a sequencia numerada e a musica e a ultima', () => {
     const g = construirGrafo(TL, OPC);
-    assert.ok(g.entradas[0].includes('quadros.txt'));
+    assert.ok(g.entradas[0].includes('seq'));
+    assert.ok(g.entradas[0].includes('%06d.jpg'));
     assert.ok(g.entradas.at(-1).includes('leito.wav'));
+  });
+
+  test('a entrada declara a taxa fixa e nao ha filtro fps', () => {
+    // O demuxer `concat` mais o filtro `fps` esticavam o video em 10%: 86 s de
+    // gravacao saiam como 94 s de mp4. Uma sequencia numerada a taxa fixa nao
+    // tem duracao nenhuma para o ffmpeg arredondar.
+    const g = construirGrafo(TL, OPC);
+    assert.ok(g.entradas[0].startsWith('-framerate 30 '));
+    assert.ok(!g.filtro.includes('fps=30,'), 'nao ha filtro fps na cadeia de video');
+    assert.ok(!g.entradas[0].includes('concat'));
   });
 
   test('um PNG de legenda por beat, na ordem dos beats', () => {
@@ -49,7 +60,7 @@ describe('construirGrafo', () => {
   test('com zoom, ha um so zoompan e ele fixa o fps', () => {
     const f = construirGrafo(TL, OPC).filtro;
     assert.equal(f.split('zoompan').length - 1, 1);
-    assert.ok(/zoompan=[^;]*fps=30/.test(f));
+    assert.ok(/zoompan=[^;]*fps=30/.test(f), 'o zoompan declara a taxa dele');
   });
 
   test('a rampa de entrada e a de saida aparecem nos instantes certos', () => {
@@ -142,5 +153,20 @@ describe('temZoom', () => {
       beats: [{ id: 'a', fala: 'x', inicio: 0, fim: 4, zoom: { x: 0, y: 0, w: 1640, h: 500 } }]
     };
     assert.ok(!construirGrafo(tl, OPC).filtro.includes('zoompan'));
+  });
+});
+
+describe('teto de audio', () => {
+  test('um limitador fecha a cadeia depois do loudnorm', () => {
+    // `loudnorm` ESTIMA o pico verdadeiro e não o garante: com `TP=-1` a saída
+    // mediu -0,9 dB, acima do teto. O limitador é o que garante.
+    const f = construirGrafo(TL, OPC).filtro;
+    const iLoud = f.indexOf('loudnorm');
+    const iLim = f.indexOf('alimiter');
+    assert.ok(iLim > iLoud, 'o limitador vem depois do loudnorm');
+    assert.ok(f.includes('limit=0.891'), '0.891 em amplitude é -1 dBFS');
+    // Por omissão o `alimiter` normaliza a saída ATÉ ao limite, ou seja sobe o
+    // sinal em vez de o segurar: com auto-nível a saída mediu -0,2 dB.
+    assert.ok(f.includes('level=disabled'), 'o auto-nível do limitador está desligado');
   });
 });

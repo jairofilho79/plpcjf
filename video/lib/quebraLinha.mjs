@@ -1,4 +1,4 @@
-const MAX_LINHAS = 3;
+const MAX_LINHAS = 4;
 
 /**
  * Quebra a fala em linhas de legenda.

@@ -1,5 +1,8 @@
 import { correr } from './pcm.mjs';
 
+/** Teto de pico. Acima disto ha ceifa audivel em altifalante de tablet. */
+const TETO_PICO_DB = -1;
+
 /**
  * Portao de qualidade do mp4 acabado.
  *
@@ -48,13 +51,24 @@ export async function verificar(caminho, timeline, esperado) {
 
   // Pico: `-1 dBFS` e o teto; passar disso e distorcao audivel nos altifalantes
   // pequenos de tablet, que e onde isto vai ser visto.
-  const vol = await correr('ffmpeg', [
-    '-hide_banner', '-nostdin', '-i', caminho, '-af', 'volumedetect', '-f', 'null', '-'
-  ]).catch((e) => e.message);
-  const pico = /max_volume:\s*(-?[\d.]+) dB/.exec(vol);
-  if (pico && parseFloat(pico[1]) > -1) {
-    falhas.push(`pico de audio em ${pico[1]} dB, o teto e -1 dB`);
+  //
+  // O relatorio do `volumedetect` sai no STDERR, nao no stdout. Enquanto isto
+  // lia so o stdout, a expressao nunca casava, `pico` era sempre null, e a
+  // checagem passava sempre - um portao que parecia existir e nao existia.
+  const vol = await correr(
+    'ffmpeg',
+    ['-hide_banner', '-nostdin', '-i', caminho, '-af', 'volumedetect', '-f', 'null', '-'],
+    null,
+    { comErro: true }
+  ).catch((e) => ({ out: '', err: e.message }));
+
+  const texto = `${vol.out || ''}\n${vol.err || ''}`;
+  const pico = /max_volume:\s*(-?[\d.]+) dB/.exec(texto);
+  if (!pico) {
+    falhas.push('nao consegui medir o pico de audio');
+  } else if (parseFloat(pico[1]) > TETO_PICO_DB) {
+    falhas.push(`pico de audio em ${pico[1]} dB, o teto e ${TETO_PICO_DB} dB`);
   }
 
-  return { ok: falhas.length === 0, falhas, duracao: dur };
+  return { ok: falhas.length === 0, falhas, duracao: dur, pico: pico ? parseFloat(pico[1]) : null };
 }

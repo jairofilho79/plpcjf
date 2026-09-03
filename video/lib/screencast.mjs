@@ -1,4 +1,4 @@
-import { writeFile, mkdir } from 'node:fs/promises';
+import { writeFile, mkdir, rm, symlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { correr } from './pcm.mjs';
 
@@ -24,7 +24,7 @@ async function medirQuadro(quadros, dir) {
 }
 
 /**
- * Constroi o ficheiro do demuxer `concat` a partir dos quadros carimbados.
+ * Escolhe que quadro mostrar em cada fatia da grelha de saida.
  *
  * Os carimbos vem de `Page.screencastFrame` (metadata.timestamp), que e
  * `Network.TimeSinceEpoch` - o mesmo relogio de `Date.now()/1000`. E por isso
@@ -32,28 +32,26 @@ async function medirQuadro(quadros, dir) {
  * O `recordVideo` do Playwright grava num relogio proprio, e foi por isso que
  * nao foi usado.
  *
+ * A saida e uma FATIA POR QUADRO DE VIDEO, e nao uma lista de duracoes. O
+ * demuxer `concat`, que era o caminho anterior, quantiza cada `duration` na
+ * base de tempo dele e eleva o que ficar abaixo do minimo: 86 s de gravacao
+ * saiam como 94 s de mp4, com a narracao a descolar da imagem - exatamente o
+ * defeito que este pipeline existe para nao ter. Uma sequencia numerada a taxa
+ * fixa nao tem duracao nenhuma para o ffmpeg arredondar.
+ *
  * @param {{ficheiro: string, t: number}[]} quadros
  * @param {number} fimSegundos carimbo do fim da gravacao, no mesmo relogio
- * @returns {string} conteudo do ficheiro de concatenacao
+ * @param {number} fps
+ * @returns {string[]} um nome de ficheiro por fatia, em ordem
  */
-export function construirConcat(quadros, fimSegundos, fps = 30) {
+export function escolherQuadros(quadros, fimSegundos, fps) {
   const ord = [...quadros].sort((a, b) => a.t - b.t);
-  if (ord.length === 0) return '';
+  if (ord.length === 0) return [];
 
   const origem = ord[0].t;
-  const duracaoTotal = fimSegundos - origem;
-  const fatias = Math.round(duracaoTotal * fps);
-  if (fatias <= 0) return '';
+  const fatias = Math.round((fimSegundos - origem) * fps);
+  if (fatias <= 0) return [];
 
-  // Reamostra para a grelha de saida em vez de declarar os intervalos crus.
-  //
-  // O demuxer `concat` trata cada imagem como um video de um quadro com
-  // framerate proprio, e ELEVA qualquer `duration` menor que esse minimo. O
-  // screencast entrega a 80 ou 130 fps, muito abaixo do minimo, entao cada
-  // quadro ocupava mais tempo do que devia e o video esticava 10% - 86 s de
-  // gravacao viravam 95 s de mp4, e o audio desencontrava-se da imagem. Com
-  // todas as duracoes em multiplos de 1/fps, nao ha nada para o demuxer
-  // arredondar.
   const escolhidos = [];
   let cursor = 0;
   for (let k = 0; k < fatias; k++) {
@@ -62,25 +60,24 @@ export function construirConcat(quadros, fimSegundos, fps = 30) {
     while (cursor + 1 < ord.length && ord[cursor + 1].t <= tempo) cursor++;
     escolhidos.push(ord[cursor].ficheiro);
   }
+  return escolhidos;
+}
 
-  // Junta corridas do mesmo ficheiro: um trecho parado vira uma entrada longa
-  // em vez de trinta entradas iguais por segundo.
-  const linhas = [];
-  let i = 0;
-  while (i < escolhidos.length) {
-    let j = i;
-    while (j + 1 < escolhidos.length && escolhidos[j + 1] === escolhidos[i]) j++;
-    const dur = Number(((j - i + 1) / fps).toFixed(6));
-    linhas.push(`file '${escolhidos[i]}'`, `duration ${dur}`);
-    i = j + 1;
+/**
+ * Materializa a sequencia como ligacoes simbolicas numeradas.
+ *
+ * Ligacoes e nao copias: um video de quatro minutos sao 7200 fatias, e copiar
+ * o mesmo JPEG centenas de vezes durante um trecho parado encheria o disco sem
+ * necessidade nenhuma.
+ */
+async function escreverSequencia(escolhidos, dir) {
+  const seq = join(dir, 'seq');
+  await rm(seq, { recursive: true, force: true });
+  await mkdir(seq, { recursive: true });
+  for (let k = 0; k < escolhidos.length; k++) {
+    await symlink(join('..', escolhidos[k]), join(seq, `${String(k).padStart(6, '0')}.jpg`));
   }
-
-  // O demuxer descarta o ultimo quadro se ele nao for repetido sem duracao.
-  // Sem esta linha o video acaba antes do audio, e o corte e visivel.
-  const ultimo = linhas.filter((l) => l.startsWith('file ')).at(-1);
-  if (ultimo) linhas.push(ultimo);
-
-  return linhas.length ? linhas.join('\n') + '\n' : '';
+  return seq;
 }
 
 /**
@@ -130,14 +127,19 @@ export async function colectar(page, dir, { largura = 820, altura = 1180, fps = 
       // Os ultimos acks podem ainda estar em voo quando paramos.
       await new Promise((r) => setTimeout(r, 300));
       const fim = Date.now() / 1000;
-      const texto = construirConcat(quadros, fim, fps);
-      await writeFile(join(dir, 'quadros.txt'), texto);
-      // Os carimbos crus, para a lista de concatenacao poder ser reconstruida
-      // sem re-gravar. Sem isto, mudar a regra de reamostragem obriga a repetir
-      // a gravacao inteira - que foi o que custou quando o demuxter esticou o
+      const escolhidos = escolherQuadros(quadros, fim, fps);
+      await escreverSequencia(escolhidos, dir);
+      // Os carimbos crus, para a sequencia poder ser reconstruida sem
+      // re-gravar. Sem isto, mudar a regra de reamostragem obriga a repetir a
+      // gravacao inteira - que foi o que custou quando o demuxer esticou o
       // video e a correcao chegou depois dos quadros ja estarem em disco.
       await writeFile(join(dir, 'quadros.json'), JSON.stringify({ fps, fim, quadros }));
-      return { total: quadros.length, fim, dimensao: await medirQuadro(quadros, dir) };
+      return {
+        total: quadros.length,
+        fatias: escolhidos.length,
+        fim,
+        dimensao: await medirQuadro(quadros, dir)
+      };
     }
   };
 }

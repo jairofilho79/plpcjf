@@ -56,7 +56,10 @@ export function construirGrafo(timeline, opcoes) {
   const dur = timeline.duracao;
 
   // --- entradas -----------------------------------------------------------
-  const entradas = [`-f concat -safe 0 -i ${join(dir, 'quadros', 'quadros.txt')}`];
+  // Sequencia numerada a taxa fixa, e nao o demuxer `concat`: ele quantizava
+  // as duracoes na base de tempo dele e esticava o video em 10%, com a
+  // narracao a descolar da imagem. Ver `escolherQuadros` em `screencast.mjs`.
+  const entradas = [`-framerate ${fps} -i ${join(dir, 'quadros', 'seq', '%06d.jpg')}`];
   const idxLegenda = {};
   beats.forEach((b) => {
     idxLegenda[b.id] = entradas.length;
@@ -71,7 +74,9 @@ export function construirGrafo(timeline, opcoes) {
   entradas.push(`-i ${musica}`);
 
   // --- video --------------------------------------------------------------
-  const partes = [`[0:v]fps=${fps},format=rgba[base]`];
+  // Sem filtro `fps`: a entrada ja vem em taxa constante, e o `fps` aplicado
+  // por cima de carimbos vindos do `concat` era o que esticava o video.
+  const partes = ['[0:v]format=rgba[base]'];
   let rotulo = 'base';
 
   const comZoom = beats.filter((b) => temZoom(b.zoom, L, A));
@@ -171,9 +176,19 @@ export function construirGrafo(timeline, opcoes) {
   );
   // `loudnorm` depois da mistura, nunca antes: normalizar a musica sozinha
   // fa-la-ia subir sempre que a voz calasse, que e o oposto do ducking.
+  // `loudnorm` ESTIMA o pico verdadeiro; nao o garante. Numa passagem so, com
+  // `TP=-1`, a saida mediu -0,9 dB - acima do teto que o portao exige. E ha um
+  // segundo efeito: o AAC descodificado ultrapassa o pico do sinal que entrou
+  // no codificador, entao medir a saida final da sempre mais que a entrada.
+  //
+  // `level=disabled` NAO e detalhe. Por omissao o `alimiter` normaliza a saida
+  // ate ao limite - ou seja, SOBE o sinal em vez de o segurar. Com o auto-nivel
+  // ligado a saida media -0,2 dB; com ele desligado, -1,3 dB. 0.891 e -1 dBFS
+  // em amplitude.
   partes.push(
     '[bed_duck][voz_mix]amix=inputs=2:normalize=0:duration=first,' +
-      'loudnorm=I=-16:TP=-1:LRA=11[aout]'
+      'loudnorm=I=-16:TP=-1.5:LRA=11,' +
+      'alimiter=limit=0.891:level=disabled:attack=5:release=50[aout]'
   );
 
   return { entradas, filtro: partes.join(';'), mapas: ['[vout]', '[aout]'] };
