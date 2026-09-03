@@ -1,18 +1,22 @@
 /**
  * Video 4 - Uso das Listas.
  *
- * Começa na tela inicial, porque é lá que a playlist se monta, e só depois vai
- * para /listas. Duas armadilhas conhecidas, tratadas nos beats:
+ * A ORDEM DOS BEATS NAO E LIVRE. "Salvar" chama `goto('/listas?editId=...')`
+ * (ver `CarouselChips.svelte:520`): guardar SAI da tela inicial na hora. Na
+ * primeira versao o Salvar vinha a meio, e os beats seguintes continuavam a
+ * narrar "Em Abas", "Folheto" e "Compartilhar" — botoes que ja tinham saido do
+ * ecra. A voz falava de uma tela que ninguem estava a ver.
  *
- *  - "Em Abas" abre várias abas e rouba o foco, o que mataria o screencast da
- *    aba gravada. O beat mostra o botão e narra o que ele faz, sem o tocar.
- *  - "Compartilhar" escreve na área de transferência; a permissão já é
+ * Agora Salvar e o ULTIMO beat da tela inicial e serve de transicao, o que
+ * tambem e mais verdadeiro: e isso que a app faz. E como o `editId` chega com o
+ * campo de nome ja em edicao, dar nome a lista vem logo a seguir, sem procurar
+ * botao nenhum.
+ *
+ * Duas armadilhas conhecidas, tratadas nos beats:
+ *  - "Em Abas" abre varias abas e rouba o foco, o que mataria o screencast da
+ *    aba gravada. O beat mostra o botao e narra o que ele faz, sem o tocar.
+ *  - "Compartilhar" escreve na area de transferencia; a permissao ja e
  *    concedida em `gravar.mjs`.
- *
- * Seletores confirmados em:
- *   src/lib/components/CarouselChips.svelte  [title="Compartilhar playlist"], etc.
- *   src/lib/components/LouvorCard.svelte     .add-button
- *   src/routes/listas/+page.svelte           .playlist-card, .playlist-actions
  */
 export default {
   id: '04-listas',
@@ -44,6 +48,10 @@ export default {
         await ui.escrever('[aria-label="Buscar louvor por nome ou número"]', 'graça');
         await ui.esperar('.louvor-card', 30000);
         await ui.tocar('.louvor-card .add-button');
+        await ui.pausa(500);
+        await ui.escrever('[aria-label="Buscar louvor por nome ou número"]', 'aleluia');
+        await ui.esperar('.louvor-card', 30000);
+        await ui.tocar('.louvor-card .add-button');
       }
     },
     {
@@ -51,8 +59,8 @@ export default {
       fala: 'Os louvores escolhidos aparecem na barra Playlist, logo acima da busca.',
       zoom: null,
       acao: async (p, ui) => {
-        await ui.rolar(-800);
-        await ui.pausa(800);
+        await ui.rolar(-900);
+        await ui.pausa(900);
       }
     },
     {
@@ -61,7 +69,7 @@ export default {
       zoom: null,
       acao: async (p, ui) => {
         if (await ui.existe('[title="Arraste para reordenar"]')) {
-          await ui.arrastar('[title="Arraste para reordenar"]', 150, 0);
+          await ui.arrastar('[title="Arraste para reordenar"]', 170, 0);
         }
       }
     },
@@ -70,17 +78,9 @@ export default {
       fala: 'Para tirar um louvor da lista, toque no xis dele.',
       zoom: null,
       acao: async (p, ui) => {
-        await ui.pausa(900);
-      }
-    },
-    {
-      id: 'salvar',
-      fala: 'Toque em Salvar para guardar a lista com um nome. Sem isso ela se perde quando você fechar a aplicação.',
-      zoom: null,
-      acao: async (p, ui) => {
-        if (await ui.existe('[title*="salvar" i], [title*="Salvando" i]')) {
-          await ui.tocar('[title*="salvar" i], [title*="Salvando" i]');
-          await ui.pausa(1200);
+        if (await ui.existe('[title="Remover"]')) {
+          await ui.tocar('[title="Remover"]');
+          await ui.pausa(900);
         }
       }
     },
@@ -91,13 +91,13 @@ export default {
       acao: async (p, ui) => {
         if (await ui.existe('[title="Compartilhar playlist"]')) {
           await ui.tocar('[title="Compartilhar playlist"]');
-          await ui.pausa(1200);
+          await ui.pausa(1400);
         }
       }
     },
     {
       id: 'folheto-e-abas',
-      fala: 'Folheto junta tudo num arquivo só, para imprimir. Em Abas abre cada louvor numa aba do navegador.',
+      fala: 'Folheto junta os louvores num arquivo só, para imprimir. Em Abas abre cada um numa aba do navegador.',
       zoom: null,
       acao: async (p, ui) => {
         // De propósito sem tocar: "Em Abas" rouba o foco da aba gravada e
@@ -106,34 +106,36 @@ export default {
       }
     },
     {
-      id: 'ir-listas',
-      fala: 'As listas salvas ficam em Listas, no canto do cabeçalho.',
+      id: 'salvar',
+      fala: 'Toque em Salvar para guardar a lista. A aplicação leva você direto para a tela Listas, com o nome pronto para ser escrito.',
       zoom: null,
       acao: async (p, ui) => {
-        await ui.tocar('.listas-button');
+        await ui.tocarPrimeiro(['[title="Toque para salvar"]', '[title*="salvar" i]']);
         await ui.esperar('.page-title', 30000);
+        await ui.pausa(900);
+      }
+    },
+    {
+      id: 'nomear',
+      fala: 'Dê um nome que você reconheça depois, como a data do culto, e confirme.',
+      zoom: null,
+      acao: async (p, ui) => {
+        if (await ui.existe('.playlist-name-input')) {
+          await ui.escrever('.playlist-name-input', 'Culto de domingo');
+          await ui.pausa(600);
+          if (await ui.existe('[title="Salvar"]')) await ui.tocar('[title="Salvar"]');
+        }
         await ui.pausa(700);
       }
     },
     {
-      id: 'buscar-favoritar',
-      fala: 'Aqui você procura pelo nome e marca as listas que mais usa com a estrela.',
+      id: 'favoritar',
+      fala: 'A estrela marca as listas que você mais usa, e o filtro no topo mostra só as favoritas.',
       zoom: null,
       acao: async (p, ui) => {
         if (await ui.existe('.playlist-card .favorite-button')) {
           await ui.tocar('.playlist-card .favorite-button');
-          await ui.pausa(800);
-        }
-      }
-    },
-    {
-      id: 'renomear',
-      fala: 'Toque no lápis para trocar o nome da lista.',
-      zoom: null,
-      acao: async (p, ui) => {
-        if (await ui.existe('.playlist-card .edit-icon-button')) {
-          await ui.tocar('.playlist-card .edit-icon-button');
-          await ui.pausa(1100);
+          await ui.pausa(900);
         }
       }
     },
@@ -144,7 +146,7 @@ export default {
       acao: async (p, ui) => {
         if (await ui.existe('.playlist-actions button')) {
           await ui.tocar('.playlist-actions button');
-          await ui.pausa(1600);
+          await ui.pausa(2000);
         }
       }
     },

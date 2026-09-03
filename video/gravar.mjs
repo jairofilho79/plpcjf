@@ -69,6 +69,7 @@ export async function gravar(idRoteiro, { headless = true } = {}) {
 
     for (const beat of roteiro.beats) {
       const inicio = Date.now() / 1000;
+      const urlAntes = caminhoDe(page.url());
       process.stderr.write(`  beat ${beat.id}\n`);
       try {
         await beat.acao(page, ui, contexto);
@@ -77,11 +78,28 @@ export async function gravar(idRoteiro, { headless = true } = {}) {
         avisos.push(`beat "${beat.id}" falhou: ${e.message.split('\n')[0]}`);
       }
 
+      const urlDepois = caminhoDe(page.url());
+      if (urlAntes !== urlDepois) {
+        // Um beat que navega muda o que esta no ecra a partir dali. Isto nao e
+        // erro - as vezes a navegacao E o assunto do beat -, mas os beats
+        // seguintes tem de fazer sentido na tela NOVA. No video das Listas o
+        // "Salvar" saltava para /listas e os tres beats seguintes continuavam
+        // a narrar botoes da tela inicial, que ja nao estavam a ser vistos.
+        avisos.push(`beat "${beat.id}" navegou de ${urlAntes} para ${urlDepois} — confira se os beats seguintes falam da tela certa`);
+      }
+
       beat.__zoomCru = await resolverZoomCru(page, beat, avisos);
 
       const restante = falas[beat.id].duracao * 1000 + FOLGA_MS - (Date.now() / 1000 - inicio) * 1000;
       if (restante > 0) await page.waitForTimeout(restante);
-      beats.push({ id: beat.id, fala: beat.fala, inicio, fim: Date.now() / 1000, zoom: beat.__zoomCru });
+      beats.push({
+        id: beat.id,
+        fala: beat.fala,
+        inicio,
+        fim: Date.now() / 1000,
+        tela: urlDepois,
+        zoom: beat.__zoomCru
+      });
     }
 
     const { total, fim, dimensao } = await captura.parar();
@@ -108,6 +126,7 @@ export async function gravar(idRoteiro, { headless = true } = {}) {
         fala: b.fala,
         inicio: Number((b.inicio - origem).toFixed(3)),
         fim: Number((b.fim - origem).toFixed(3)),
+        tela: b.tela,
         zoom: escalarZoom(b.zoom, fatorQuadro, dimensao)
       })),
       avisos
@@ -122,6 +141,15 @@ export async function gravar(idRoteiro, { headless = true } = {}) {
   } finally {
     await contexto.close();
     await navegador.close();
+  }
+}
+
+/** So o caminho, sem dominio nem query — e o que identifica a tela. */
+function caminhoDe(url) {
+  try {
+    return new URL(url).pathname;
+  } catch {
+    return url;
   }
 }
 
