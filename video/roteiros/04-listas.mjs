@@ -141,18 +141,54 @@ export default {
     },
     {
       id: 'reproduzir',
-      fala: 'Reproduzir carrega a lista e abre o primeiro louvor no leitor. De lá você passa de um para o outro sem voltar à busca.',
+      // NAO toca no botao, de proposito.
+      //
+      // `handlePlay` (listas/+page.svelte:151) carrega a lista e faz
+      // `goto('/')`: leva para a tela INICIAL, nao para o leitor. Quem abre o
+      // leitor e `handlePlayOpenLeitor`, que vive no botao "Abrir no leitor"
+      // dentro de "Ver". A primeira versao deste beat narrava que Reproduzir
+      // abria o leitor - informacao falsa, apanhada pelo aviso de navegacao.
+      // Tocar aqui tambem sairia de /listas e estragaria os beats seguintes.
+      fala: 'O botão Reproduzir carrega a lista e leva você de volta à tela inicial, com os louvores já na barra Playlist.',
       zoom: null,
       acao: async (p, ui) => {
-        if (await ui.existe('.playlist-actions button')) {
-          await ui.tocar('.playlist-actions button');
-          await ui.pausa(2000);
+        await ui.pausa(1300);
+      }
+    },
+    {
+      id: 'ver',
+      fala: 'Para conferir o que está guardado, toque em Ver.',
+      zoom: null,
+      acao: async (p, ui) => {
+        await ui.tocarPrimeiro(['[title="Ver louvores da playlist"]']);
+        await ui.esperar('.view-playlist-actions', 30000);
+        await ui.pausa(900);
+      }
+    },
+    {
+      id: 'abrir-no-leitor',
+      fala: 'E Abrir no leitor começa o culto: carrega a lista e abre o primeiro louvor.',
+      zoom: null,
+      acao: async (p, ui) => {
+        await ui.tocarPrimeiro(['.leitor-button', '[title*="abrir o primeiro louvor" i]']);
+        await ui.esperar('.toolbar', 45000);
+        await ui.pausa(2200);
+      }
+    },
+    {
+      id: 'navegador',
+      fala: 'Dentro do leitor aparece o botão Lista. Com ele você passa de um louvor ao outro sem voltar à busca.',
+      zoom: null,
+      acao: async (p, ui) => {
+        if (await ui.existe('.carousel-label')) {
+          await ui.tocar('.carousel-label');
+          await ui.pausa(1600);
         }
       }
     },
     {
       id: 'fecho',
-      fala: 'Monte a lista antes do culto, salve com um nome, e no dia é só reproduzir.',
+      fala: 'Monte a lista antes do culto, salve com um nome, e no dia é só abrir no leitor.',
       zoom: null,
       acao: async (p, ui) => {
         await ui.pausa(900);
