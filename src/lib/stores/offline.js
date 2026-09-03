@@ -1,7 +1,6 @@
 // Offline Store - Manages offline mode state and PDF caching
 import { writable, derived, get } from 'svelte/store';
 import { browser } from '$app/environment';
-import { goto } from '$app/navigation';
 import {
   downloadPDFsViaSW,
   cancelDownload as cancelDownloadSW,
@@ -20,10 +19,18 @@ import {
   clearAllCompletedParts,
   computePartsFingerprint,
   looksLikeCaptivePortal,
-  fetchWithRetry,
   excludeSkippedPartFromBytesTotal
 } from '$lib/offline/download/partProgress.js';
 import { verifyCompletedPart } from '$lib/offline/download/partVerification.js';
+import { mensagemDeErroDeDownload } from '$lib/offline/download/downloadErrors.js';
+import { downloadPartWithRetry } from '$lib/offline/download/partRetry.js';
+import { cacheAppPages } from '$lib/offline/utils/AppPagesCache.js';
+import {
+  checkQuota,
+  ensurePersistentStorage,
+  isQuotaError,
+  quotaErrorMessage
+} from '$lib/offline/storage/storageQuota.js';
 import { louvores } from './louvores';
 import { validateManifestsIntegrity } from '$lib/utils/manifestValidation';
 import { CATEGORY_OPTIONS } from './filters';
@@ -127,7 +134,10 @@ const initialState = {
   cachedPdfs: [], // List of cached PDF URLs
   cachedCount: 0, // Number of cached PDFs
   showModal: false, // Show offline modal
-  error: null, // Error message
+  // `string | null` explícito: sem a anotação o TS infere o tipo literal
+  // `null` a partir do valor inicial, e toda escrita de mensagem de erro neste
+  // arquivo vira "Type 'string' is not assignable to type 'null'".
+  error: /** @type {string | null} */ (null), // Error message
   autoDownloading: false, // Auto-downloading new PDFs
   offlineManifest: null, // Offline manifest data
   categorySizes: {}, // Map of category -> total size in bytes
@@ -140,7 +150,7 @@ const initialState = {
   currentPart: 0, // Parte atual (1-indexed) entre todas as categorias deste download
   totalParts: 0, // Total de partes deste download
   currentPartName: '', // Nome do arquivo da parte atual (ex.: "Partitura-4.zip")
-  bytesDownloaded: 0, // Bytes já baixados neste download (soma real, via blob.size)
+  bytesDownloaded: 0, // Bytes já baixados neste download (somados pedaço a pedaço, durante a leitura do corpo)
   bytesTotal: /** @type {number | null} */ (0), // Estimativa de bytes do download; null quando o manifesto não permite estimar com segurança
   phase: /** @type {'baixando' | 'extraindo' | 'gravando' | null} */ (null) // Fase da parte atual (nada em andamento/parte pulada = null)
 };
@@ -700,10 +710,134 @@ function getPdfRelPathNormalizado(louvor) {
  */
 function assertPackageResponse(response, filename) {
   if (looksLikeCaptivePortal(response)) {
-    throw new Error(
+    const erro = new Error(
       `A rede devolveu uma página de login em vez do pacote ${filename}. ` +
         'Confirme o acesso ao wi-fi e tente novamente.'
     );
+    // Retentar não tira ninguém da tela de login do wi-fi: só adia a mensagem
+    // que resolve o problema. Ver `partRetry.js`.
+    /** @type {any} */ (erro).naoRetentavel = true;
+    throw erro;
+  }
+}
+
+/**
+ * Deixa o leitor pronto para abrir sem rede, sem navegar nem abrir aba.
+ *
+ * Melhor esforço: falha aqui não derruba o download nem vira erro na tela — só
+ * deixa de marcar `IS_LEITOR_OFFLINE`, que é o que o indicador lê para dizer
+ * "app pronta para uso offline".
+ *
+ * @returns {Promise<void>}
+ */
+async function garantirLeitorOffline() {
+  if (!browser || typeof caches === 'undefined') return;
+
+  try {
+    const { prepararLeitorOffline } = await import('$lib/offline/utils/leitorOffline.js');
+    const { getConfig } = await import('$lib/offline/core/OfflineConfig.js');
+    const cache = await caches.open(getConfig('APP_CACHE_NAME'));
+
+    const r = await prepararLeitorOffline({
+      cache,
+      fetchImpl: (/** @type {any} */ url) => fetch(url),
+      setFlag: (valor) => safeSet(IS_LEITOR_OFFLINE_KEY, valor)
+    });
+
+    console.info(
+      `[Offline Store] Leitor offline: ${r.pronto ? 'pronto' : 'incompleto'} ` +
+        `(${r.guardadas} guardadas, ${r.falharam} falharam)`
+    );
+  } catch (err) {
+    console.warn('[Offline Store] Não foi possível preparar o leitor offline:', err);
+  }
+}
+
+/**
+ * Baixa uma parte inteira, com retentativa e com os bytes indo para a tela.
+ *
+ * O contador de bytes é o único sinal de vida durante os minutos que uma parte
+ * de ~30 MB leva em rede móvel: sem ele a tela fica congelada no mesmo número
+ * do começo ao fim da parte, e não há como distinguir "baixando devagar" de
+ * "travado". A retentativa cobre pedido E corpo — ver `partRetry.js`.
+ *
+ * @param {string} packageUrl
+ * @param {{ filename: string }} part
+ * @returns {Promise<Blob>}
+ */
+async function baixarParte(packageUrl, part) {
+  return downloadPartWithRetry(packageUrl, {
+    fetchImpl: (/** @type {any} */ url, /** @type {any} */ init) => fetch(url, init),
+    init: { signal: zipDownloadController?.signal, cache: 'no-store' },
+    type: 'application/zip',
+    attempts: 4,
+    isCancelled: () => zipDownloadCancelled,
+    validateResponse: (resposta) => assertPackageResponse(resposta, part.filename),
+    onBytes: (bytes) => somarBytes(bytes),
+    onAttemptFailed: (tentativa, erro, bytesPerdidos) => {
+      console.warn(`[Offline Store] Tentativa ${tentativa} de ${part.filename}:`, erro.message);
+      // Os bytes que chegaram antes da queda já foram somados na tela; sem
+      // devolvê-los, uma retentativa faria o contador passar do total e a
+      // barra encostar em 100% com a parte ainda pela metade.
+      if (bytesPerdidos > 0) somarBytes(-bytesPerdidos);
+    }
+  });
+}
+
+/**
+ * Soma (ou devolve) bytes ao contador da tela, movendo a barra junto.
+ * @param {number} bytes
+ */
+function somarBytes(bytes) {
+  offlineState.update((s) => {
+    const bytesDownloaded = Math.max(0, s.bytesDownloaded + bytes);
+    return { ...s, bytesDownloaded, progress: progressoPorBytes(s, bytesDownloaded) };
+  });
+}
+
+/**
+ * Porcentagem da barra durante o download, medida em bytes.
+ *
+ * A barra media PDFs gravados, que só mudam quando uma parte inteira termina
+ * de chegar: em 31 partes, eram 31 saltos com longos minutos de imobilidade
+ * entre eles. Bytes se movem a cada pedaço que a rede entrega.
+ *
+ * Sem estimativa de total (manifesto sem `size`), mantém o valor que já estava
+ * — quem grava os PDFs continua atualizando a barra por contagem.
+ *
+ * Nunca recua e nunca chega a 100 antes do fim: os 100% são dados pelo bloco
+ * de conclusão, depois da conferência contra o cache.
+ *
+ * @param {{ progress?: number, bytesTotal?: number | null }} state
+ * @param {number} bytesDownloaded
+ * @returns {number}
+ */
+function progressoPorBytes(state, bytesDownloaded) {
+  const total = state.bytesTotal;
+  if (typeof total !== 'number' || total <= 0) return state.progress || 0;
+  const pct = Math.min(99, Math.floor((bytesDownloaded / total) * 100));
+  return Math.max(state.progress || 0, pct);
+}
+
+/**
+ * Grava um PDF no cache traduzindo falta de espaço em erro fatal e legível.
+ *
+ * Um `cache.put` que falha por cota nunca melhora na próxima entrada: continuar
+ * o laço só produz um download que "termina com sucesso" sem ter gravado nada
+ * — que era exatamente o que acontecia antes, um PDF de cada vez.
+ *
+ * @param {Cache} cache
+ * @param {Request} request
+ * @param {Response} response
+ */
+async function gravarPdfNoCache(cache, request, response) {
+  try {
+    await cache.put(request, response);
+  } catch (err) {
+    if (isQuotaError(err)) {
+      throw new Error(quotaErrorMessage({}));
+    }
+    throw err;
   }
 }
 
@@ -849,52 +983,24 @@ async function startZipDownloadWithSpecificParts(categories, pdfUrls, partsByCat
         }
 
         const packageUrl = normalizePackageUrl(part.url, part.filename);
-        let response;
 
         offlineState.update(s => ({ ...s, phase: 'baixando' }));
 
-        try {
-          response = await fetchWithRetry(
-            packageUrl,
-            { signal: zipDownloadController.signal, cache: 'no-store' },
-            {
-              attempts: 4,
-              signal: zipDownloadController.signal,
-              onRetry: (attempt, error) => {
-                console.warn(
-                  `[Offline Store] Tentativa ${attempt} de ${part.filename}:`,
-                  error.message
-                );
-              }
-            }
-          );
-        } catch (err) {
-          if (zipDownloadCancelled || err?.name === 'AbortError') {
-            throw new Error('DOWNLOAD_CANCELLED');
-          }
-          throw err;
+        // Pedido e corpo retentados como uma unidade — ver `partRetry.js`.
+        // `fetchWithRetry` sozinho só protegia até os cabeçalhos chegarem, e é
+        // durante os ~30 MB seguintes que a rede móvel cai.
+        //
+        // Os bytes sobem pedaço a pedaço, e não de uma vez no fim: entre o
+        // começo e o fim da leitura de uma parte passam-se minutos, e somar só
+        // no fim deixava a tela igual a uma tela travada durante todo esse
+        // tempo.
+        const blob = await baixarParte(packageUrl, part);
+
+        if (zipDownloadCancelled) {
+          throw new Error('DOWNLOAD_CANCELLED');
         }
 
-        if (!response.ok) {
-          throw new Error(`Falha ao baixar o pacote ${part.filename} (${response.status})`);
-        }
-
-        assertPackageResponse(response, part.filename);
-
-        // Ainda 'baixando': é em response.blob() que o corpo do pacote é de
-        // fato lido da rede — no wi-fi fraco que esta função existe para
-        // suportar, é a etapa mais lenta. Rotular 'extraindo' antes disso
-        // mostrava a fase errada com o contador de bytes parado no lugar.
-        const blob = await response.blob();
-
-        // `blob.size` é o tamanho real transferido — mais confiável que o `size`
-        // declarado no manifesto, que só serve para a estimativa inicial. O
-        // download terminou aqui, então os bytes somam já nesta atualização.
-        offlineState.update(s => ({
-          ...s,
-          phase: 'extraindo',
-          bytesDownloaded: s.bytesDownloaded + blob.size
-        }));
+        offlineState.update(s => ({ ...s, phase: 'extraindo' }));
 
         // Extrai as entradas do ZIP uma a uma (streaming via central directory),
         // em vez de descomprimir o pacote inteiro em memória de uma só vez.
@@ -920,18 +1026,21 @@ async function startZipDownloadWithSpecificParts(categories, pdfUrls, partsByCat
             headers: { 'Content-Type': 'application/pdf' }
           });
 
-          await cache.put(new Request(requestUrl), pdfResponse);
+          await gravarPdfNoCache(cache, new Request(requestUrl), pdfResponse);
 
           remaining.delete(pathForComparison);
           completed++;
 
-          const progress = total === 0 ? 100 : Math.min(99, Math.floor((completed / total) * 100));
+          const porPdfs = total === 0 ? 100 : Math.min(99, Math.floor((completed / total) * 100));
 
           offlineState.update(state => ({
             ...state,
             completed,
             failed: 0,
-            progress,
+            // `Math.max`: a barra passou a ser medida em bytes durante o
+            // download (ver `progressoPorBytes`), e as duas medidas não batem
+            // exatamente. Sem isto, a barra recuava ao começar a gravar.
+            progress: Math.max(state.progress || 0, porPdfs),
             // Só passa a 'gravando' na primeira escrita real: até aqui o laço
             // ainda está lendo o índice central do ZIP e decidindo o que interessa.
             phase: 'gravando'
@@ -1056,9 +1165,11 @@ async function startZipDownloadWithSpecificParts(categories, pdfUrls, partsByCat
       ...state,
       downloading: false,
       phase: null,
-      error: error.message === 'DOWNLOAD_CANCELLED' || error?.name === 'AbortError'
-        ? 'Download cancelado pelo usuário.'
-        : error.message || 'Erro ao baixar pacotes ZIP.'
+      // A frase vem de `mensagemDeErroDeDownload`: o que chegava aqui era a
+      // mensagem escrita para o console ("HTTP 500 ao baixar /packages/..."),
+      // e era ela que aparecia na tela de quem tinha acabado de esperar
+      // dezenas de minutos por um download.
+      error: mensagemDeErroDeDownload(error)
     }));
   } finally {
     isZipDownloadActive = false;
@@ -1446,52 +1557,24 @@ async function startZipDownload(categories, pdfUrls, alreadyDownloadedCategories
         }
 
         const packageUrl = normalizePackageUrl(part.url, part.filename);
-        let response;
 
         offlineState.update(s => ({ ...s, phase: 'baixando' }));
 
-        try {
-          response = await fetchWithRetry(
-            packageUrl,
-            { signal: zipDownloadController.signal, cache: 'no-store' },
-            {
-              attempts: 4,
-              signal: zipDownloadController.signal,
-              onRetry: (attempt, error) => {
-                console.warn(
-                  `[Offline Store] Tentativa ${attempt} de ${part.filename}:`,
-                  error.message
-                );
-              }
-            }
-          );
-        } catch (err) {
-          if (zipDownloadCancelled || err?.name === 'AbortError') {
-            throw new Error('DOWNLOAD_CANCELLED');
-          }
-          throw err;
+        // Pedido e corpo retentados como uma unidade — ver `partRetry.js`.
+        // `fetchWithRetry` sozinho só protegia até os cabeçalhos chegarem, e é
+        // durante os ~30 MB seguintes que a rede móvel cai.
+        //
+        // Os bytes sobem pedaço a pedaço, e não de uma vez no fim: entre o
+        // começo e o fim da leitura de uma parte passam-se minutos, e somar só
+        // no fim deixava a tela igual a uma tela travada durante todo esse
+        // tempo.
+        const blob = await baixarParte(packageUrl, part);
+
+        if (zipDownloadCancelled) {
+          throw new Error('DOWNLOAD_CANCELLED');
         }
 
-        if (!response.ok) {
-          throw new Error(`Falha ao baixar o pacote ${part.filename} (${response.status})`);
-        }
-
-        assertPackageResponse(response, part.filename);
-
-        // Ainda 'baixando': é em response.blob() que o corpo do pacote é de
-        // fato lido da rede — no wi-fi fraco que esta função existe para
-        // suportar, é a etapa mais lenta. Rotular 'extraindo' antes disso
-        // mostrava a fase errada com o contador de bytes parado no lugar.
-        const blob = await response.blob();
-
-        // `blob.size` é o tamanho real transferido — mais confiável que o `size`
-        // declarado no manifesto, que só serve para a estimativa inicial. O
-        // download terminou aqui, então os bytes somam já nesta atualização.
-        offlineState.update(s => ({
-          ...s,
-          phase: 'extraindo',
-          bytesDownloaded: s.bytesDownloaded + blob.size
-        }));
+        offlineState.update(s => ({ ...s, phase: 'extraindo' }));
 
         // Extrai as entradas do ZIP uma a uma (streaming via central directory),
         // em vez de descomprimir o pacote inteiro em memória de uma só vez.
@@ -1517,18 +1600,21 @@ async function startZipDownload(categories, pdfUrls, alreadyDownloadedCategories
             headers: { 'Content-Type': 'application/pdf' }
           });
 
-          await cache.put(new Request(requestUrl), pdfResponse);
+          await gravarPdfNoCache(cache, new Request(requestUrl), pdfResponse);
 
           remaining.delete(pathForComparison);
           completed++;
 
-          const progress = total === 0 ? 100 : Math.min(99, Math.floor((completed / total) * 100));
+          const porPdfs = total === 0 ? 100 : Math.min(99, Math.floor((completed / total) * 100));
 
           offlineState.update(state => ({
             ...state,
             completed,
             failed: 0,
-            progress,
+            // `Math.max`: a barra passou a ser medida em bytes durante o
+            // download (ver `progressoPorBytes`), e as duas medidas não batem
+            // exatamente. Sem isto, a barra recuava ao começar a gravar.
+            progress: Math.max(state.progress || 0, porPdfs),
             // Só passa a 'gravando' na primeira escrita real: até aqui o laço
             // ainda está lendo o índice central do ZIP e decidindo o que interessa.
             phase: 'gravando'
@@ -1648,36 +1734,21 @@ async function startZipDownload(categories, pdfUrls, alreadyDownloadedCategories
         clearAllValidationCache();
       }
 
-      // Check if IS_LEITOR_OFFLINE flag exists, if not open PDF in leitor
-      // Via safeStorage(): mesmo motivo do resto deste bloco de sucesso — no
-      // Firefox com dados do site bloqueados, um acesso direto a localStorage
-      // aqui lançaria e cairia no catch externo, reportando falha depois de
-      // todos os PDFs já terem sido gravados no cache com sucesso.
-      // (Fase 8: passou de `safeStorage()?.getItem` para `safeGet`.)
-      const isLeitorOffline = safeGet(IS_LEITOR_OFFLINE_KEY);
-      if (!isLeitorOffline || isLeitorOffline !== 'true') {
-        // Open offline-setup.pdf in leitor to set the flag
-        const leitorUrl = '/leitor?file=/offline-setup.pdf&titulo=Configuração Offline&subtitulo=Página de funcionamento';
-        goto(leitorUrl);
-      }
+      // Prepara o leitor sem sair da página. Antes daqui saía um `goto()` para
+      // o leitor no fim do download: quem tinha acabado de acompanhar a barra
+      // até 100% era jogado para outra tela sem ter pedido nada.
+      await garantirLeitorOffline();
     }
   } catch (error) {
-    if (error?.message === 'DOWNLOAD_CANCELLED' || error?.name === 'AbortError') {
-      offlineState.update(state => ({
-        ...state,
-        downloading: false,
-        phase: null,
-        error: 'Download cancelado'
-      }));
-    } else {
+    if (error?.message !== 'DOWNLOAD_CANCELLED' && error?.name !== 'AbortError') {
       console.error('[Offline Store] Zip download error:', error);
-      offlineState.update(state => ({
-        ...state,
-        downloading: false,
-        phase: null,
-        error: error?.message || 'Erro ao baixar pacotes ZIP'
-      }));
     }
+    offlineState.update(state => ({
+      ...state,
+      downloading: false,
+      phase: null,
+      error: mensagemDeErroDeDownload(error)
+    }));
   } finally {
     zipDownloadController = null;
     isZipDownloadActive = false;
@@ -1759,8 +1830,33 @@ async function downloadByCategories(categories) {
   }
 
   // NOVA LÓGICA: Identificar PDFs faltantes específicos
-  const missingPdfs = identifyMissingPdfs(filteredLouvores, cachedPdfs);
-  
+  let missingPdfs = identifyMissingPdfs(filteredLouvores, cachedPdfs);
+
+  // "Nada falta" é a única conclusão que faz este botão não fazer nada. Antes
+  // de aceitá-la, confere contra o Cache Storage de verdade.
+  //
+  // A lista de PDFs em cache vem de `getCachedPDFsFast`, que serve por até 5
+  // minutos uma cópia guardada em localStorage. Se o navegador despejou o cache
+  // dos PDFs por pressão de disco (ele pode, quando o armazenamento não é
+  // persistente), a cópia continua dizendo que está tudo lá — e o clique
+  // devolvia "Download concluído!" com progresso 100% sem ter baixado nada.
+  if (missingPdfs.length === 0) {
+    try {
+      invalidateCachedPDFsLocal();
+      const conferido = await getCachedPDFsFast();
+      missingPdfs = identifyMissingPdfs(filteredLouvores, conferido);
+      if (missingPdfs.length > 0) {
+        console.warn(
+          `[Offline Store] A lista guardada dizia que não faltava nada, mas o cache real tem ${conferido.length} PDFs: ${missingPdfs.length} faltando de verdade.`
+        );
+        cachedPdfs = conferido;
+        offlineState.update(s => ({ ...s, cachedPdfs: conferido, cachedCount: conferido.length }));
+      }
+    } catch (err) {
+      console.warn('[Offline Store] Não foi possível reconferir o cache de PDFs:', err);
+    }
+  }
+
   console.log(`[Offline Store] Found ${missingPdfs.length} missing PDFs out of ${filteredLouvores.length} total in selected categories`);
 
   // If all PDFs are already downloaded, show message and return
@@ -1795,16 +1891,32 @@ async function downloadByCategories(categories) {
   // Save selected categories for future auto-downloads
   saveCategories(validCategories);
 
-  // Check if IS_LEITOR_OFFLINE flag exists, if not open PDF in leitor
-  // Via `safeGet`: mesmo motivo do sítio acima — no Firefox com dados do site
-  // bloqueados, o acesso direto a localStorage aqui lançaria.
-  const isLeitorOffline = safeGet(IS_LEITOR_OFFLINE_KEY);
-  if (!isLeitorOffline || isLeitorOffline !== 'true') {
-    // Open offline-setup.pdf in leitor to set the flag
-    // Use Safari-compatible navigation
-    const leitorUrl = '/leitor?file=/offline-setup.pdf&titulo=Configuração Offline&subtitulo=Página de funcionamento';
-    navigateToRoute(leitorUrl, { newTab: true });
-  }
+  // As rotas do app entram no cache junto com os PDFs.
+  //
+  // Sem isto, o acervo fica no aparelho mas as telas que o mostram não: sem
+  // rede, abrir /biblioteca ou /offline cai no shell da raiz (ou em nada).
+  // Roda em segundo plano e nunca derruba o download — é o que já fazia o
+  // motor antigo, e precisa continuar acontecendo neste.
+  cacheAppPages()
+    .then((r) => {
+      console.info(`[Offline Store] Páginas do app em cache: ${r.success}/${r.total}`);
+      if (r.failed > 0) console.warn('[Offline Store] Páginas que falharam:', r.errors);
+    })
+    .catch((err) => console.warn('[Offline Store] cacheAppPages falhou (não crítico):', err));
+
+  // O leitor é preparado aqui mesmo, sem abrir aba.
+  //
+  // Até 2026-09-02 esta linha era `navigateToRoute(leitorUrl, { newTab: true })`
+  // — uma função que nunca foi definida nem importada (introduzida em f104c21).
+  // Ou seja: quem nunca tinha aberto o leitor, que é exatamente quem clica em
+  // "Disponibilizar offline" pela primeira vez, tomava um
+  // `ReferenceError: navigateToRoute is not defined` ANTES do try/catch abaixo.
+  // O download não começava e a tela não dizia nada. Era a falha silenciosa.
+  //
+  // A aba nova também não volta: no celular ela roubava o foco e mandava para
+  // segundo plano a aba que estava baixando, onde o navegador estrangula a
+  // rede. Ver `prepararLeitorOffline`.
+  await garantirLeitorOffline();
 
   // NOVA LÓGICA: Obter manifest e identificar lotes necessários
   let manifest = state.offlineManifest;
@@ -1850,6 +1962,30 @@ async function downloadByCategories(categories) {
   // Obter todos os PDFs das categorias (para validação durante extração)
   const pdfUrls = filteredLouvores.map(getPdfUrl).filter(url => url !== null);
   const categoriesToDownload = Object.keys(partsByCategory);
+
+  // Espaço em disco: perguntar antes vale mais do que descobrir na metade.
+  //
+  // O acervo inteiro passa de 800 MB. Sem esta checagem, um aparelho apertado
+  // baixava por vários minutos e só então o `cache.put` começava a falhar por
+  // cota — e falhava em silêncio, um PDF de cada vez. `persist()` na sequência
+  // é o que impede o navegador de descartar o acervo baixado quando o disco
+  // apertar depois.
+  const bytesNecessarios = sumPartsSizeByCategory(partsByCategory);
+  const espaco = await checkQuota(typeof navigator !== 'undefined' ? navigator : null, bytesNecessarios || 0);
+
+  if (!espaco.ok) {
+    offlineState.update(s => ({
+      ...s,
+      downloading: false,
+      error: quotaErrorMessage({ faltam: espaco.faltam })
+    }));
+    return;
+  }
+
+  const persistente = await ensurePersistentStorage(typeof navigator !== 'undefined' ? navigator : null);
+  console.info(
+    `[Offline Store] Armazenamento persistente: ${persistente ? 'concedido' : 'melhor esforço'}`
+  );
 
   // Usar nova função que baixa apenas os lotes específicos
   await startZipDownloadWithSpecificParts(categoriesToDownload, pdfUrls, partsByCategory, manifest);

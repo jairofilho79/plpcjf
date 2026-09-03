@@ -29,6 +29,7 @@
   import { getConfig } from '$lib/offline/core/OfflineConfig.js';
   import offlineManager from '$lib/offline/core/OfflineManager.js';
   import { browser } from '$app/environment';
+  import { get } from 'svelte/store';
 
   // Offline available flag from localStorage
   const OFFLINE_AVAILABLE_KEY = 'OFFLINE_AVAILABLE';
@@ -996,7 +997,15 @@
    */
   async function cancelDownload() {
     console.log('[Offline Page] Cancelling download/import');
-    await offlineManager.cancelDownload();
+
+    // Os dois: o download por pacotes vive no store (`offline.cancelDownload`,
+    // que aborta o controller do ZIP) e a importação de bundle vive no
+    // OfflineManager. Enquanto esta função só chamava o segundo, tocar em
+    // "Cancelar Download" não interrompia nada — medido no banco de ensaio: o
+    // download seguiu até o fim depois do clique, e a tela continuou a dizer
+    // "Baixando" como se o botão não existisse.
+    await Promise.allSettled([offline.cancelDownload(), offlineManager.cancelDownload()]);
+
     if (isImportingBundle) importChecklist = [];
   }
 
@@ -1112,52 +1121,108 @@
   async function downloadAllCategories() {
     if (downloading) return;
     await ensureLouvoresReady();
-    if (!$louvores.length) return;
+
+    if (!$louvores.length) {
+      // Sair calado aqui era a primeira porta da falha silenciosa: sem catálogo
+      // não há o que baixar, e o clique não produzia nem um pixel de resposta.
+      mostrarErro(
+        'Catálogo indisponível',
+        'Não foi possível carregar a lista de louvores. Conecte-se à internet e tente novamente.'
+      );
+      return;
+    }
 
     console.log('[Offline Page] Starting download for all categories');
-    
-    // Open offline-setup.pdf in new tab
-    // `&validated=true` saiu: era o último emissor de um parâmetro que o leitor
-    // deixou de ler quando o clique parou de validar antes de navegar. Mantê-lo
-    // só prometia a quem lesse esta URL um contrato que já não existe.
-    const pdfUrl = '/leitor?file=%2Fassets%2FColCIAs%2F001.pdf&titulo=Meu%20Deus%2C%20meu%20pai&subtitulo=Partitura%20%7C%20Coletânea%20CIAs';
-    window.open(pdfUrl);
-    
+
+    // Nada de `window.open` aqui.
+    //
+    // Este handler abria o leitor numa aba nova antes de começar a baixar. No
+    // celular, a aba nova toma o foco e a aba que está baixando vai para
+    // segundo plano — onde o navegador estrangula a rede e pode até descartar
+    // a página. Era a causa direta do "abre uma aba e o download fica lento ou
+    // parado". O que a aba existia para preparar (os arquivos que o leitor
+    // pede em runtime) agora é feito sem sair daqui, dentro do próprio
+    // download. Ver `prepararLeitorOffline`.
+
     // Select all categories
     const allCategories = [...CATEGORY_OPTIONS];
     selectedCategories = allCategories;
-    
+
     // Filter out already downloaded categories
     const categoriesToDownload = allCategories.filter(cat => !downloadedCategories.includes(cat));
-    
+
     if (categoriesToDownload.length === 0) {
       console.log('[Offline Page] All categories are already downloaded');
       setOfflineAvailable(true);
       return;
     }
-    
-    // Download all categories
+
     try {
-      const result = await offlineManager.downloadCategories(categoriesToDownload, {
-        louvoresData: $louvores
-      });
-      
-      // Set offline available flag after successful download
-      // Wait a bit for the reactive statement to update downloadedCategories
-      await new Promise(resolve => setTimeout(resolve, 1500));
-      
-      // Check if all categories are now downloaded
-      await offline.loadCachedPdfsList(false, true);
+      // `offline.downloadByCategories` e não `offlineManager.downloadCategories`:
+      // é o motor que reporta parte a parte (Parte 3 de 31, fase, bytes),
+      // retenta 4 vezes com espera crescente, retoma de onde parou numa
+      // tentativa anterior e extrai o ZIP entrada por entrada em vez de
+      // descomprimir 30 MB de uma vez na memória do celular. O outro motor não
+      // preenche nenhum dos campos que o painel de progresso desenha — era por
+      // isso que a tela mostrava "0 de 1546 PDFs" congelado do início ao fim.
+      await offline.downloadByCategories(categoriesToDownload);
+
+      // O motor reporta o resultado pelo estado; erro aqui é erro de verdade.
+      const estado = get(offline);
+      if (estado.error) {
+        // Cancelar foi a pessoa quem pediu: a caixa da própria tela já conta o
+        // que aconteceu, e um modal de erro por cima transformaria uma decisão
+        // dela em falha da app.
+        if (!/cancelad/i.test(estado.error)) {
+          mostrarErro('Não foi possível concluir o download', estado.error);
+        }
+        return;
+      }
+
+      await offline.loadCachedPdfsList(true, false);
       const updatedDownloaded = await offline.checkAndUpdateDownloadedCategories();
       const allDownloaded = CATEGORY_OPTIONS.every(cat => updatedDownloaded.includes(cat));
-      
-      if (allDownloaded || result.success) {
+
+      if (allDownloaded) {
         setOfflineAvailable(true);
       }
+
+      if (estado.failed > 0) {
+        // Sem citar o rótulo de um botão: qual dos dois está na tela depende de
+        // `offlineAvailable`, que acabou de ser recalculado logo acima.
+        mostrarErro(
+          'Download concluído com pendências',
+          `${estado.failed} PDF(s) não foram baixados. Toque de novo no botão de download para completar — o resto continua guardado.`
+        );
+      }
+
+      // Recalcular agora: quem acabou de ver a barra chegar ao fim não pode
+      // encontrar "0 Disponíveis" logo abaixo dela.
+      if (statsRequested) {
+        await loadCategoryStats(true);
+      }
     } catch (error) {
+      // Antes este catch relançava, e um `throw` dentro de um `on:click` vira
+      // uma "unhandled rejection" no console — invisível para quem está usando
+      // a app. Toda falha daqui em diante aparece na tela.
       console.error('[Offline Page] Error downloading all categories:', error);
-      throw error;
+      mostrarErro(
+        'Erro ao baixar',
+        /** @type {any} */ (error)?.message ||
+          'Ocorreu um erro ao baixar os PDFs. Verifique a conexão e tente novamente.'
+      );
     }
+  }
+
+  /**
+   * Uma só porta para tudo que precisa aparecer na tela.
+   * @param {string} titulo
+   * @param {string} mensagem
+   */
+  function mostrarErro(titulo, mensagem) {
+    errorTitle = titulo;
+    errorMessage = mensagem;
+    showErrorModal = true;
   }
 
   /**
@@ -1593,14 +1658,17 @@
       {/if}
 
 
+    <!-- O erro aparece sempre que existe.
+         Até 2026-09-02 havia aqui uma condição a mais: só mostrava se alguma
+         categoria já tivesse `missing > 0` nas estatísticas. Num aparelho
+         limpo, que nunca calculou estatística nenhuma, esse mapa está vazio —
+         então a única mensagem de erro da tela ficava escondida exatamente
+         para quem estava a tentar baixar pela primeira vez. -->
     {#if state.error}
-      {@const hasActualMissing = Object.values(categoryStats).some(s => s && s.missing > 0)}
-      {#if hasActualMissing}
-        <div class="error-box">
-          <AlertCircle class="w-5 h-5 error-icon" />
-          <p class="error-text">{state.error}</p>
-        </div>
-      {/if}
+      <div class="error-box">
+        <AlertCircle class="w-5 h-5 error-icon" />
+        <p class="error-text">{state.error}</p>
+      </div>
     {/if}
   </div>
 </div>

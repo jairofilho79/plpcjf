@@ -75,30 +75,32 @@ function error(...args) {
 /**
  * Assets de `static/` que fazem parte do shell.
  *
- * `/pdfjs/` fica de fora inteiro: são 3,1 MB de módulos legados que o app não
- * consome mais (o PDF.js real vem do npm pelo Vite e cai em `/_app/immutable/`,
- * já coberto por `build`). O único arquivo de lá que o app pede em runtime é a
- * folha de estilo do viewer, reintroduzida logo abaixo. Pré-cachear o diretório
- * inteiro reintroduziria exatamente o peso que o achado #03 removeu.
+ * `/pdfjs/` entra inteiro. Quando o achado #03 o excluiu, o diretório tinha
+ * 3,1 MB de módulos legados; depois disso `scripts/copy-pdfjs-viewer.mjs`
+ * passou a copiar só o que o leitor pede em runtime — a folha de estilo do
+ * viewer e as ~15 imagens que ela referencia, 160 KB no total. Excluir esses
+ * 160 KB custava mais do que economizava: sem eles o leitor abre offline com
+ * ícones, cursores e spinner quebrados, e era essa falta que a app tentava
+ * remediar abrindo o leitor numa aba nova no meio do download (ver
+ * `prepararLeitorOffline`).
  *
- * PDFs de exemplo em `static/` também ficam de fora: são servidos pela rota
- * 'pdf', que usa o cache de PDFs, não o do app.
+ * O PDF.js de verdade continua vindo do npm pelo Vite, em `/_app/immutable/`,
+ * já coberto por `build`.
+ *
+ * PDFs de exemplo em `static/` ficam de fora: são servidos pela rota 'pdf',
+ * que usa o cache de PDFs, não o do app.
  */
 const STATIC_SHELL = files.filter(
   (f) =>
-    !f.startsWith('/pdfjs/') &&
     !f.startsWith('/pdfs/') &&
     !f.endsWith('.pdf') &&
     !f.endsWith('.map') &&
     !f.endsWith('.d.mts')
 );
 
-/** Única folha de `/pdfjs/` que o leitor realmente carrega (leitor/+page.svelte). */
-const PDFJS_VIEWER_CSS = '/pdfjs/web/pdf_viewer.css';
-
 /** Tudo que precisa existir para o app abrir offline logo após o primeiro load. */
 const PRECACHE_CRITICAL = [...build];
-const PRECACHE_BEST_EFFORT = [...STATIC_SHELL, PDFJS_VIEWER_CSS];
+const PRECACHE_BEST_EFFORT = [...STATIC_SHELL];
 
 /**
  * O `addAll` é tudo-ou-nada: se um asset opcional der 404, a instalação inteira
