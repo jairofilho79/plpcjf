@@ -15,6 +15,34 @@
  *                                                .btn.nav-mode-toggle, .btn.layer-toggle,
  *                                                .fab-exit-fullscreen
  */
+/**
+ * Abre um material com mais de uma pagina.
+ *
+ * A maioria das cifras tem uma pagina so, e num documento de uma pagina os
+ * beats de navegacao nao mostram nada - ensinar a virar pagina sem pagina para
+ * virar e nao ensinar nada. Tenta os materiais do resultado ate encontrar um
+ * com duas ou mais, e fica no ultimo que abriu se nenhum servir.
+ */
+async function abrirComVariasPaginas(p, ui, maxTentativas = 4) {
+  const total = Math.min(maxTentativas, await p.locator('.louvor-card .material-open').count());
+
+  for (let i = 0; i < total; i++) {
+    await ui.tocar(`.louvor-card .material-open >> nth=${i}`);
+    await ui.esperar('.toolbar', 45000);
+    await ui.pausa(2600);   // o PDF precisa de carregar antes de saber o total
+
+    const indicador = await p.locator('.indicator .total').innerText().catch(() => '');
+    const paginas = parseInt(indicador.replace(/[^0-9]/g, ''), 10);
+    if (Number.isFinite(paginas) && paginas > 1) return paginas;
+
+    if (i < total - 1) {
+      await p.goBack({ waitUntil: 'networkidle', timeout: 45000 }).catch(() => {});
+      await ui.esperar('.louvor-card', 30000);
+    }
+  }
+  return 1;
+}
+
 export default {
   id: '01-uso-basico',
   titulo: 'Uso básico da aplicação',
@@ -47,7 +75,7 @@ export default {
       fala: 'Ou digite parte do nome, se você não lembrar o número.',
       zoom: null,
       acao: async (p, ui) => {
-        await ui.escrever('[aria-label="Buscar louvor por nome ou número"]', 'senhor');
+        await ui.escrever('[aria-label="Buscar louvor por nome ou número"]', 'aleluia');
         await ui.pausa(900);
       }
     },
@@ -94,9 +122,15 @@ export default {
       fala: 'Toque no material e o louvor abre no leitor.',
       zoom: null,
       acao: async (p, ui) => {
-        await ui.tocar('.material-open, .louvor-info');
-        await ui.esperar('.toolbar', 45000);
-        await ui.pausa(1200);
+        // `.material-open` e nunca um seletor com virgula: no cartao agrupado o
+        // `.louvor-info` e so o cabecalho, sem `href` e sem navegacao, e vem
+        // ANTES no DOM. Era o que fazia o leitor nunca abrir.
+        //
+        // E procura um material com mais de uma pagina: a maioria das cifras
+        // tem uma so, e nela os beats de navegacao de pagina nao mostrariam
+        // nada. Ensinar a virar pagina num documento de uma pagina e nao
+        // ensinar nada.
+        await abrirComVariasPaginas(p, ui);
       }
     },
     {
@@ -156,17 +190,6 @@ export default {
       }
     },
     {
-      id: 'leitor-camadas',
-      fala: 'No tablet em pé a barra não cabe inteira. O botão com o número troca de camada e mostra o resto dos controles.',
-      zoom: { seletor: '.btn.layer-toggle', margem: 30 },
-      acao: async (p, ui) => {
-        if (await ui.existe('.btn.layer-toggle')) {
-          await ui.tocar('.btn.layer-toggle');
-          await ui.pausa(900);
-        }
-      }
-    },
-    {
       id: 'leitor-modo',
       fala: 'Este botão troca entre rolar continuamente e virar uma página de cada vez.',
       zoom: { seletor: '.btn.nav-mode-toggle', margem: 30 },
@@ -183,9 +206,9 @@ export default {
       fala: 'Você também pode arrastar o dedo para o lado para virar a página, e juntar ou afastar dois dedos para aproximar.',
       zoom: null,
       acao: async (p, ui) => {
-        await ui.deslizar('#viewerContainer, .pdf-container, body', 'esquerda');
+        await ui.deslizar('#viewerContainer', 'esquerda');
         await ui.pausa(500);
-        await ui.pincar('#viewerContainer, .pdf-container, body', 1.6);
+        await ui.pincar('#viewerContainer', 1.6);
       }
     },
     {
@@ -193,7 +216,7 @@ export default {
       fala: 'Toque e segure na página para esconder a barra e usar a tela toda. O botão no canto traz a barra de volta.',
       zoom: null,
       acao: async (p, ui) => {
-        await ui.toqueLongo('#viewerContainer, .pdf-container, body', 800);
+        await ui.toqueLongo('#viewerContainer', 800);
         await ui.pausa(1200);
         if (await ui.existe('.fab-exit-fullscreen')) {
           await ui.tocar('.fab-exit-fullscreen');

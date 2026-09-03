@@ -98,7 +98,7 @@ export default {
         await p.goto('https://plpcg.com/', { waitUntil: 'networkidle', timeout: 60000 }).catch(() => {});
         await ui.escrever('[aria-label="Buscar louvor por nome ou número"]', '218');
         await ui.esperar('.louvor-card', 30000);
-        await ui.tocar('.louvor-card .material-open, .louvor-card .louvor-info');
+        await ui.tocarPrimeiro(['.louvor-card .material-open', '.louvor-card .louvor-info']);
         await ui.pausa(2500);
         await contexto.setOffline(true);
         await ui.pausa(1200);

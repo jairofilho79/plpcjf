@@ -60,6 +60,25 @@ export function criarGestos(page, cliente) {
     },
 
     /**
+     * Toca no primeiro seletor da lista que exista na pagina.
+     *
+     * Nao e o mesmo que um seletor CSS com virgula. `.material-open,
+     * .louvor-info` escolhe quem vier primeiro no DOM, e no cartao agrupado o
+     * primeiro e o cabecalho `.louvor-info`, que nao tem `href` nem navega -
+     * era o que fazia o leitor nunca abrir no video 1. Aqui a ORDEM DA LISTA e
+     * que manda, e nao a ordem do documento.
+     */
+    async tocarPrimeiro(seletores) {
+      for (const seletor of seletores) {
+        if (await this.existe(seletor)) {
+          await this.tocar(seletor);
+          return seletor;
+        }
+      }
+      throw new Error(`nenhum destes existe: ${seletores.join(', ')}`);
+    },
+
+    /**
      * O `longPressDuration` do app e 500 ms; 750 da margem folgada sem parecer
      * que o dedo ficou preso.
      */
