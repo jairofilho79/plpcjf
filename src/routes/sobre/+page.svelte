@@ -24,6 +24,22 @@
   function marcarFalha(id) {
     falhou = { ...falhou, [id]: true };
   }
+
+  /**
+   * Começa com a faixa de legenda desligada.
+   *
+   * Tirar o `default` do `<track>` não chega: no iOS, quem tiver as legendas
+   * ligadas nas definições de acessibilidade vê o navegador activar a faixa
+   * sozinho. Como o vídeo já traz a legenda queimada, ficariam duas por cima
+   * uma da outra. Isto corre uma vez, ao carregar — quem quiser ligá-las no
+   * player continua a poder.
+   *
+   * @param {Event} evento
+   */
+  function desligarLegendas(evento) {
+    const video = /** @type {HTMLVideoElement} */ (evento.currentTarget);
+    for (const faixa of video.textTracks) faixa.mode = 'disabled';
+  }
 </script>
 
 <svelte:head>
@@ -88,12 +104,18 @@
               poster="{BASE}/{video.id}.jpg"
               src="{BASE}/{video.id}.mp4"
               on:error={() => marcarFalha(video.id)}
+              on:loadedmetadata={desligarLegendas}
             >
+              <!--
+                Sem `default`: a legenda já vem queimada no vídeo, e a faixa
+                activa desenhava uma segunda por cima da primeira. Ela fica
+                disponível para quem a quiser ligar no player, mas começa
+                desligada.
+              -->
               <track
                 kind="captions"
                 srclang="pt-BR"
                 label="Português"
-                default
                 src="{BASE}/{video.id}.vtt"
               />
             </video>
