@@ -40,9 +40,19 @@ export async function legendar(idRoteiro) {
     linhas: quebrar(b.fala, LARGURA_CARACTERES)
   }));
 
+  // Cortar a legenda faz ela dizer MENOS do que a voz, e o espectador que
+  // depende dela perde informacao sem saber. Isto ja passou por aviso duas
+  // vezes e chegou a dois videos montados - por isso agora e falha, e a
+  // montagem nem corre.
   const compridas = uteis.filter((b) => quebrar(b.fala, LARGURA_CARACTERES).at(-1)?.endsWith('…'));
-  for (const b of compridas) {
-    process.stderr.write(`  aviso: a fala de "${b.id}" nao cabe em 3 linhas e foi cortada na legenda\n`);
+  if (compridas.length) {
+    const detalhe = compridas
+      .map((b) => `  "${b.id}" (${b.fala.length} caracteres): ${b.fala}`)
+      .join('\n');
+    throw new Error(
+      `${compridas.length} fala(s) não caibem na legenda e seriam cortadas.\n` +
+      `Encurte-as ou divida o beat em dois:\n${detalhe}`
+    );
   }
 
   await correr('python3', ['video/legenda_png.py'], JSON.stringify({

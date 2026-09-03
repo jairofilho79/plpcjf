@@ -170,3 +170,28 @@ describe('teto de audio', () => {
     assert.ok(f.includes('level=disabled'), 'o auto-nível do limitador está desligado');
   });
 });
+
+describe('teto de zoom', () => {
+  test('um alvo minusculo nao amplia mais que o teto', async () => {
+    const { fator, ZOOM_MAXIMO } = await import('./filtergraph.mjs');
+    // Um botão da barra do leitor: 78x96 num quadro de 820x1180 pedia 10,5x.
+    // O quadro ficava com o botão gigante e página em branco em volta, e o
+    // espectador perdia a noção de onde aquele botão fica na tela.
+    assert.equal(fator({ x: 742, y: 0, w: 78, h: 96 }, 820, 1180), ZOOM_MAXIMO);
+  });
+
+  test('um alvo de tamanho medio continua a mandar', async () => {
+    const { fator } = await import('./filtergraph.mjs');
+    assert.equal(fator({ x: 0, y: 0, w: 410, h: 590 }, 820, 1180), 2);
+  });
+
+  test('o grafo nunca escreve um fator acima do teto', () => {
+    const tl = {
+      ...TL,
+      beats: [{ id: 'a', fala: 'x', inicio: 0, fim: 4, zoom: { x: 700, y: 0, w: 78, h: 96 } }]
+    };
+    const f = construirGrafo({ ...tl, largura: 820, altura: 1180 }, OPC).filtro;
+    assert.ok(f.includes('2.200'));
+    assert.ok(!/1[0-9]\.\d{3}/.test(f), 'nenhum fator de dois dígitos');
+  });
+});

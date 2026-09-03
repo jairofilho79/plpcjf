@@ -21,6 +21,16 @@ function encadear(janelas, valorPadrao) {
 export const ZOOM_MINIMO = 1.08;
 
 /**
+ * Acima disto o zoom deixa de mostrar e passa a esconder.
+ *
+ * Sem tecto, um botao pequeno da barra do leitor pedia 10,5x: o quadro ficava
+ * com o botao gigante e a pagina em branco em volta, e o espectador perdia a
+ * nocao de onde aquele botao fica. O objetivo do zoom e apontar, nao isolar -
+ * a vizinhanca do alvo faz parte da explicacao.
+ */
+export const ZOOM_MAXIMO = 2.2;
+
+/**
  * Fator de zoom de uma regiao: o menor entre o que a largura e a altura
  * permitem.
  *
@@ -32,7 +42,7 @@ export const ZOOM_MINIMO = 1.08;
  * devolve falso e o beat mostra a pagina inteira, que tambem e informacao.
  */
 export function fator(zoom, largura, altura) {
-  return Math.min(largura / zoom.w, altura / zoom.h);
+  return Math.min(largura / zoom.w, altura / zoom.h, ZOOM_MAXIMO);
 }
 
 export function temZoom(zoom, largura, altura) {

@@ -81,7 +81,7 @@ export default {
     },
     {
       id: 'importar',
-      fala: 'Se a igreja não tem internet nenhuma, use Importar pacote offline: alguém baixa o arquivo em casa, leva num pendrive, e a aplicação carrega tudo sem rede.',
+      fala: 'Sem internet nenhuma na igreja, use Importar pacote offline: alguém baixa em casa, leva num pendrive, e a aplicação carrega tudo sem rede.',
       zoom: { seletor: '.action-buttons', margem: 14 },
       acao: async (p, ui) => {
         await ui.pausa(1300);

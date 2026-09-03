@@ -54,7 +54,7 @@ export default {
     },
     {
       id: 'espaco-ios',
-      fala: 'Em iPhone e iPad o navegador limita quanto um site pode guardar, então lá o download pode parar antes do fim. Se isso acontecer, toque de novo em Baixar PDFs faltantes.',
+      fala: 'Em iPhone e iPad o navegador limita o espaço, e o download pode parar antes do fim. Se acontecer, toque de novo em Baixar PDFs faltantes.',
       zoom: { seletor: '.action-buttons', margem: 14 },
       acao: async (p, ui) => {
         await ui.pausa(700);
