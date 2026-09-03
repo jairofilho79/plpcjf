@@ -151,7 +151,13 @@ async function serveVideo(pathname, platform, range) {
       'Cache-Control': 'public, max-age=86400, stale-while-revalidate=604800'
     };
 
-    if (object.range && object.size !== undefined) {
+    // 206 SÓ quando alguém pediu um intervalo.
+    //
+    // O R2 preenche `object.range` mesmo num `get` sem intervalo nenhum, então
+    // olhar só para ele fazia um GET simples responder 206 — que é HTTP
+    // incorreto: o 206 é a resposta a um `Range`, e proxies ou players mais
+    // rígidos podem recusá-lo. Quem manda é o pedido, não a resposta do R2.
+    if (pedido && object.range && object.size !== undefined) {
       const inicio = object.range.offset ?? 0;
       const comprimento = object.range.length ?? object.size - inicio;
       cabecalhos['Content-Range'] = `bytes ${inicio}-${inicio + comprimento - 1}/${object.size}`;
