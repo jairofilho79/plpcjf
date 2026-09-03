@@ -19,7 +19,8 @@
     "test": "node --test $(find src -name '*.test.js')",
     "test:offline-bundle": "node --test src/lib/offline/import/bundleValidation.test.js src/lib/offline/import/OfflineBundleImporter.rollback.test.js src/lib/offline/import/zipCdReader.test.js",
     "musica": "python3 video/musica.py",
-    "test:video": "node --test $(find video -name '*.test.js')"
+    "test:video": "node --test $(find video -name '*.test.js')",
+    "narrar": "node video/narrar.mjs"
   },
   "dependencies": {
     "@sveltejs/adapter-cloudflare": "^4.3.1",
