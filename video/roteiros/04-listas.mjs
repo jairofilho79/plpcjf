@@ -18,6 +18,41 @@
  *  - "Compartilhar" escreve na area de transferencia; a permissao ja e
  *    concedida em `gravar.mjs`.
  */
+/** Os títulos dos chips, na ordem em que estão. */
+async function ordemDosChips(p) {
+  return p.locator('.carousel-chip .chip-title').allInnerTexts();
+}
+
+/**
+ * Arrasta o primeiro chip até à posicao do chip `destino`.
+ *
+ * Distancia MEDIDA e nao fixa. A primeira versao arrastava 170 px para a
+ * direita e o gesto nao reordenava nada: `chipPointerReorder.js` abandona o
+ * arrasto quando o ponteiro sai da lista por mais de `DRAG_CANCEL_MARGIN_PX`
+ * (48 px), e com tres chips numa lista curta 170 px passavam disso. O video
+ * mostrava um gesto que nao fazia nada.
+ *
+ * O eixo tambem nao e livre: a lista e horizontal encolhida e VERTICAL
+ * expandida (`isExpanded ? 'y' : 'x'` em CarouselChips.svelte), entao arrastar
+ * no eixo errado tambem nao reordena.
+ */
+async function arrastarChip(p, ui, destino, eixo) {
+  const pegas = p.locator('[title="Arraste para reordenar"]');
+  if ((await pegas.count()) <= destino) return false;
+
+  const de = await pegas.nth(0).boundingBox();
+  const para = await pegas.nth(destino).boundingBox();
+  if (!de || !para) return false;
+
+  const dx = eixo === 'x' ? para.x - de.x : 0;
+  const dy = eixo === 'y' ? para.y - de.y : 0;
+  await ui.arrastar('[title="Arraste para reordenar"]', dx, dy, 28);
+  return true;
+}
+
+/** Guarda a ordem antes do arrasto, para o beat poder verificar que mudou. */
+let ordemAntes = [];
+
 export default {
   id: '04-listas',
   titulo: 'Uso das Listas',
@@ -65,12 +100,48 @@ export default {
     },
     {
       id: 'reordenar',
-      fala: 'Para mudar a ordem, arraste o louvor com o dedo até o lugar certo.',
+      fala: 'Para mudar a ordem, arraste o louvor pela alça até o lugar certo.',
       zoom: null,
       acao: async (p, ui) => {
-        if (await ui.existe('[title="Arraste para reordenar"]')) {
-          await ui.arrastar('[title="Arraste para reordenar"]', 170, 0);
-        }
+        ordemAntes = await ordemDosChips(p);
+        await arrastarChip(p, ui, 1, 'x');
+        await ui.pausa(700);
+      },
+      verificar: async (p) => {
+        const depois = await ordemDosChips(p);
+        return (
+          JSON.stringify(depois) !== JSON.stringify(ordemAntes) ||
+          `a ordem nao mudou: ${ordemAntes.join(' | ')}`
+        );
+      }
+    },
+    {
+      id: 'expandir',
+      fala: 'Se a lista ficar comprida, toque em Expandir para ver todos os louvores um debaixo do outro.',
+      zoom: null,
+      acao: async (p, ui) => {
+        await ui.tocarPrimeiro(['[title="Expandir lista"]']);
+        await ui.pausa(1200);
+      },
+      verificar: async (p) =>
+        (await p.locator('.carousel-chips-list.expanded').count()) > 0 ||
+        'a lista nao expandiu',
+    },
+    {
+      id: 'reordenar-expandido',
+      fala: 'Expandida, a lista também reordena: arraste a alça para cima ou para baixo.',
+      zoom: null,
+      acao: async (p, ui) => {
+        ordemAntes = await ordemDosChips(p);
+        await arrastarChip(p, ui, 1, 'y');
+        await ui.pausa(700);
+      },
+      verificar: async (p) => {
+        const depois = await ordemDosChips(p);
+        return (
+          JSON.stringify(depois) !== JSON.stringify(ordemAntes) ||
+          `a ordem nao mudou no modo expandido: ${ordemAntes.join(' | ')}`
+        );
       }
     },
     {
@@ -78,6 +149,12 @@ export default {
       fala: 'Para tirar um louvor da lista, toque no xis dele.',
       zoom: null,
       acao: async (p, ui) => {
+        // Encolhe de volta antes de seguir: os beats seguintes falam de botões
+        // da barra, e é assim que a maioria vai ver a tela.
+        if (await ui.existe('[title="Encolher lista"]')) {
+          await ui.tocar('[title="Encolher lista"]');
+          await ui.pausa(700);
+        }
         if (await ui.existe('[title="Remover"]')) {
           await ui.tocar('[title="Remover"]');
           await ui.pausa(900);
