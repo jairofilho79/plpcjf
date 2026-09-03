@@ -113,7 +113,11 @@ export default {
     },
     {
       id: 'filtros',
-      fala: 'Se vier resultado demais, abra Filtros e escolha só o material que você quer: partitura, cifra ou gestos em gravura.',
+      // O estado do chip confundiu gente de verdade, e o vídeo não explicava.
+      // Activo é preenchido de dourado, com relevo; inactivo é só o contorno,
+      // vazio (`.filter-chip.active` em CategoryFilters.svelte:239). Dizer
+      // "amarelo" não bastava — é preciso dizer o que cada estado FAZ.
+      fala: 'Nos Filtros, o material preenchido de dourado está entrando na pesquisa. Toque nele e fica só o contorno: aquele material sai dos resultados.',
       zoom: null,
       acao: async (p, ui) => {
         await ui.rolar(-900);

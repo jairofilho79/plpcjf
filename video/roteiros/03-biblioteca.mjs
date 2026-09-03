@@ -32,7 +32,7 @@ export default {
     },
     {
       id: 'material',
-      fala: 'Em Material você escolhe o que quer ver: partitura, cifra ou gestos em gravura.',
+      fala: 'Em Material, o que está preenchido de dourado entra na pesquisa. Toque em Cifra e repare: ela fica só com o contorno e sai dos resultados.',
       zoom: { seletor: '[aria-label="Filtrar por categoria"]', margem: 12 },
       acao: async (p, ui) => {
         await ui.tocar('[aria-label="Categoria Cifra"]');
@@ -40,7 +40,7 @@ export default {
     },
     {
       id: 'material-so-um',
-      fala: 'Toque e segure em um material para deixar somente ele marcado. Toque em Todos para voltar a ver tudo.',
+      fala: 'Para deixar só um material entrando, toque e segure nele: os outros se apagam de uma vez. Todos acende tudo de novo.',
       zoom: { seletor: '[aria-label="Filtrar por categoria"]', margem: 12 },
       acao: async (p, ui) => {
         await ui.toqueLongo('[aria-label="Categoria Partitura"]');
@@ -50,7 +50,7 @@ export default {
     },
     {
       id: 'arranjo',
-      fala: 'Em Arranjo você filtra pela coletânea: avulsos diversos, coletânea de adultos, coletânea das CIAs e por aí vai.',
+      fala: 'O Arranjo funciona igual: preenchido entra na pesquisa, vazio fica de fora. É assim que você separa por coletânea.',
       zoom: { seletor: '[aria-label="Filtrar por arranjo"]', margem: 12 },
       acao: async (p, ui) => {
         await ui.tocar('[aria-label="Arranjo Coletânea Adultos"]');
