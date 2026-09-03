@@ -41,26 +41,41 @@ async function aguardar() {
 }
 
 async function principal(ids) {
-  await aguardar();
-
+  const limite = Date.now() + JANELA_MS;
+  const pendentes = [...ids];
   const feitos = [];
-  const falhados = [];
-  for (const id of ids) {
-    try {
-      process.stderr.write(`\n[${agora()}] narrando ${id}\n`);
-      await narrar(id);
-      feitos.push(id);
-    } catch (e) {
-      // Um roteiro que falha não pode levar consigo os que ainda faltam: a voz
-      // dos outros fica em cache e o trabalho não se perde.
-      process.stderr.write(`[${agora()}] ${id} falhou: ${e.message.split('\n')[0]}\n`);
-      falhados.push(id);
+
+  // Insiste até conseguir, e não só até o serviço responder uma vez.
+  //
+  // A primeira versão sondava, encontrava o serviço de pé, e chamava a
+  // narração — que falhava a meio porque o serviço tinha voltado a cair, e aí
+  // desistia. Num serviço que oscila de minuto a minuto isso é a diferença
+  // entre funcionar e não funcionar. Cada volta aproveita tudo o que já ficou
+  // em cache na volta anterior, então repetir é barato.
+  while (pendentes.length && Date.now() < limite) {
+    await aguardar();
+
+    for (const id of [...pendentes]) {
+      try {
+        process.stderr.write(`\n[${agora()}] narrando ${id}\n`);
+        await narrar(id);
+        feitos.push(id);
+        pendentes.splice(pendentes.indexOf(id), 1);
+      } catch (e) {
+        process.stderr.write(`[${agora()}] ${id} não completou: ${e.message.split('\n')[0]}\n`);
+      }
+    }
+
+    if (pendentes.length) {
+      const faltam = Math.round((limite - Date.now()) / 60000);
+      process.stderr.write(`[${agora()}] ainda faltam ${pendentes.join(', ')} — nova volta (desisto em ${faltam} min)\n`);
+      await new Promise((r) => setTimeout(r, INTERVALO_MS));
     }
   }
 
   process.stderr.write(`\n[${agora()}] narrados: ${feitos.join(', ') || 'nenhum'}\n`);
-  if (falhados.length) process.stderr.write(`[${agora()}] falharam: ${falhados.join(', ')}\n`);
-  return { feitos, falhados };
+  if (pendentes.length) process.stderr.write(`[${agora()}] não completaram: ${pendentes.join(', ')}\n`);
+  return { feitos, falhados: pendentes };
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
