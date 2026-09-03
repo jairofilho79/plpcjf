@@ -89,10 +89,12 @@ async function viaOpenRouter(texto, voz, sistema = SISTEMA) {
   if (pcmBase64.length === 0) throw new Error('OpenRouter não devolveu áudio nenhum');
 
   if (transcricao && excedeu(texto, transcricao)) {
-    throw new Error(
+    const e = new Error(
       `o modelo não leu o que foi pedido (divergência ${divergencia(texto, transcricao).toFixed(2)}).\n` +
       `  pedido: ${texto}\n  dito:   ${transcricao}`
     );
+    e.deConteudo = true;   // é isto que faz a repetição escalar o prompt
+    throw e;
   }
 
   return Buffer.concat(pcmBase64.map((b) => Buffer.from(b, 'base64')));
@@ -121,22 +123,37 @@ export async function sintetizar(texto, { provedor, voz, destino, tentativas = 3
     await viaMacos(texto, voz, destino);
     return;
   }
-  // A repetição escala em vez de repetir: com `temperature: 0` a chamada é
-  // determinística, então pedir de novo exatamente o mesmo daria exatamente o
-  // mesmo. Quem falha no prompt normal passa ao insistente.
-  const degraus = [SISTEMA, SISTEMA_INSISTENTE];
+  // Duas falhas diferentes, dois remédios diferentes.
+  //
+  // Falha de CONTEÚDO (o modelo não leu o que foi pedido): com
+  // `temperature: 0` a chamada é determinística, então repetir igual daria
+  // igual — só escalando o prompt é que muda alguma coisa.
+  //
+  // Falha de REDE (o pedido pendurou até ao teto, ou o servidor recusou): o
+  // prompt não tem culpa nenhuma. Escalá-lo seria tratar a doença errada;
+  // o que serve é esperar um pouco e pedir o mesmo outra vez.
+  let sistema = SISTEMA;
   let ultima;
+
   for (let i = 0; i < tentativas; i++) {
-    const sistema = degraus[Math.min(i, degraus.length - 1)];
     try {
       const pcm = await viaOpenRouter(texto, voz, sistema);
       await escreverWav(pcm, destino);
       return;
     } catch (e) {
       ultima = e;
-      if (i < tentativas - 1) {
-        const proximo = i + 1 < degraus.length ? 'com prompt reforçado' : 'de novo';
-        process.stderr.write(`    tentativa ${i + 1} falhou (${e.message.split('\n')[0]}), tentando ${proximo}\n`);
+      if (i >= tentativas - 1) break;
+
+      if (e.deConteudo) {
+        sistema = SISTEMA_INSISTENTE;
+        process.stderr.write(`    tentativa ${i + 1}: o modelo improvisou, repetindo com prompt reforçado\n`);
+      } else {
+        const espera = 2000 * (i + 1);
+        process.stderr.write(
+          `    tentativa ${i + 1} falhou na rede (${e.message.split('\n')[0]}), ` +
+          `repetindo em ${espera / 1000} s\n`
+        );
+        await new Promise((r) => setTimeout(r, espera));
       }
     }
   }

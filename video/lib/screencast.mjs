@@ -1,5 +1,27 @@
 import { writeFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
+import { correr } from './pcm.mjs';
+
+/**
+ * Mede um quadro de verdade, em vez de supor a dimensao.
+ *
+ * `maxWidth`/`maxHeight` do screencast sao em pixels CSS e o filtro IGNORA o
+ * `deviceScaleFactor`: pedir 1640x2360 com viewport de 820x1180 devolve
+ * 820x1180. Supor em vez de medir custou um video inteiro sem legenda - os
+ * PNGs sairam ao dobro do tamanho, e o rodape, onde a legenda mora, caia fora
+ * do quadro. Quem manda e o ficheiro.
+ */
+async function medirQuadro(quadros, dir) {
+  if (quadros.length === 0) return null;
+  const saida = await correr('ffprobe', [
+    '-v', 'error', '-select_streams', 'v:0',
+    '-show_entries', 'stream=width,height', '-of', 'csv=p=0',
+    join(dir, quadros[0].ficheiro)
+  ]);
+  const [largura, altura] = saida.trim().split(',').map(Number);
+  if (!largura || !altura) throw new Error(`nao consegui medir ${quadros[0].ficheiro}`);
+  return { largura, altura };
+}
 
 /**
  * Constroi o ficheiro do demuxer `concat` a partir dos quadros carimbados.
@@ -86,7 +108,7 @@ export async function colectar(page, dir, { largura = 1640, altura = 2360 } = {}
       const fim = Date.now() / 1000;
       const texto = construirConcat(quadros, fim);
       await writeFile(join(dir, 'quadros.txt'), texto);
-      return { total: quadros.length, fim };
+      return { total: quadros.length, fim, dimensao: await medirQuadro(quadros, dir) };
     }
   };
 }

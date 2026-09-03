@@ -15,50 +15,69 @@ import os
 from PIL import Image, ImageDraw, ImageFont
 
 FONTE = '/System/Library/Fonts/Supplemental/Arial Bold.ttf'
-CORPO = 46               # no mestre de 1640 px de largura
+
+# Tudo em fracao da dimensao do quadro, e nao em pixels fixos.
+#
+# Numeros fixos so servem para um tamanho de quadro, e a dimensao real dos
+# quadros e medida na gravacao - nao e uma constante que se possa escrever
+# aqui. Foi supor essa constante que produziu um video inteiro com a legenda
+# desenhada ao dobro do tamanho, com o rodape fora do quadro.
+CORPO_FRACAO = 0.030      # do lado da largura do quadro
 ENTRELINHA = 1.34
-MARGEM_X = 34            # respiro interno da faixa
-MARGEM_Y = 22
-FUNDO_BASE = 130         # distancia do fundo do quadro ate a base da faixa
-RAIO = 18
+MARGEM_X_FRACAO = 0.021
+MARGEM_Y_FRACAO = 0.0095
+RAIO_FRACAO = 0.011
+
+# Distancia do fundo ate a base da faixa, em fracao da altura.
+#
+# 11% e nao 5%: a barra de controlos do player cobre o rodape do video quando
+# ele toca embutido numa pagina, e uma legenda escondida atras dela e uma
+# legenda que nao existe.
+FUNDO_FRACAO = 0.11
 
 
-def carregar_fonte():
+def carregar_fonte(largura):
+    corpo = max(12, round(largura * CORPO_FRACAO))
     try:
-        return ImageFont.truetype(FONTE, CORPO)
+        return ImageFont.truetype(FONTE, corpo), corpo
     except OSError:
         # Sem a fonte do sistema a legenda sairia minuscula e ilegivel; e
         # melhor falhar aqui do que entregar um video com legenda de 11 px.
         raise SystemExit(f'fonte nao encontrada: {FONTE}')
 
 
-def desenhar(largura, altura, linhas, saida, fonte):
+def desenhar(largura, altura, linhas, saida, fonte, corpo):
     img = Image.new('RGBA', (largura, altura), (0, 0, 0, 0))
     if not linhas:
         img.save(saida)
         return
 
     d = ImageDraw.Draw(img)
-    alturaLinha = int(CORPO * ENTRELINHA)
+    alturaLinha = int(corpo * ENTRELINHA)
+    margemX = round(largura * MARGEM_X_FRACAO)
+    margemY = round(largura * MARGEM_Y_FRACAO)
+    raio = max(4, round(largura * RAIO_FRACAO))
+    sombra = max(1, round(corpo / 14))
+
     larguras = [d.textbbox((0, 0), l, font=fonte)[2] for l in linhas]
 
-    caixaL = max(larguras) + MARGEM_X * 2
-    caixaA = alturaLinha * len(linhas) + MARGEM_Y * 2
+    caixaL = min(largura - margemX, max(larguras) + margemX * 2)
+    caixaA = alturaLinha * len(linhas) + margemY * 2
     caixaX = (largura - caixaL) // 2
-    caixaY = altura - FUNDO_BASE - caixaA
+    caixaY = altura - round(altura * FUNDO_FRACAO) - caixaA
 
     d.rounded_rectangle(
         [caixaX, caixaY, caixaX + caixaL, caixaY + caixaA],
-        radius=RAIO,
-        fill=(0, 0, 0, 158)
+        radius=raio,
+        fill=(0, 0, 0, 178)
     )
 
-    y = caixaY + MARGEM_Y
+    y = caixaY + margemY
     for linha, larg in zip(linhas, larguras):
         x = (largura - larg) // 2
         # Sombra: a faixa e translucida, entao o texto ainda passa por cima de
         # tudo o que a app desenhar por baixo dela.
-        d.text((x + 2, y + 2), linha, font=fonte, fill=(0, 0, 0, 200))
+        d.text((x + sombra, y + sombra), linha, font=fonte, fill=(0, 0, 0, 210))
         d.text((x, y), linha, font=fonte, fill=(255, 255, 255, 255))
         y += alturaLinha
 
@@ -68,11 +87,11 @@ def desenhar(largura, altura, linhas, saida, fonte):
 
 def main():
     pedido = json.load(sys.stdin)
-    fonte = carregar_fonte()
     largura = pedido['largura']
     altura = pedido['altura']
+    fonte, corpo = carregar_fonte(largura)
     for t in pedido['trabalhos']:
-        desenhar(largura, altura, t['linhas'], t['saida'], fonte)
+        desenhar(largura, altura, t['linhas'], t['saida'], fonte, corpo)
     print(len(pedido['trabalhos']))
 
 

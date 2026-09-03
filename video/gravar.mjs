@@ -16,7 +16,11 @@ import { colectar } from './lib/screencast.mjs';
 
 export const LARGURA = 820;
 export const ALTURA = 1180;
-export const ESCALA = 2;
+
+// `deviceScaleFactor` afeta a nitidez da pagina renderizada, mas NAO o tamanho
+// dos quadros que o screencast devolve - esses vem em pixels CSS. A dimensao
+// real e medida em `screencast.mjs` e so depois e que se sabe qual e o mestre.
+export const ESCALA_RENDER = 2;
 const FOLGA_MS = 600;
 
 export async function gravar(idRoteiro, { headless = true } = {}) {
@@ -35,7 +39,7 @@ export async function gravar(idRoteiro, { headless = true } = {}) {
   const navegador = await chromium.launch({ headless });
   const contexto = await navegador.newContext({
     viewport: { width: LARGURA, height: ALTURA },
-    deviceScaleFactor: ESCALA,
+    deviceScaleFactor: ESCALA_RENDER,
     hasTouch: true,
     isMobile: true,
     locale: 'pt-BR',
@@ -60,10 +64,7 @@ export async function gravar(idRoteiro, { headless = true } = {}) {
     if (roteiro.preparar) await roteiro.preparar(page, ui, contexto);
     await page.waitForTimeout(700);
 
-    const captura = await colectar(page, dirQuadros, {
-      largura: LARGURA * ESCALA,
-      altura: ALTURA * ESCALA
-    });
+    const captura = await colectar(page, dirQuadros, { largura: LARGURA, altura: ALTURA });
     await page.waitForTimeout(500); // deixa o primeiro quadro chegar antes do 1o beat
 
     for (const beat of roteiro.beats) {
@@ -76,15 +77,20 @@ export async function gravar(idRoteiro, { headless = true } = {}) {
         avisos.push(`beat "${beat.id}" falhou: ${e.message.split('\n')[0]}`);
       }
 
-      const zoom = await resolverZoom(page, beat, avisos);
+      beat.__zoomCru = await resolverZoomCru(page, beat, avisos);
 
       const restante = falas[beat.id].duracao * 1000 + FOLGA_MS - (Date.now() / 1000 - inicio) * 1000;
       if (restante > 0) await page.waitForTimeout(restante);
-      beats.push({ id: beat.id, fala: beat.fala, inicio, fim: Date.now() / 1000, zoom });
+      beats.push({ id: beat.id, fala: beat.fala, inicio, fim: Date.now() / 1000, zoom: beat.__zoomCru });
     }
 
-    const { total, fim } = await captura.parar();
+    const { total, fim, dimensao } = await captura.parar();
     if (total === 0) throw new Error('o screencast nao entregou quadro nenhum');
+    if (!dimensao) throw new Error('nao consegui medir a dimensao dos quadros');
+
+    // Quanto o quadro capturado difere do layout em pixels CSS. Hoje da 1,
+    // mas medir e barato e supor ja custou um video sem legenda.
+    const fatorQuadro = dimensao.largura / LARGURA;
 
     const origem = captura.quadros.length
       ? Math.min(...captura.quadros.map((q) => q.t))
@@ -95,14 +101,14 @@ export async function gravar(idRoteiro, { headless = true } = {}) {
       titulo: roteiro.titulo,
       origem,
       duracao: Number((fim - origem).toFixed(3)),
-      largura: LARGURA * ESCALA,
-      altura: ALTURA * ESCALA,
+      largura: dimensao.largura,
+      altura: dimensao.altura,
       beats: beats.map((b) => ({
         id: b.id,
         fala: b.fala,
         inicio: Number((b.inicio - origem).toFixed(3)),
         fim: Number((b.fim - origem).toFixed(3)),
-        zoom: b.zoom
+        zoom: escalarZoom(b.zoom, fatorQuadro, dimensao)
       })),
       avisos
     };
@@ -120,13 +126,18 @@ export async function gravar(idRoteiro, { headless = true } = {}) {
 }
 
 /**
- * Resolve a regiao de zoom em pixels do mestre.
+ * Resolve a regiao de zoom em pixels CSS, tal como o `boundingBox` a devolve.
+ *
+ * Fica em pixels CSS de proposito: converter para as coordenadas do quadro so
+ * e possivel depois de o quadro ser medido, e isso so acontece no fim da
+ * gravacao. Converter antes obrigaria a supor o fator, que foi exatamente o
+ * erro que apagou a legenda do primeiro video.
  *
  * Um alvo que nao resolve nao derruba a gravacao: cai para "sem zoom" e deixa
  * aviso. Perder o zoom de um beat e um defeito pequeno; perder uma gravacao de
  * quatro minutos por causa de um seletor e um defeito grande.
  */
-async function resolverZoom(page, beat, avisos) {
+async function resolverZoomCru(page, beat, avisos) {
   if (!beat.zoom) return null;
   try {
     const alvo = page.locator(beat.zoom.seletor).first();
@@ -140,19 +151,29 @@ async function resolverZoom(page, beat, avisos) {
       return null;
     }
     const m = beat.zoom.margem ?? 24;
-    const x = Math.max(0, (caixa.x - m) * ESCALA);
-    const y = Math.max(0, (caixa.y - m) * ESCALA);
-    const w = Math.min(LARGURA * ESCALA - x, (caixa.width + m * 2) * ESCALA);
-    const h = Math.min(ALTURA * ESCALA - y, (caixa.height + m * 2) * ESCALA);
-    if (w < 80 || h < 80) {
-      avisos.push(`zoom de "${beat.id}": regiao pequena demais (${Math.round(w)}x${Math.round(h)})`);
-      return null;
-    }
-    return { x: Math.round(x), y: Math.round(y), w: Math.round(w), h: Math.round(h) };
+    const x = Math.max(0, caixa.x - m);
+    const y = Math.max(0, caixa.y - m);
+    return {
+      x,
+      y,
+      w: Math.min(LARGURA - x, caixa.width + m * 2),
+      h: Math.min(ALTURA - y, caixa.height + m * 2)
+    };
   } catch (e) {
     avisos.push(`zoom de "${beat.id}": ${e.message.split('\n')[0]}`);
     return null;
   }
+}
+
+/** Passa a regiao de pixels CSS para as coordenadas reais do quadro. */
+function escalarZoom(zoom, fator, dimensao) {
+  if (!zoom) return null;
+  const x = Math.round(zoom.x * fator);
+  const y = Math.round(zoom.y * fator);
+  const w = Math.min(dimensao.largura - x, Math.round(zoom.w * fator));
+  const h = Math.min(dimensao.altura - y, Math.round(zoom.h * fator));
+  if (w < 60 || h < 60) return null;   // regiao pequena demais para ampliar
+  return { x, y, w, h };
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1]).href) {

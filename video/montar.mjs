@@ -17,6 +17,35 @@ const SAIDA_ALTURA = 1180;
 const FPS = 30;
 const MUSICA = 'video/build/leito-musical.wav';
 
+/**
+ * Recusa montar se a legenda nao tiver o tamanho do quadro.
+ *
+ * O `overlay` do ffmpeg nao reclama de uma imagem maior que o video: compoe o
+ * que couber a partir do canto superior esquerdo e descarta o resto em
+ * silencio. Como a legenda mora no rodape, "descartar o resto" significa
+ * exatamente descartar a legenda - e o video sai limpo, sem erro nenhum, e sem
+ * legenda nenhuma. Foi assim que um video inteiro chegou ao Jairo mudo de
+ * texto. Esta conferencia e o que impede que volte a acontecer.
+ */
+async function conferirDimensoes(dir, timeline) {
+  const primeiro = timeline.beats.find((b) => b.fim > b.inicio && b.fala && b.fala.trim());
+  if (!primeiro) return;
+
+  const png = join(dir, 'legendas', `${primeiro.id}.png`);
+  const saida = await correr('ffprobe', [
+    '-v', 'error', '-select_streams', 'v:0',
+    '-show_entries', 'stream=width,height', '-of', 'csv=p=0', png
+  ]);
+  const [largura, altura] = saida.trim().split(',').map(Number);
+
+  if (largura !== timeline.largura || altura !== timeline.altura) {
+    throw new Error(
+      `a legenda mede ${largura}x${altura} e o quadro mede ${timeline.largura}x${timeline.altura}. ` +
+      'O overlay descartaria a legenda em silêncio. Corra "node video/legendar.mjs" outra vez.'
+    );
+  }
+}
+
 export async function montar(idRoteiro, { limpar = true } = {}) {
   const dir = join('video/build', idRoteiro);
   const timeline = JSON.parse(await readFile(join(dir, 'timeline.json'), 'utf8'));
@@ -26,6 +55,8 @@ export async function montar(idRoteiro, { limpar = true } = {}) {
   } catch {
     throw new Error(`${MUSICA} nao existe - corra "npm run musica" primeiro`);
   }
+
+  await conferirDimensoes(dir, timeline);
 
   const { entradas, filtro, mapas } = construirGrafo(timeline, {
     dir,
