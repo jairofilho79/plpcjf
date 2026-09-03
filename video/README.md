@@ -35,6 +35,11 @@ VIDEO_TTS=macos npm run video 03-biblioteca   # sem custo e sem rede, só valida
 (`.cache/`) é indexado pelo hash da fala, então mudar uma frase não re-sintetiza
 nem re-cobra as outras.
 
+**Espaço em disco:** os quadros intermediários custam ~6 MB por segundo de vídeo
+(mestre 1640×2360 em JPEG). O vídeo mais longo pede ~1,5 GB enquanto está a ser
+montado. A montagem apaga os quadros depois de um mp4 aprovado pelo portão; se
+uma corrida for interrompida no meio, `rm -rf video/build/<id>/quadros` limpa.
+
 ## Detalhes que não são óbvios
 
 - **Este ffmpeg não tem `libass` nem `drawtext`.** Legenda é sempre PNG sobreposto.
