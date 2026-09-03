@@ -13,7 +13,7 @@ import { createHash } from 'node:crypto';
 import { mkdir, copyFile, writeFile, access } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { sintetizar, configuracaoPadrao } from './lib/vozes.mjs';
+import { sintetizar, configuracaoPadrao, escolherModelo } from './lib/vozes.mjs';
 import { duracaoSegundos } from './lib/pcm.mjs';
 
 const CACHE = 'video/.cache';
@@ -36,6 +36,11 @@ export async function narrar(idRoteiro) {
   await mkdir(dir, { recursive: true });
   await mkdir(CACHE, { recursive: true });
 
+  // O modelo é sondado uma vez e vale para o vídeo inteiro, para o timbre não
+  // mudar entre um beat e o seguinte. Entra no hash do cache pela mesma razão:
+  // misturar áudio de dois modelos no mesmo vídeo soa partido.
+  const modelo = provedor === 'macos' ? 'say' : await escolherModelo(voz);
+
   const falas = {};
   let sintetizadas = 0;
 
@@ -44,14 +49,14 @@ export async function narrar(idRoteiro) {
       throw new Error(`beat "${beat.id}" nao tem fala - a fala e que dita a duracao do beat`);
     }
     const hash = createHash('sha256')
-      .update(`${provedor} ${voz} ${beat.fala}`)
+      .update(`${provedor} ${modelo} ${voz} ${beat.fala}`)
       .digest('hex')
       .slice(0, 32);
     const noCache = join(CACHE, `${hash}.wav`);
 
     if (!(await existe(noCache))) {
       process.stderr.write(`  sintetizando ${beat.id}\n`);
-      await sintetizar(beat.fala, { provedor, voz, destino: noCache });
+      await sintetizar(beat.fala, { provedor, voz, modelo, destino: noCache });
       sintetizadas++;
     }
 
@@ -70,7 +75,7 @@ export async function narrar(idRoteiro) {
   const doCache = roteiro.beats.length - sintetizadas;
   process.stderr.write(
     `${idRoteiro}: ${roteiro.beats.length} beats, ${total.toFixed(1)} s de fala ` +
-      `(${sintetizadas} sintetizadas, ${doCache} do cache) via ${provedor}/${voz}\n`
+      `(${sintetizadas} sintetizadas, ${doCache} do cache) via ${modelo}/${voz}\n`
   );
   return falas;
 }

@@ -36,19 +36,43 @@ async function medirQuadro(quadros, dir) {
  * @param {number} fimSegundos carimbo do fim da gravacao, no mesmo relogio
  * @returns {string} conteudo do ficheiro de concatenacao
  */
-export function construirConcat(quadros, fimSegundos) {
+export function construirConcat(quadros, fimSegundos, fps = 30) {
   const ord = [...quadros].sort((a, b) => a.t - b.t);
   if (ord.length === 0) return '';
 
   const origem = ord[0].t;
-  const linhas = [];
+  const duracaoTotal = fimSegundos - origem;
+  const fatias = Math.round(duracaoTotal * fps);
+  if (fatias <= 0) return '';
 
-  for (let i = 0; i < ord.length; i++) {
-    const inicio = ord[i].t - origem;
-    const seguinte = i + 1 < ord.length ? ord[i + 1].t - origem : fimSegundos - origem;
-    const dur = Number((seguinte - inicio).toFixed(4));
-    if (dur <= 0) continue; // o ffmpeg rejeita `duration 0`; quadro repetido cai aqui
-    linhas.push(`file '${ord[i].ficheiro}'`, `duration ${dur}`);
+  // Reamostra para a grelha de saida em vez de declarar os intervalos crus.
+  //
+  // O demuxer `concat` trata cada imagem como um video de um quadro com
+  // framerate proprio, e ELEVA qualquer `duration` menor que esse minimo. O
+  // screencast entrega a 80 ou 130 fps, muito abaixo do minimo, entao cada
+  // quadro ocupava mais tempo do que devia e o video esticava 10% - 86 s de
+  // gravacao viravam 95 s de mp4, e o audio desencontrava-se da imagem. Com
+  // todas as duracoes em multiplos de 1/fps, nao ha nada para o demuxer
+  // arredondar.
+  const escolhidos = [];
+  let cursor = 0;
+  for (let k = 0; k < fatias; k++) {
+    const tempo = origem + k / fps;
+    // Avanca ate ao ultimo quadro que ja tinha sido pintado neste instante.
+    while (cursor + 1 < ord.length && ord[cursor + 1].t <= tempo) cursor++;
+    escolhidos.push(ord[cursor].ficheiro);
+  }
+
+  // Junta corridas do mesmo ficheiro: um trecho parado vira uma entrada longa
+  // em vez de trinta entradas iguais por segundo.
+  const linhas = [];
+  let i = 0;
+  while (i < escolhidos.length) {
+    let j = i;
+    while (j + 1 < escolhidos.length && escolhidos[j + 1] === escolhidos[i]) j++;
+    const dur = Number(((j - i + 1) / fps).toFixed(6));
+    linhas.push(`file '${escolhidos[i]}'`, `duration ${dur}`);
+    i = j + 1;
   }
 
   // O demuxer descarta o ultimo quadro se ele nao for repetido sem duracao.
@@ -66,7 +90,7 @@ export function construirConcat(quadros, fimSegundos) {
  * para de enviar se um ack se perder, e a gravacao continua a correr sem
  * imagem nenhuma.
  */
-export async function colectar(page, dir, { largura = 1640, altura = 2360 } = {}) {
+export async function colectar(page, dir, { largura = 820, altura = 1180, fps = 30 } = {}) {
   await mkdir(dir, { recursive: true });
   const cliente = await page.context().newCDPSession(page);
   const quadros = [];
@@ -106,8 +130,13 @@ export async function colectar(page, dir, { largura = 1640, altura = 2360 } = {}
       // Os ultimos acks podem ainda estar em voo quando paramos.
       await new Promise((r) => setTimeout(r, 300));
       const fim = Date.now() / 1000;
-      const texto = construirConcat(quadros, fim);
+      const texto = construirConcat(quadros, fim, fps);
       await writeFile(join(dir, 'quadros.txt'), texto);
+      // Os carimbos crus, para a lista de concatenacao poder ser reconstruida
+      // sem re-gravar. Sem isto, mudar a regra de reamostragem obriga a repetir
+      // a gravacao inteira - que foi o que custou quando o demuxter esticou o
+      // video e a correcao chegou depois dos quadros ja estarem em disco.
+      await writeFile(join(dir, 'quadros.json'), JSON.stringify({ fps, fim, quadros }));
       return { total: quadros.length, fim, dimensao: await medirQuadro(quadros, dir) };
     }
   };

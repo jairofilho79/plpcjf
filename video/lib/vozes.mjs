@@ -6,7 +6,11 @@ import { extrairAudioSSE } from './sseAudio.mjs';
 import { divergencia } from './divergencia.mjs';
 import { escreverWav, converterParaWav, correr } from './pcm.mjs';
 
-const MODELO = 'openai/gpt-audio-mini';
+// Em ordem de preferência: o `mini` é ~4x mais barato e chega para locução.
+// O irmão maior existe como degrau, porque o `mini` já ficou indisponível a
+// meio de uma gravação — pendurado, sem devolver nada e sem fechar a ligação,
+// enquanto o `gpt-audio` respondia em 1,2 s.
+const MODELOS = ['openai/gpt-audio-mini', 'openai/gpt-audio'];
 
 // Quanto o modelo pode desviar-se do texto pedido antes de abortarmos.
 // Razão de 35%, mas nunca menos que 2 palavras: numa fala de quatro palavras
@@ -58,7 +62,10 @@ function excedeu(pedido, dito) {
 // teto uma gravação de 49 beats fica presa para sempre à espera de um deles.
 const TIMEOUT_MS = 120000;
 
-async function viaOpenRouter(texto, voz, sistema = SISTEMA) {
+// Texto da sonda de disponibilidade: comprimento típico de uma fala real.
+const SONDA = 'Toque no botão para escolher o material que você quer ver na lista.';
+
+async function viaOpenRouter(texto, voz, sistema = SISTEMA, modelo = MODELOS[0]) {
   const chave = process.env.OPENROUTER_API_KEY;
   if (!chave) throw new Error('OPENROUTER_API_KEY não está definida');
 
@@ -67,7 +74,7 @@ async function viaOpenRouter(texto, voz, sistema = SISTEMA) {
     signal: AbortSignal.timeout(TIMEOUT_MS),
     headers: { Authorization: `Bearer ${chave}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      model: MODELO,
+      model: modelo,
       // Sem `stream: true` o endpoint recusa saída de áudio com
       // `400 Audio output requires stream: true`. Não é opcional.
       stream: true,
@@ -118,7 +125,7 @@ async function viaMacos(texto, voz, destino) {
  * para validar o encanamento sem gastar e sem rede — as vozes do `say` foram
  * ouvidas e reprovadas.
  */
-export async function sintetizar(texto, { provedor, voz, destino, tentativas = 3 }) {
+export async function sintetizar(texto, { provedor, voz, destino, modelo = MODELOS[0], tentativas = 3 }) {
   if (provedor === 'macos') {
     await viaMacos(texto, voz, destino);
     return;
@@ -137,7 +144,7 @@ export async function sintetizar(texto, { provedor, voz, destino, tentativas = 3
 
   for (let i = 0; i < tentativas; i++) {
     try {
-      const pcm = await viaOpenRouter(texto, voz, sistema);
+      const pcm = await viaOpenRouter(texto, voz, sistema, modelo);
       await escreverWav(pcm, destino);
       return;
     } catch (e) {
@@ -158,6 +165,32 @@ export async function sintetizar(texto, { provedor, voz, destino, tentativas = 3
     }
   }
   throw ultima;
+}
+
+/**
+ * Escolhe UM modelo para o vídeo inteiro, sondando qual está de pé.
+ *
+ * Um por vídeo, e não um por beat: alternar de modelo a meio faz o timbre mudar
+ * entre uma frase e a seguinte, e um tutorial que troca de voz no meio soa
+ * partido. Melhor gastar dois centésimos de centavo a sondar do que entregar
+ * isso.
+ */
+export async function escolherModelo(voz) {
+  if (process.env.VIDEO_MODELO) return process.env.VIDEO_MODELO;
+
+  for (const modelo of MODELOS) {
+    try {
+      // A sonda usa uma frase do tamanho de uma fala de verdade, e não uma
+      // palavra: com "Teste." o `mini` respondeu e depois pendurou em todas as
+      // chamadas reais. Uma sonda que não parece com o trabalho não prova nada.
+      await viaOpenRouter(SONDA, voz, SISTEMA, modelo);
+      process.stderr.write(`  modelo: ${modelo}\n`);
+      return modelo;
+    } catch (e) {
+      process.stderr.write(`  ${modelo} indisponível (${e.message.split('\n')[0]})\n`);
+    }
+  }
+  throw new Error(`nenhum modelo de áudio respondeu: ${MODELOS.join(', ')}`);
 }
 
 export function configuracaoPadrao() {
