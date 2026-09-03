@@ -20,7 +20,10 @@
     "test:offline-bundle": "node --test src/lib/offline/import/bundleValidation.test.js src/lib/offline/import/OfflineBundleImporter.rollback.test.js src/lib/offline/import/zipCdReader.test.js",
     "musica": "python3 video/musica.py",
     "test:video": "node --test $(find video -name '*.test.js')",
-    "narrar": "node video/narrar.mjs"
+    "narrar": "node video/narrar.mjs",
+    "video": "node video/pipeline.mjs",
+    "legendar": "node video/legendar.mjs",
+    "montar": "node video/montar.mjs"
   },
   "dependencies": {
     "@sveltejs/adapter-cloudflare": "^4.3.1",

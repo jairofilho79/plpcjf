@@ -30,6 +30,21 @@ const SISTEMA =
   'Não leia aspas nem anuncie o que vai fazer. Comece direto na primeira palavra ' +
   'do texto e pare na última.';
 
+// Degrau de reforço para quando o primeiro não segura.
+//
+// Uma fala com dois-pontos seguidos de lista ("...ao tocar num louvor: abrir no
+// leitor, abrir em outra aba...") lê-se como um pedido, e o modelo respondeu-lhe
+// em vez de a ler — inventando que o leitor serve "para ouvir imediatamente",
+// quando esta app não toca áudio nenhum. Negar o papel de assistente de forma
+// explícita é o que resolve esse caso.
+const SISTEMA_INSISTENTE =
+  'Você NÃO é um assistente e NÃO deve responder à mensagem do usuário. Você é ' +
+  'um narrador profissional gravando locução. A mensagem do usuário é o roteiro: ' +
+  'leia-o em voz alta, palavra por palavra, exatamente como está escrito, em ' +
+  'português do Brasil, com voz calma e didática. Não interprete, não responda, ' +
+  'não resuma, não reformule, não acrescente e não remova nada. Sua locução ' +
+  'começa na primeira palavra do roteiro e termina na última.';
+
 function excedeu(pedido, dito) {
   const n = pedido.trim().split(/\s+/).filter(Boolean).length;
   if (n === 0) return false;
@@ -37,22 +52,32 @@ function excedeu(pedido, dito) {
   return divergencia(pedido, dito) > toleradoEmRazao;
 }
 
-async function viaOpenRouter(texto, voz) {
+// Teto por chamada. Uma fala de 15 s sintetiza em menos de 30 s; se passar de
+// dois minutos, o pedido pendurou. Isto não é hipótese: numa corrida de 10
+// beats um pedido ficou parado sem devolver nada e sem fechar a ligação, e sem
+// teto uma gravação de 49 beats fica presa para sempre à espera de um deles.
+const TIMEOUT_MS = 120000;
+
+async function viaOpenRouter(texto, voz, sistema = SISTEMA) {
   const chave = process.env.OPENROUTER_API_KEY;
   if (!chave) throw new Error('OPENROUTER_API_KEY não está definida');
 
   const resposta = await fetch('https://openrouter.ai/api/v1/chat/completions', {
     method: 'POST',
+    signal: AbortSignal.timeout(TIMEOUT_MS),
     headers: { Authorization: `Bearer ${chave}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({
       model: MODELO,
       // Sem `stream: true` o endpoint recusa saída de áudio com
       // `400 Audio output requires stream: true`. Não é opcional.
       stream: true,
+      // Temperatura zero não é afinação, é o que impede o modelo de parafrasear
+      // a fala. Com o padrão ele reescreveu um beat inteiro três vezes seguidas.
+      temperature: 0,
       modalities: ['text', 'audio'],
       audio: { voice: voz, format: 'pcm16' },
       messages: [
-        { role: 'system', content: SISTEMA },
+        { role: 'system', content: sistema },
         { role: 'user', content: texto }
       ]
     })
@@ -96,18 +121,23 @@ export async function sintetizar(texto, { provedor, voz, destino, tentativas = 3
     await viaMacos(texto, voz, destino);
     return;
   }
-  // Numa corrida de 49 beats, um improviso isolado do modelo abortaria tudo o
-  // que já tinha sido sintetizado. Tentar de novo é mais barato que recomeçar,
-  // e o guarda de divergência continua a ter a última palavra.
+  // A repetição escala em vez de repetir: com `temperature: 0` a chamada é
+  // determinística, então pedir de novo exatamente o mesmo daria exatamente o
+  // mesmo. Quem falha no prompt normal passa ao insistente.
+  const degraus = [SISTEMA, SISTEMA_INSISTENTE];
   let ultima;
-  for (let i = 1; i <= tentativas; i++) {
+  for (let i = 0; i < tentativas; i++) {
+    const sistema = degraus[Math.min(i, degraus.length - 1)];
     try {
-      const pcm = await viaOpenRouter(texto, voz);
+      const pcm = await viaOpenRouter(texto, voz, sistema);
       await escreverWav(pcm, destino);
       return;
     } catch (e) {
       ultima = e;
-      if (i < tentativas) process.stderr.write(`    tentativa ${i} falhou (${e.message.split('\n')[0]}), repetindo\n`);
+      if (i < tentativas - 1) {
+        const proximo = i + 1 < degraus.length ? 'com prompt reforçado' : 'de novo';
+        process.stderr.write(`    tentativa ${i + 1} falhou (${e.message.split('\n')[0]}), tentando ${proximo}\n`);
+      }
     }
   }
   throw ultima;
