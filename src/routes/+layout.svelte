@@ -20,17 +20,29 @@
     preloadPdfJs,
     requestIdleCallback
   } from '$lib/utils/pdfjsLoader';
-  
   // Handle overflow for /leitor route
   $: if (browser && $page.url.pathname.startsWith('/leitor')) {
+    // Causa raiz do "safe area"/toolbar sumindo no iOS: ao navegar (SPA, sem reload)
+    // vindo de uma página rolada, o Safari mantém o visual viewport desalinhado do
+    // layout viewport (visualViewport.offsetTop != 0) até algo forçar o realinhamento.
+    // Elementos position:fixed (toolbar/container) usam o layout viewport, então
+    // ficam deslocados exatamente por esse offset — a toolbar soma e some da tela.
+    // O documento nunca deveria rolar dentro do /leitor (só o container do PDF rola),
+    // então zerar o scroll aqui é seguro e faz o Safari realinhar os dois viewports.
+    window.scrollTo(0, 0);
     document.documentElement.style.overflow = 'hidden';
     document.documentElement.style.height = '100%';
     document.documentElement.style.overscrollBehavior = 'none';
     document.body.style.overflow = 'hidden';
     document.body.style.height = '100%';
     document.body.style.overscrollBehavior = 'none';
-    // iOS: position fixed impede scroll residual da página
+    // iOS: position fixed impede scroll residual da página. Sem top/left explícitos,
+    // "fixed" usa a posição estática atual como âncora — no Safari do iOS isso trava
+    // o body deslocado sempre que a barra de endereço muda de estado entre a navegação
+    // e este bloco rodar, cortando o topo e abrindo um vão (safe area) embaixo.
     document.body.style.position = 'fixed';
+    document.body.style.top = '0';
+    document.body.style.left = '0';
     document.body.style.width = '100%';
   } else if (browser) {
     document.documentElement.style.overflow = '';
@@ -40,6 +52,8 @@
     document.body.style.height = '';
     document.body.style.overscrollBehavior = '';
     document.body.style.position = '';
+    document.body.style.top = '';
+    document.body.style.left = '';
     document.body.style.width = '';
   }
   

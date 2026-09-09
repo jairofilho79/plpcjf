@@ -659,6 +659,11 @@
   }
 
   onMount(async () => {
+    // Reforço do mesmo realinhamento feito no +layout.svelte: o onMount da página
+    // roda antes do bloco reativo do layout, então garantir aqui também que o
+    // documento esteja no topo antes da toolbar ser medida (ver comentário lá).
+    window.scrollTo(0, 0);
+
     // Marca que o utilizador entrou no leitor. `safeSet` em vez de
     // `localStorage.setItem`: com dados bloqueados o throw abortava o resto
     // deste onMount — inclusive a montagem do viewer.
@@ -767,6 +772,11 @@
     linkService.setViewer(viewer);
 
     const resize = () => {
+      // Reafirma o top do container: no Safari do iOS a barra de endereço
+      // aparece/some sem disparar 'resize' de forma confiável, e o offsetHeight
+      // da toolbar cacheado fica dessincronizado — sobra vão (safe area) embaixo
+      // e a toolbar/topo do PDF ficam cobertos.
+      updateToolbarHeight();
       // apenas notifica o viewer para recalcular o layout/textLayer
       eventBus.dispatch('resize', {});
       // Recalcular zoom após resize se necessário
@@ -776,6 +786,19 @@
       }
     };
     window.addEventListener('resize', resize);
+    window.visualViewport?.addEventListener('resize', resize);
+
+    // O documento nunca deveria rolar dentro do /leitor (só o .container rola).
+    // Se algo desviar isso — visualViewport.offsetTop dessincronizando o viewport de
+    // layout (usado por position:fixed) do visual (o que aparece na tela), causa raiz
+    // confirmada do bug da toolbar sumindo/"safe area" no Safari do iOS — corrige na hora.
+    const correctScrollDrift = () => {
+      if (window.scrollY !== 0 || window.scrollX !== 0) {
+        window.scrollTo(0, 0);
+        updateToolbarHeight();
+      }
+    };
+    window.visualViewport?.addEventListener('scroll', correctScrollDrift);
     window.addEventListener('keydown', onKeyDown);
 
     // Ativar sistema de eventos de teclado no iOS focando elemento invisível na primeira interação
@@ -886,6 +909,8 @@
 
     cleanup = () => {
       window.removeEventListener('resize', resize);
+      window.visualViewport?.removeEventListener('resize', resize);
+      window.visualViewport?.removeEventListener('scroll', correctScrollDrift);
       window.removeEventListener('keydown', onKeyDown);
       document.removeEventListener('click', handleFirstInteraction, true);
       document.removeEventListener('touchstart', handleFirstInteraction, true);
