@@ -2,6 +2,11 @@ import { writable, get } from 'svelte/store';
 import { browser } from '$app/environment';
 import { clearLouvoresManifestFromSwCache } from '$lib/utils/swRegistration';
 import { guardarManifestNoCatalogo } from '$lib/offline/storage/catalogoCache.js';
+import {
+  markUpdateQuotaBlocked,
+  clearUpdateQuotaBlocked,
+  quotaErrorMessage
+} from '$lib/offline/storage/storageQuota.js';
 import { dismissSnackbar, showErrorSnackbar, showInfoSnackbar, showSuccessSnackbar } from '$lib/utils/appSnackbar.js';
 import {
   LOUVORES_MANIFEST_CHECKSUM_URL,
@@ -117,9 +122,13 @@ export async function hydrateLouvoresFromManifestData(raw, rawText = '') {
 
 /**
  * @param {RequestInit} [init]
- * @returns {Promise<{ kind: 'ok'; data: unknown[]; rawSha256: string } | { kind: 'http'; status: number } | { kind: 'transport' } | { kind: 'parse' } | { kind: 'shape' }>}
+ * @param {{ awaitCatalogWrite?: boolean }} [options] `awaitCatalogWrite`: espera a escrita no
+ *   cache protegido e devolve o resultado dela em `catalogWriteResult`, em vez do
+ *   melhor-esforço padrão (que nunca atrasa a tela). Só quem precisa saber se a
+ *   atualização ficou persistida — a sincronização por checksum — usa `true`.
+ * @returns {Promise<{ kind: 'ok'; data: unknown[]; rawSha256: string; catalogWriteResult?: import('$lib/offline/storage/catalogoCache.js').ResultadoGuarda } | { kind: 'http'; status: number } | { kind: 'transport' } | { kind: 'parse' } | { kind: 'shape' }>}
  */
-async function fetchLouvoresManifestOnce(init) {
+async function fetchLouvoresManifestOnce(init, options = {}) {
   try {
     const response = await fetch('/louvores-manifest.json', init);
     if (!response.ok) {
@@ -152,9 +161,20 @@ async function fetchLouvoresManifestOnce(init) {
     // Na primeira visita o Service Worker ainda está instalando quando esta
     // requisição sai, então ela não passa por ele e o catálogo não é guardado
     // por ninguém — quem instalava a app e perdia a conexão em seguida
-    // encontrava /biblioteca e /listas vazias. Não espera o resultado: é
-    // melhor esforço e não pode atrasar a tela. Ver `catalogoCache.js`.
-    guardarManifestNoCatalogo('/louvores-manifest.json', text).then((r) => {
+    // encontrava /biblioteca e /listas vazias. Ver `catalogoCache.js`.
+    //
+    // Por padrão não espera o resultado: é melhor esforço e não pode atrasar
+    // a tela numa carga normal. `awaitCatalogWrite` existe só para quem
+    // precisa confirmar a escrita antes de declarar sucesso — a sincronização
+    // por checksum, que sem isso continuava "confirmando" uma atualização que
+    // nunca chegou a ser gravada (silenciosa sob pressão de cota).
+    const guarda = guardarManifestNoCatalogo('/louvores-manifest.json', text);
+    if (options.awaitCatalogWrite) {
+      const catalogWriteResult = await guarda;
+      if (catalogWriteResult === 'guardado') console.info('[Louvores] catálogo guardado para uso offline');
+      return { kind: 'ok', data, rawSha256, catalogWriteResult };
+    }
+    guarda.then((r) => {
       if (r === 'guardado') console.info('[Louvores] catálogo guardado para uso offline');
     });
 
@@ -178,12 +198,14 @@ function shouldRetryHttpStatus(status) {
  * Não confunde “lista vazia confirmada” (HTTP 200 + []) com falha transitória — não reintenta à toa nesse caso.
  *
  * @param {RequestInit} init
- * @param {{ maxAttempts?: number; isCancelled?: () => boolean }} [options]
- * @returns {Promise<{ ok: true; data: any[]; rawSha256: string } | { ok: false; reason: 'cancelled' | 'transport' | 'http' | 'parse' | 'shape' | 'empty' | 'filtered_empty' }>}
+ * @param {{ maxAttempts?: number; isCancelled?: () => boolean; awaitCatalogWrite?: boolean }} [options]
+ *   `awaitCatalogWrite`: repassado a `fetchLouvoresManifestOnce` — ver o motivo lá.
+ * @returns {Promise<{ ok: true; data: any[]; rawSha256: string; catalogWriteResult?: import('$lib/offline/storage/catalogoCache.js').ResultadoGuarda } | { ok: false; reason: 'cancelled' | 'transport' | 'http' | 'parse' | 'shape' | 'empty' | 'filtered_empty' }>}
  */
 export async function fetchLouvoresManifestPrepared(init, options = {}) {
   const maxAttempts = options.maxAttempts ?? MANIFEST_RETRY_MAX_ATTEMPTS;
   const isCancelled = options.isCancelled;
+  const awaitCatalogWrite = options.awaitCatalogWrite ?? false;
 
   /** @type {'transport' | 'http' | 'parse' | 'shape' | 'empty' | 'filtered_empty'} */
   let lastReason = 'transport';
@@ -200,7 +222,7 @@ export async function fetchLouvoresManifestPrepared(init, options = {}) {
       }
     }
 
-    const res = await fetchLouvoresManifestOnce(init);
+    const res = await fetchLouvoresManifestOnce(init, { awaitCatalogWrite });
 
     if (res.kind === 'http') {
       lastReason = 'http';
@@ -223,7 +245,7 @@ export async function fetchLouvoresManifestPrepared(init, options = {}) {
 
     const prepared = prepareLouvoresManifestPayload(raw);
     if (prepared) {
-      return { ok: true, data: prepared, rawSha256: res.rawSha256 };
+      return { ok: true, data: prepared, rawSha256: res.rawSha256, catalogWriteResult: res.catalogWriteResult };
     }
 
     lastReason = 'filtered_empty';
@@ -280,7 +302,11 @@ async function runLouvoresManifestNetworkRefresh(refreshGen) {
       { cache: 'no-store' },
       {
         maxAttempts: MANIFEST_RETRY_MAX_ATTEMPTS,
-        isCancelled: () => refreshGen !== louvoresLoadGeneration
+        isCancelled: () => refreshGen !== louvoresLoadGeneration,
+        // Ação explícita da pessoa: vale a pena esperar a confirmação da
+        // escrita para não dizer "atualizado com sucesso" sem ter persistido
+        // nada (mesmo problema que a sincronização automática tinha).
+        awaitCatalogWrite: true
       }
     );
 
@@ -298,8 +324,6 @@ async function runLouvoresManifestNetworkRefresh(refreshGen) {
     }
 
     const enriched = applyLouvoresManifest(result.data);
-    writeManifestBodySha256(result.rawSha256);
-    resetManifestSyncPenalty();
     await afterManifestLoaded(enriched);
     try {
       const { offline } = await import('$lib/stores/offline.js');
@@ -308,7 +332,32 @@ async function runLouvoresManifestNetworkRefresh(refreshGen) {
       console.warn('[Louvores] checkForNewPDFs after refresh:', e);
     }
     dismissSnackbar(refreshInfoId);
-    showSuccessSnackbar('Banco de louvores atualizado com sucesso.', { durationMs: 3000 });
+
+    if (result.catalogWriteResult === 'guardado' || result.catalogWriteResult === 'ja-tinha') {
+      clearUpdateQuotaBlocked();
+      writeManifestBodySha256(result.rawSha256);
+      resetManifestSyncPenalty();
+      showSuccessSnackbar('Banco de louvores atualizado com sucesso.', { durationMs: 3000 });
+      return;
+    }
+
+    // Aplicado na tela, mas não persistido: a pessoa vê os dados novos agora,
+    // mas sem espaço a atualização não sobrevive a um recarregamento offline.
+    // Não avança o hash local nem reseta a penalidade — a próxima tentativa
+    // (automática ou manual) precisa continuar tentando persistir de verdade.
+    if (result.catalogWriteResult === 'sem-espaco') {
+      markUpdateQuotaBlocked();
+      showErrorSnackbar(
+        `Os dados foram atualizados na tela, mas não puderam ser salvos para uso offline. ${quotaErrorMessage({})}`,
+        { durationMs: 9000 }
+      );
+      return;
+    }
+
+    showErrorSnackbar(
+      'Os dados foram atualizados na tela, mas não foi possível salvá-los para uso offline. Tente novamente.',
+      { durationMs: 9000 }
+    );
   } catch (e) {
     console.error('[Louvores] manifest network refresh failed', e);
     dismissSnackbar(refreshInfoId);
@@ -483,7 +532,14 @@ export async function maybeCheckLouvoresManifestFromServer() {
       console.warn('[Louvores] checksum sync: clear SW cache', e);
     }
 
-    const mres = await fetchLouvoresManifestOnce({ cache: 'no-store' });
+    // `awaitCatalogWrite`: precisa saber se a escrita no cache protegido
+    // realmente aconteceu antes de declarar sincronizado — sem isso, uma
+    // falha por cota (frequente para quem já baixou o acervo inteiro) ficava
+    // indistinguível de sucesso: os dados chegavam à store em memória, o hash
+    // local avançava para bater com o do servidor, e a próxima checagem via
+    // `expected === localHash` acima nunca mais tentava de novo, mesmo sem
+    // nada persistido.
+    const mres = await fetchLouvoresManifestOnce({ cache: 'no-store' }, { awaitCatalogWrite: true });
     const tAfter = Date.now();
     if (mres.kind !== 'ok') {
       recordManifestSyncFailure(tAfter);
@@ -507,10 +563,28 @@ export async function maybeCheckLouvoresManifestFromServer() {
     } catch (e) {
       console.warn('[Louvores] checksum sync: checkForNewPDFs', e);
     }
-    writeManifestBodySha256(mres.rawSha256);
-    resetManifestSyncPenalty();
-    writeChecksumLastOkAt(Date.now());
-    console.info('[Louvores] Catálogo atualizado automaticamente (checksum).');
+
+    // Aplicado em memória (a tela já mostra os dados novos), mas só é
+    // seguro declarar sincronizado — e só então avançar o hash local — se a
+    // escrita no cache protegido de fato aconteceu. Do contrário, quem está
+    // sem rede na próxima vez que abrir o app volta a ver a versão antiga,
+    // silenciosamente, para sempre (até o catálogo mudar de novo no servidor).
+    if (mres.catalogWriteResult === 'guardado' || mres.catalogWriteResult === 'ja-tinha') {
+      clearUpdateQuotaBlocked();
+      writeManifestBodySha256(mres.rawSha256);
+      resetManifestSyncPenalty();
+      writeChecksumLastOkAt(Date.now());
+      console.info('[Louvores] Catálogo atualizado automaticamente (checksum).');
+      return;
+    }
+
+    if (mres.catalogWriteResult === 'sem-espaco') {
+      console.warn('[Louvores] checksum sync: catálogo aplicado em memória, mas sem espaço para persistir');
+      markUpdateQuotaBlocked();
+    } else {
+      console.warn('[Louvores] checksum sync: catálogo aplicado em memória, mas não persistido:', mres.catalogWriteResult);
+    }
+    recordManifestSyncFailure(tAfter);
   } finally {
     louvoresChecksumCheckRunning = false;
   }

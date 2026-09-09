@@ -22,9 +22,10 @@
  */
 
 import { CATALOG_CACHE_NAME, CATALOG_MANIFEST_PATHS } from '../sw/swCaches.js';
+import { isQuotaError } from './storageQuota.js';
 
 /**
- * @typedef {'guardado' | 'ja-tinha' | 'ignorado' | 'indisponivel' | 'falhou'} ResultadoGuarda
+ * @typedef {'guardado' | 'ja-tinha' | 'ignorado' | 'indisponivel' | 'sem-espaco' | 'falhou'} ResultadoGuarda
  */
 
 /**
@@ -54,9 +55,11 @@ export async function guardarManifestNoCatalogo(path, texto, deps = {}) {
       new Response(texto, { headers: { 'Content-Type': 'application/json' } })
     );
     return 'guardado';
-  } catch {
+  } catch (erro) {
     // Cota, modo privado, dados de site bloqueados: nada aqui vale derrubar o
-    // carregamento do catálogo, que já deu certo.
-    return 'falhou';
+    // carregamento do catálogo, que já deu certo. Falta de espaço ganha
+    // resultado próprio — é o sinal que a sincronização por checksum usa para
+    // não fingir sucesso (ver `maybeCheckLouvoresManifestFromServer`).
+    return isQuotaError(erro) ? 'sem-espaco' : 'falhou';
   }
 }

@@ -13,6 +13,7 @@
  */
 
 import { formatSize } from '../../utils/formatSize.js';
+import { safeGet, safeSet, safeRemove } from '../../utils/safeStorage.js';
 
 /**
  * Margem exigida acima do necessário.
@@ -22,6 +23,30 @@ import { formatSize } from '../../utils/formatSize.js';
  * de folga é prometer errado.
  */
 const MARGEM = 1.1;
+
+/**
+ * Reserva fixa, além da margem, para o que precisa continuar cabendo *depois*
+ * do download: o catálogo (`louvores-manifest.json` + `offline-manifest.json`,
+ * ~1,4 MB) e alguns PDFs novos que cheguem antes da próxima sincronização
+ * grande.
+ *
+ * Sem isto, `checkQuota` aprovava um download de 800+ MB que ocupava
+ * exatamente a folga toda: o download em si cabia, mas terminava sem sobrar
+ * um byte para a atualização automática do catálogo gravar depois — e essa
+ * escrita, bem menor e em segundo plano, falhava em silêncio (ver
+ * `catalogoCache.js`). Reservar aqui, na única checagem que roda antes de
+ * qualquer download grande, é o que garante que sempre sobra algo.
+ */
+const RESERVA_ATUALIZACAO_BYTES = 40 * 1024 * 1024; // 40 MB
+
+/**
+ * Estimativa por PDF para o download automático de louvores novos
+ * (`checkForNewPDFs`), que — ao contrário das partes de ZIP do acervo, que
+ * declaram `size` no manifesto — não sabe o tamanho de cada PDF antes de
+ * baixar. Generosa de propósito: superestimar só adia um download que ainda
+ * cabe; subestimar é o que deixava a escrita falhar em silêncio.
+ */
+export const ESTIMATIVA_MEDIA_PDF_BYTES = 2 * 1024 * 1024; // 2 MB
 
 /**
  * @typedef {Object} QuotaCheck
@@ -61,13 +86,15 @@ export async function checkQuota(nav, bytesNecessarios) {
     if (!quota) return desconhecido;
 
     const disponivel = Math.max(0, quota - usage);
-    const exigido = necessario * MARGEM;
+    const exigido = necessario * MARGEM + RESERVA_ATUALIZACAO_BYTES;
 
     return {
       ok: disponivel >= exigido,
       desconhecido: false,
       disponivel,
-      faltam: Math.max(0, Math.ceil(necessario - disponivel)),
+      // Conta a reserva aqui também: "faltam 0" com a checagem reprovada
+      // (porque só a reserva não coube) confundia mais do que ajudava.
+      faltam: Math.max(0, Math.ceil(exigido - disponivel)),
       necessario
     };
   } catch {
@@ -132,4 +159,35 @@ export function quotaErrorMessage(dados = {}) {
     return `${base} Faltam cerca de ${formatSize(dados.faltam)}.${fim}`;
   }
   return `${base}${fim}`;
+}
+
+const LS_QUOTA_BLOCKED_AT = 'plpcjf:storage:quotaBlockedAt';
+
+/**
+ * Uma atualização em segundo plano (catálogo ou PDFs novos) foi adiada por
+ * falta de espaço — grava o momento para a tela `/offline` mostrar um aviso.
+ *
+ * É o único jeito de quem já baixou o acervo inteiro ficar sabendo que a
+ * atualização automática parou de funcionar: as escritas em segundo plano são
+ * melhor esforço por design (não podem travar a tela nem o download em
+ * andamento) e por isso nunca lançam — sem este sinal, a falha ficava só no
+ * console.
+ *
+ * @param {number} [now]
+ */
+export function markUpdateQuotaBlocked(now = Date.now()) {
+  safeSet(LS_QUOTA_BLOCKED_AT, String(now));
+}
+
+/** Limpa o aviso — chamar assim que uma atualização em segundo plano vier a persistir com sucesso. */
+export function clearUpdateQuotaBlocked() {
+  safeRemove(LS_QUOTA_BLOCKED_AT);
+}
+
+/** @returns {number | null} momento (ms) do último bloqueio por cota, ou `null` se não há nenhum registrado. */
+export function readUpdateQuotaBlockedAt() {
+  const v = safeGet(LS_QUOTA_BLOCKED_AT);
+  if (v == null || v === '') return null;
+  const n = Number(v);
+  return Number.isFinite(n) && n > 0 ? n : null;
 }

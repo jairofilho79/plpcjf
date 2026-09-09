@@ -29,7 +29,10 @@ import {
   checkQuota,
   ensurePersistentStorage,
   isQuotaError,
-  quotaErrorMessage
+  quotaErrorMessage,
+  markUpdateQuotaBlocked,
+  clearUpdateQuotaBlocked,
+  ESTIMATIVA_MEDIA_PDF_BYTES
 } from '$lib/offline/storage/storageQuota.js';
 import { louvores } from './louvores';
 import { validateManifestsIntegrity } from '$lib/utils/manifestValidation';
@@ -1237,14 +1240,40 @@ async function checkForNewPDFs() {
 
     if (newPdfs.length > 0) {
       console.log(`[Offline Store] Found ${newPdfs.length} new PDFs in selected categories:`, savedCategories);
-      
+
+      const pdfUrls = newPdfs.map(getPdfUrl).filter(url => url !== null);
+
+      // Espaço em disco: quem já baixou o acervo inteiro é justamente quem
+      // mais provavelmente está sem folga. Sem checar antes, este download
+      // automático caía direto no mesmo padrão que `checkQuota` já resolveu
+      // para o download manual: `cache.put` falhando em silêncio, um PDF de
+      // cada vez, dentro do Service Worker.
+      //
+      // Não há `size` por PDF aqui (ao contrário das partes de ZIP do
+      // acervo) — usa uma estimativa deliberadamente generosa.
+      const bytesEstimados = pdfUrls.length * ESTIMATIVA_MEDIA_PDF_BYTES;
+      const espaco = await checkQuota(typeof navigator !== 'undefined' ? navigator : null, bytesEstimados);
+
+      if (!espaco.ok) {
+        console.warn('[Offline Store] Auto-download de PDFs novos adiado: sem espaço', espaco);
+        offlineState.update(s => ({ ...s, error: quotaErrorMessage({ faltam: espaco.faltam }) }));
+        markUpdateQuotaBlocked();
+        // Não grava `LAST_MANIFEST_HASH_KEY`: sem isso os PDFs que ficaram de
+        // fora seriam esquecidos — a próxima checagem trataria o manifesto
+        // como já visto, mesmo com eles nunca baixados.
+        return;
+      }
+
       // Auto-download new PDFs
       offlineState.update(s => ({ ...s, autoDownloading: true }));
-      
-      const pdfUrls = newPdfs.map(getPdfUrl).filter(url => url !== null);
+
       await startDownload(pdfUrls);
-      
+
       offlineState.update(s => ({ ...s, autoDownloading: false }));
+
+      // Espaço confirmado e download tentado: qualquer bloqueio anterior
+      // registrado para o aviso da tela /offline não se aplica mais.
+      clearUpdateQuotaBlocked();
     }
   }
 
@@ -1979,8 +2008,16 @@ async function downloadByCategories(categories) {
       downloading: false,
       error: quotaErrorMessage({ faltam: espaco.faltam })
     }));
+    markUpdateQuotaBlocked();
     return;
   }
+
+  // Espaço confirmado para este download: se um aviso de bloqueio por cota
+  // ficou registrado de uma tentativa (automática) anterior, ele já não se
+  // aplica — este download vai usar boa parte dessa folga, mas a checagem
+  // que o aprovou já reserva o que a atualização do catálogo precisa depois
+  // (ver `RESERVA_ATUALIZACAO_BYTES`).
+  clearUpdateQuotaBlocked();
 
   const persistente = await ensurePersistentStorage(typeof navigator !== 'undefined' ? navigator : null);
   console.info(

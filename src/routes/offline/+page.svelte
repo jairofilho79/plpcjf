@@ -11,6 +11,7 @@
   import OfflineDownloadProgress from '$lib/components/OfflineDownloadProgress.svelte';
   import OfflineStatsSummary from '$lib/components/OfflineStatsSummary.svelte';
   import { downloadMissingPdfs } from '$lib/utils/missingPdfsDownloader.js';
+  import { readUpdateQuotaBlockedAt } from '$lib/offline/storage/storageQuota.js';
   import { setupCacheSync, onCacheSync, checkCacheVersionChanged, updateCacheVersion } from '$lib/utils/cacheSync';
   import { clearPdfIndex } from '$lib/utils/pdfIndex';
   import { formatSize } from '$lib/utils/formatSize.js';
@@ -35,6 +36,15 @@
   const OFFLINE_AVAILABLE_KEY = 'OFFLINE_AVAILABLE';
   let offlineAvailable = false;
   let isClearingCache = false;
+
+  // Aviso: uma atualização em segundo plano (catálogo ou PDFs novos) ficou
+  // sem espaço para gravar (ver `storageQuota.js`). É o único jeito de quem
+  // já disponibilizou tudo offline saber que precisa liberar espaço — sem
+  // isto a falha fica só no console.
+  let quotaBlockedAt = /** @type {number | null} */ (null);
+  function refreshQuotaBlockedNotice() {
+    quotaBlockedAt = readUpdateQuotaBlockedAt();
+  }
 
   // Error modal state
   let showErrorModal = false;
@@ -322,6 +332,7 @@
   onMount(() => {
     offlineAvailable = checkOfflineAvailable();
     openCachedStats(); // capa imediata com cache; sem cálculo pesado
+    refreshQuotaBlockedNotice();
 
     if (typeof window !== 'undefined' && window.location.hostname === 'localhost') {
       performanceMetrics.enabled = true;
@@ -401,6 +412,7 @@
     
     lastSyncTriggerTime = now;
     needsSync = true;
+    refreshQuotaBlockedNotice();
     if (event instanceof CustomEvent) {
       console.log('[Offline Page] Cache sync required:', event.detail);
     }
@@ -421,9 +433,10 @@
    * This is fired when PDFs are downloaded and cached
    */
   async function handleOfflineCacheUpdated(event) {
+    refreshQuotaBlockedNotice();
     if (event instanceof CustomEvent) {
       const now = Date.now();
-      
+
       // Prevent infinite loops: skip if processing or too soon since last update
       if (isProcessingCacheUpdate || (now - lastCacheUpdateTime) < MIN_CACHE_UPDATE_INTERVAL) {
         console.log('[Offline Page] Cache update ignored - already processing or too soon');
@@ -1483,6 +1496,17 @@
 
       <!-- Offline requirements alert -->
       <!-- <OfflineRequirementsAlert /> -->
+
+      {#if quotaBlockedAt}
+        <div class="error-box">
+          <AlertCircle class="w-5 h-5 error-icon" />
+          <p class="error-text">
+            Armazenamento cheio: a atualização automática do catálogo (e de PDFs novos) não
+            está conseguindo salvar. Libere espaço no aparelho — o app tenta de novo sozinho
+            assim que houver espaço.
+          </p>
+        </div>
+      {/if}
 
       {#if !$louvoresLoaded}
         <p class="loading-text">Carregando lista de louvores...</p>
