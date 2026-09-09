@@ -1,7 +1,7 @@
 <script>
   import { onMount } from 'svelte';
   import { goto } from '$app/navigation';
-  import { Download, AlertCircle, Info, Package, RefreshCw, Upload } from 'lucide-svelte';
+  import { Download, AlertCircle, Info, Package, RefreshCw, Upload, Trash2 } from 'lucide-svelte';
   import { offline, isDownloading } from '$lib/stores/offline';
   import { CATEGORY_OPTIONS } from '$lib/stores/filters';
   import { louvores, loadLouvores, louvoresLoaded } from '$lib/stores/louvores';
@@ -44,6 +44,46 @@
   let quotaBlockedAt = /** @type {number | null} */ (null);
   function refreshQuotaBlockedNotice() {
     quotaBlockedAt = readUpdateQuotaBlockedAt();
+  }
+
+  // Liberar espaço por categoria: hoje a única outra forma de liberar espaço
+  // é desativar o modo offline inteiro, o que apaga o acervo todo. Um clique
+  // só pede confirmação (troca o rótulo do botão); o segundo clique, dentro
+  // de alguns segundos, remove de fato.
+  let confirmingCategoryRemoval = /** @type {string | null} */ (null);
+  let removingCategory = /** @type {string | null} */ (null);
+  /** @type {ReturnType<typeof setTimeout> | null} */
+  let confirmRemovalTimeout = null;
+
+  /** @param {string} category */
+  function handleRemoveCategoryClick(category) {
+    if (removingCategory) return;
+
+    if (confirmingCategoryRemoval !== category) {
+      confirmingCategoryRemoval = category;
+      if (confirmRemovalTimeout) clearTimeout(confirmRemovalTimeout);
+      confirmRemovalTimeout = setTimeout(() => {
+        confirmingCategoryRemoval = null;
+      }, 5000);
+      return;
+    }
+
+    if (confirmRemovalTimeout) clearTimeout(confirmRemovalTimeout);
+    confirmingCategoryRemoval = null;
+    void removeCategory(category);
+  }
+
+  /** @param {string} category */
+  async function removeCategory(category) {
+    removingCategory = category;
+    try {
+      await offline.removeCategoryFromCache(category);
+      downloadedCategories = downloadedCategories.filter((c) => c !== category);
+    } catch (e) {
+      console.error('[Offline Page] Falha ao remover categoria do cache:', category, e);
+    } finally {
+      removingCategory = null;
+    }
   }
 
   // Error modal state
@@ -1684,6 +1724,43 @@
       </div>
       {/if}
 
+      {#if downloadedCategories.length > 0}
+        <div class="manage-space-section">
+          <h2 class="section-title">Gerenciar espaço</h2>
+          <p class="manage-space-hint">
+            Remova categorias que você não precisa mais manter offline para liberar espaço no
+            aparelho — o resto do que você baixou continua guardado.
+          </p>
+          <ul class="manage-space-list">
+            {#each downloadedCategories as category (category)}
+              <li class="manage-space-item">
+                <span class="manage-space-label">{category}</span>
+                <span class="manage-space-size">
+                  {formatSize(((/** @type {Record<string, number>} */ (categorySizes))[category]) || 0)}
+                </span>
+                <button
+                  class="btn-remove-category"
+                  class:confirming={confirmingCategoryRemoval === category}
+                  type="button"
+                  on:click={() => handleRemoveCategoryClick(category)}
+                  disabled={removingCategory !== null}
+                >
+                  {#if removingCategory === category}
+                    <RefreshCw class="w-4 h-4 spinning" />
+                    <span>Removendo…</span>
+                  {:else if confirmingCategoryRemoval === category}
+                    <Trash2 class="w-4 h-4" />
+                    <span>Confirmar remoção?</span>
+                  {:else}
+                    <Trash2 class="w-4 h-4" />
+                    <span>Remover</span>
+                  {/if}
+                </button>
+              </li>
+            {/each}
+          </ul>
+        </div>
+      {/if}
 
     <!-- O erro aparece sempre que existe.
          Até 2026-09-02 havia aqui uma condição a mais: só mostrava se alguma
@@ -2067,6 +2144,80 @@
     margin: 0;
     font-size: 0.875rem;
     font-weight: 500;
+  }
+
+  /* Gerenciar espaço */
+  .manage-space-section {
+    margin-top: 1.5rem;
+  }
+
+  .manage-space-hint {
+    color: var(--text-light);
+    font-size: 0.875rem;
+    margin: 0 0 1rem 0;
+    line-height: 1.5;
+  }
+
+  .manage-space-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+
+  .manage-space-item {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.75rem;
+    background-color: var(--placeholder-color);
+    border: 2px solid var(--placeholder-color);
+    border-radius: 0.5rem;
+  }
+
+  .manage-space-label {
+    flex: 1;
+    color: var(--text-dark);
+    font-weight: 600;
+    font-size: 0.9375rem;
+  }
+
+  .manage-space-size {
+    color: var(--text-dark);
+    opacity: 0.75;
+    font-size: 0.8125rem;
+  }
+
+  .btn-remove-category {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.5rem 0.85rem;
+    border-radius: 0.5rem;
+    border: 2px solid #dc3545;
+    background-color: #fff;
+    color: #dc3545;
+    font-size: 0.8125rem;
+    font-weight: 600;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: all 0.2s;
+  }
+
+  .btn-remove-category:hover:not(:disabled) {
+    background-color: #fdf2f3;
+  }
+
+  .btn-remove-category.confirming {
+    background-color: #dc3545;
+    color: #fff;
+  }
+
+  .btn-remove-category:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
   }
 
   /* Action buttons */

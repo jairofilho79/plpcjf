@@ -15,6 +15,7 @@ import {
   readManifestBodySha256,
   recordManifestSyncFailure,
   resetManifestSyncPenalty,
+  resyncManifestBodySha256WithCatalog,
   sha256HexUtf8,
   shouldFetchExpectedChecksum,
   writeChecksumLastOkAt,
@@ -45,6 +46,15 @@ let louvoresLoadGeneration = 0;
 
 /** Evita corridas no poll automático de checksum. */
 let louvoresChecksumCheckRunning = false;
+
+/**
+ * `resyncManifestBodySha256WithCatalog` só precisa rodar uma vez por sessão
+ * do app: uma vez corrigido, o hash local só volta a divergir do persistido
+ * por uma escrita nova (que já passa pelo mesmo tratamento). Sem esta guarda,
+ * toda navegação entre `/`, `/listas`, `/biblioteca` e `/offline` pagaria de
+ * novo o custo de ler e hashear ~1,4 MB à toa.
+ */
+let manifestBodySha256Resynced = false;
 
 /** Tentativas por “onda” de fetch (conexão instável). */
 const MANIFEST_RETRY_MAX_ATTEMPTS = 4;
@@ -170,7 +180,25 @@ async function fetchLouvoresManifestOnce(init, options = {}) {
     // nunca chegou a ser gravada (silenciosa sob pressão de cota).
     const guarda = guardarManifestNoCatalogo('/louvores-manifest.json', text);
     if (options.awaitCatalogWrite) {
-      const catalogWriteResult = await guarda;
+      let catalogWriteResult = await guarda;
+
+      // Sem espaço: antes de desistir, tenta liberar o que o próprio
+      // catálogo novo já descartou (PDFs que não estão mais nele) e regrava
+      // uma vez. É o que desbloqueia quem já baixou o acervo inteiro e não
+      // tem folga nenhuma — 1 PDF já libera espaço de sobra para este texto
+      // (~1,4 MB). Ver `pruneObsoletePdfsFromCache`.
+      if (catalogWriteResult === 'sem-espaco') {
+        try {
+          const { offline } = await import('$lib/stores/offline.js');
+          const poda = await offline.pruneObsoletePdfsFromCache(data);
+          if (poda.removidos > 0) {
+            catalogWriteResult = await guardarManifestNoCatalogo('/louvores-manifest.json', text);
+          }
+        } catch (e) {
+          console.warn('[Louvores] poda de PDFs obsoletos antes de regravar catálogo:', e);
+        }
+      }
+
       if (catalogWriteResult === 'guardado') console.info('[Louvores] catálogo guardado para uso offline');
       return { kind: 'ok', data, rawSha256, catalogWriteResult };
     }
@@ -426,6 +454,15 @@ async function ensureLouvoresManifestBodySha256Baseline(options = {}) {
 
 export async function loadLouvores() {
   if (!browser) return;
+
+  // Corrige o hash local se ele mentir sobre o que está realmente persistido
+  // (ver `resyncManifestBodySha256WithCatalog`) — sem isto, quem ficou preso
+  // pelo bug antigo de falso sucesso continua preso para sempre, mesmo com a
+  // causa raiz já corrigida: o poll por checksum acha que já está sincronizado.
+  if (!manifestBodySha256Resynced) {
+    manifestBodySha256Resynced = true;
+    await resyncManifestBodySha256WithCatalog();
+  }
 
   const gen = ++louvoresLoadGeneration;
 

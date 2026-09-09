@@ -1282,6 +1282,47 @@ async function checkForNewPDFs() {
 }
 
 /**
+ * Remove do cache de PDFs tudo que o catálogo recebido não referencia mais.
+ *
+ * Chamado só quando a gravação do catálogo novo falha por falta de espaço
+ * (`louvores.js`, `fetchLouvoresManifestOnce`): antes de desistir, vale
+ * tentar liberar o que o próprio catálogo novo já descartou — um PDF que o
+ * servidor não lista mais não é conteúdo que a pessoa "escolheu manter".
+ *
+ * Compara contra o catálogo inteiro, não só as categorias salvas: um PDF de
+ * uma categoria não baixada não pode estar no cache de qualquer forma, então
+ * restringir aqui só arriscaria podar por engano algo que uma corrida com o
+ * download ainda em andamento acabou de gravar.
+ *
+ * @param {any[]} manifestData
+ * @returns {Promise<{ removidos: number }>}
+ */
+async function pruneObsoletePdfsFromCache(manifestData) {
+  if (!browser) return { removidos: 0 };
+  try {
+    const { PDF_CACHE_NAME } = await import('$lib/offline/sw/swCaches.js');
+    const { podarPdfsObsoletos } = await import('$lib/offline/storage/prunarPdfsObsoletos.js');
+
+    const caminhosValidos = new Set(
+      (Array.isArray(manifestData) ? manifestData : [])
+        .map((louvor) => getPdfUrl(louvor))
+        .filter((url) => url !== null)
+        .map((url) => PdfPathManager.normalizeForStorage(url))
+        .filter(Boolean)
+    );
+
+    const resultado = await podarPdfsObsoletos(PDF_CACHE_NAME, caminhosValidos);
+    if (resultado.removidos > 0) {
+      console.info(`[Offline Store] ${resultado.removidos} PDF(s) obsoleto(s) removido(s) para liberar espaço`);
+    }
+    return resultado;
+  } catch (e) {
+    console.warn('[Offline Store] pruneObsoletePdfsFromCache:', e);
+    return { removidos: 0 };
+  }
+}
+
+/**
  * Downloads only the packages needed for missing PDFs
  * @param {Array} missingPdfs - Array of louvor objects with missing PDFs
  * @returns {Promise<void>}
@@ -2066,6 +2107,71 @@ async function cancelDownload() {
 /**
  * Clear all cached data
  */
+/**
+ * Remove do cache só os PDFs de uma categoria (e variantes agregadas — ver
+ * `getCategoryVariants`), sem tocar no resto do acervo baixado.
+ *
+ * Antes desta função, a única forma de liberar espaço era `disableOffline`
+ * (desativa o modo offline inteiro e apaga tudo) — péssima troca para quem só
+ * queria espaço para a atualização do catálogo persistir e não abrir mão do
+ * resto do que baixou. Ver `podarPdfsObsoletos` para a poda automática (só
+ * remove o que o servidor já descartou); esta função é a escolha manual da
+ * pessoa sobre o que ela ainda quer.
+ *
+ * @param {string} category
+ * @returns {Promise<{ removidos: number }>}
+ */
+async function removeCategoryFromCache(category) {
+  if (!browser || !category) return { removidos: 0 };
+
+  const normalizedCategory = normalizeCategory(category);
+  const variants = getCategoryVariants(normalizedCategory);
+  /** @type {any[]} */
+  const louvoresData = get(louvores);
+  const categoryLouvores = louvoresData.filter((l) => variants.includes(l.categoria));
+
+  let removidos = 0;
+  try {
+    const cache = await openPdfCache();
+    for (const louvor of categoryLouvores) {
+      const pdfUrl = getPdfUrl(louvor);
+      if (!pdfUrl) continue;
+      const url = PdfPathManager.createRequestUrl(pdfUrl, window.location.origin);
+      if (!url) continue;
+      try {
+        if (await cache.delete(new Request(url))) removidos++;
+      } catch (e) {
+        console.warn(`[Offline Store] Falha ao remover PDF de "${category}":`, pdfUrl, e);
+      }
+    }
+  } catch (e) {
+    console.error('[Offline Store] removeCategoryFromCache:', e);
+  }
+
+  // Tira a categoria (e variantes) das listas de "selecionada"/"baixada" —
+  // senão o app segue achando que ela ainda está toda lá.
+  saveCategories(
+    getSavedCategories().filter((/** @type {string} */ c) => !variants.includes(c) && c !== normalizedCategory)
+  );
+  saveDownloadedCategories(
+    getDownloadedCategories().filter(
+      (/** @type {string} */ c) => !variants.includes(c) && c !== normalizedCategory
+    )
+  );
+
+  // Sem PDFs desta categoria, um progresso de download parcial dela não faz
+  // mais sentido — sem isto, um novo download a acharia "parcialmente pronta"
+  // com partes que já foram apagadas.
+  const storage = safeStorage();
+  for (const variant of variants) {
+    clearCompletedParts(storage, variant);
+  }
+
+  await loadCachedPdfsList(true);
+
+  return { removidos };
+}
+
 async function clearAllCache() {
   if (!browser) return;
 
@@ -2493,6 +2599,7 @@ export const offline = {
   downloadByCategories,
   cancelDownload,
   clearAllCache,
+  removeCategoryFromCache,
   showOfflineModal,
   hideOfflineModal,
   enableOffline,
@@ -2500,6 +2607,7 @@ export const offline = {
   clearError,
   loadCachedPdfsList,
   checkForNewPDFs,
+  pruneObsoletePdfsFromCache,
   getSavedCategories,
   saveCategories,
   getDownloadedCategories,
