@@ -7,7 +7,8 @@
 // e `localStorage` é resolvível — o `[[Get]]` dela é que lança. Estas leituras
 // rodam dentro de `loadLouvores()`, ou seja, no mount de `/`, `/listas`,
 // `/biblioteca` e `/offline`: era ali que o app deixava de abrir.
-import { safeGet, safeSet } from './safeStorage.js';
+import { safeGet, safeSet, safeRemove } from './safeStorage.js';
+import { CATALOG_CACHE_NAME } from '../offline/sw/swCaches.js';
 
 export const LOUVORES_MANIFEST_CHECKSUM_URL = '/louvores-manifest.sha256';
 
@@ -70,6 +71,61 @@ export function readManifestBodySha256() {
 /** @param {string} hexLower */
 export function writeManifestBodySha256(hexLower) {
   safeSet(LS_MANIFEST_BODY_SHA256, hexLower);
+}
+
+/** Limpa o hash local — força `ensureLouvoresManifestBodySha256Baseline` a estabelecer um novo. */
+export function clearManifestBodySha256() {
+  safeRemove(LS_MANIFEST_BODY_SHA256);
+}
+
+/**
+ * Corrige o hash local para bater com o que está *realmente* persistido no
+ * cache protegido, se os dois divergirem.
+ *
+ * Existe por causa de um bug já corrigido: `maybeCheckLouvoresManifestFromServer`
+ * costumava avançar o hash local mesmo quando a escrita no cache protegido
+ * falhava por falta de espaço (comum para quem já baixou o acervo inteiro).
+ * Quem ficou nesse estado tem, até hoje, um hash local que "bate" com o que o
+ * servidor reportou da última vez — mesmo sem nada persistido. A comparação
+ * `expected === localHash` no poll por checksum nunca mais dispara um resync
+ * para essas pessoas, porque, do ponto de vista dela, já está tudo sincronizado.
+ * Corrigir a causa raiz do bug não desfaz esse estado — só impede que ele se
+ * repita a partir de agora.
+ *
+ * Rodar isto uma vez, cedo, resolve: em vez de confiar cegamente no hash
+ * local, ele é recalculado a partir do que de fato está no cache. Se bater,
+ * nada muda. Se não bater (ou não houver nada persistido), o hash local passa
+ * a refletir a realidade — e a próxima comparação contra o servidor volta a
+ * ser honesta, disparando o resync de verdade se o catálogo já tiver mudado.
+ *
+ * @param {{ cachesImpl?: any }} [deps]
+ * @returns {Promise<void>}
+ */
+export async function resyncManifestBodySha256WithCatalog(deps = {}) {
+  const cachesImpl = 'cachesImpl' in deps ? deps.cachesImpl : (typeof caches !== 'undefined' ? caches : null);
+  if (!cachesImpl || typeof cachesImpl.open !== 'function') return;
+
+  const localHash = readManifestBodySha256();
+  if (!localHash) return; // sem baseline: nada para corrigir aqui.
+
+  try {
+    const cache = await cachesImpl.open(CATALOG_CACHE_NAME);
+    const cached = await cache.match('/louvores-manifest.json');
+    if (!cached) {
+      // O hash local afirma uma versão que não existe persistida: não há do
+      // que "confiar". Limpa para a baseline ser refeita do zero.
+      clearManifestBodySha256();
+      return;
+    }
+
+    const text = await cached.text();
+    const realHash = await sha256HexUtf8(text);
+    if (realHash !== localHash) {
+      writeManifestBodySha256(realHash);
+    }
+  } catch {
+    // Best-effort: nunca pode travar o carregamento normal da tela.
+  }
 }
 
 /**

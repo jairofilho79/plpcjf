@@ -86,10 +86,25 @@ describe('guardarManifestNoCatalogo', () => {
     assert.equal(r, 'indisponivel');
   });
 
-  it('nunca lança: cache que estoura vira falhou', async () => {
+  it('nunca lança: cache que estoura por falta de espaço vira sem-espaco', async () => {
+    // Distinção deliberada de 'falhou': é o sinal que a sincronização por
+    // checksum usa para não marcar sucesso e para acender o aviso da tela
+    // /offline (ver `storageQuota.js`).
     const cs = {
       async open() {
-        throw new Error('quota');
+        const e = new Error('Quota exceeded');
+        e.name = 'QuotaExceededError';
+        throw e;
+      }
+    };
+    const r = await guardarManifestNoCatalogo('/louvores-manifest.json', '[]', { cachesImpl: cs });
+    assert.equal(r, 'sem-espaco');
+  });
+
+  it('nunca lança: outro erro do cache vira falhou', async () => {
+    const cs = {
+      async open() {
+        throw new Error('boom');
       }
     };
     const r = await guardarManifestNoCatalogo('/louvores-manifest.json', '[]', { cachesImpl: cs });

@@ -7,6 +7,7 @@ import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   MANIFEST_SYNC_RETRY_DELAYS_MIN,
+  clearManifestBodySha256,
   hasLouvoresManifestBaseline,
   isManifestSyncBlocked,
   parseExpectedChecksumFromResponseBody,
@@ -15,6 +16,7 @@ import {
   readManifestSyncPenalty,
   recordManifestSyncFailure,
   resetManifestSyncPenalty,
+  resyncManifestBodySha256WithCatalog,
   sha256HexUtf8,
   shouldFetchExpectedChecksum,
   writeChecksumLastOkAt,
@@ -90,6 +92,77 @@ describe('louvoresManifestChecksum', () => {
     assert.equal(final.failStreak, 0);
     assert.equal(final.nextRetryAt, 0);
     assert.equal(final.cooldownUntil, t + 24 * 60 * 60 * 1000);
+  });
+});
+
+/** @param {string | null} texto */
+function fakeCachesComCatalogo(texto) {
+  return {
+    async open() {
+      return {
+        async match(/** @type {string} */ path) {
+          if (path !== '/louvores-manifest.json' || texto == null) return undefined;
+          return { text: async () => texto };
+        }
+      };
+    }
+  };
+}
+
+describe('resyncManifestBodySha256WithCatalog', () => {
+  beforeEach(() => {
+    globalThis.localStorage = criarStorage();
+  });
+
+  afterEach(() => {
+    delete globalThis.localStorage;
+  });
+
+  it('sem hash local, não faz nada (baseline ainda não existe)', async () => {
+    await resyncManifestBodySha256WithCatalog({ cachesImpl: fakeCachesComCatalogo('[]') });
+    assert.equal(readManifestBodySha256(), null);
+  });
+
+  it('hash local já bate com o persistido: não muda nada', async () => {
+    const texto = '[{"pdfId":"a"}]';
+    writeManifestBodySha256(await sha256HexUtf8(texto));
+    await resyncManifestBodySha256WithCatalog({ cachesImpl: fakeCachesComCatalogo(texto) });
+    assert.equal(readManifestBodySha256(), await sha256HexUtf8(texto));
+  });
+
+  it('hash local mentiroso (bug antigo): corrige para o que está de fato persistido', async () => {
+    // O caso real: uma sincronização por checksum antiga avançou o hash local
+    // para bater com o que o servidor reportou, mas a escrita no cache
+    // protegido falhou por cota — o que sobrou persistido é conteúdo velho.
+    const persistido = '[{"pdfId":"velho"}]';
+    writeManifestBodySha256('f'.repeat(64)); // hash que o servidor reportou, nunca gravado de fato
+    await resyncManifestBodySha256WithCatalog({ cachesImpl: fakeCachesComCatalogo(persistido) });
+    assert.equal(readManifestBodySha256(), await sha256HexUtf8(persistido));
+  });
+
+  it('nada persistido: limpa o hash local para forçar baseline nova', async () => {
+    writeManifestBodySha256('a'.repeat(64));
+    await resyncManifestBodySha256WithCatalog({ cachesImpl: fakeCachesComCatalogo(null) });
+    assert.equal(readManifestBodySha256(), null);
+  });
+
+  it('clearManifestBodySha256 remove o hash', () => {
+    writeManifestBodySha256('a'.repeat(64));
+    clearManifestBodySha256();
+    assert.equal(readManifestBodySha256(), null);
+  });
+
+  it('nunca lança: sem Cache API não faz nada', async () => {
+    writeManifestBodySha256('a'.repeat(64));
+    await resyncManifestBodySha256WithCatalog({ cachesImpl: undefined });
+    assert.equal(readManifestBodySha256(), 'a'.repeat(64));
+  });
+
+  it('nunca lança: cache que estoura mantém o hash como estava', async () => {
+    writeManifestBodySha256('a'.repeat(64));
+    const cs = { async open() { throw new Error('boom'); } };
+    await resyncManifestBodySha256WithCatalog({ cachesImpl: cs });
+    assert.equal(readManifestBodySha256(), 'a'.repeat(64));
   });
 });
 

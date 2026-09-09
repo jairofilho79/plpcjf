@@ -3,14 +3,18 @@
  * Run: node --test src/lib/offline/storage/storageQuota.test.js
  */
 
-import { describe, it } from 'node:test';
+import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   checkQuota,
   ensurePersistentStorage,
   isQuotaError,
-  quotaErrorMessage
+  quotaErrorMessage,
+  markUpdateQuotaBlocked,
+  clearUpdateQuotaBlocked,
+  readUpdateQuotaBlockedAt
 } from './storageQuota.js';
+import { criarFakeStorage } from '../../testing/fakeStorage.js';
 
 const MB = 1024 * 1024;
 
@@ -36,13 +40,22 @@ describe('checkQuota', () => {
   it('reprova quando o necessário não cabe na folga', async () => {
     const r = await checkQuota(fakeNavigator({ usage: 100 * MB, quota: 500 * MB }), 800 * MB);
     assert.equal(r.ok, false);
-    assert.equal(r.faltam, 400 * MB);
+    // 400 MB de folga real contra 800 MB * 1.1 de margem + 40 MB de reserva.
+    assert.equal(r.faltam, Math.ceil(800 * MB * 1.1 + 40 * MB - 400 * MB));
   });
 
   it('exige margem: recusa quando o pedido ocupa exatamente tudo', async () => {
     // Um download que enche o disco até o último byte falha no meio; a margem
     // é o que impede prometer que cabe quando na prática não cabe.
     const r = await checkQuota(fakeNavigator({ usage: 0, quota: 1000 * MB }), 1000 * MB);
+    assert.equal(r.ok, false);
+  });
+
+  it('exige reserva: recusa mesmo quando só a reserva pós-download não cabe', async () => {
+    // O download em si cabe com folga (900 MB pedidos, 1000 MB livres, margem
+    // de 10% = 990 MB) mas não sobra nada para o catálogo escrever depois —
+    // é exatamente o caso que travava a atualização automática de louvores.
+    const r = await checkQuota(fakeNavigator({ usage: 0, quota: 1000 * MB }), 900 * MB);
     assert.equal(r.ok, false);
   });
 
@@ -139,5 +152,30 @@ describe('quotaErrorMessage', () => {
 
   it('funciona sem números', () => {
     assert.match(quotaErrorMessage({}), /espaço/i);
+  });
+});
+
+describe('aviso de atualização bloqueada por cota', () => {
+  beforeEach(() => {
+    globalThis.localStorage = criarFakeStorage();
+  });
+
+  afterEach(() => {
+    delete /** @type {any} */ (globalThis).localStorage;
+  });
+
+  it('não há aviso antes de qualquer bloqueio', () => {
+    assert.equal(readUpdateQuotaBlockedAt(), null);
+  });
+
+  it('marca e lê o momento do bloqueio', () => {
+    markUpdateQuotaBlocked(1234);
+    assert.equal(readUpdateQuotaBlockedAt(), 1234);
+  });
+
+  it('limpar remove o aviso', () => {
+    markUpdateQuotaBlocked(1234);
+    clearUpdateQuotaBlocked();
+    assert.equal(readUpdateQuotaBlockedAt(), null);
   });
 });

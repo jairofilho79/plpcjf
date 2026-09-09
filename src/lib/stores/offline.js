@@ -29,7 +29,10 @@ import {
   checkQuota,
   ensurePersistentStorage,
   isQuotaError,
-  quotaErrorMessage
+  quotaErrorMessage,
+  markUpdateQuotaBlocked,
+  clearUpdateQuotaBlocked,
+  ESTIMATIVA_MEDIA_PDF_BYTES
 } from '$lib/offline/storage/storageQuota.js';
 import { louvores } from './louvores';
 import { validateManifestsIntegrity } from '$lib/utils/manifestValidation';
@@ -1237,19 +1240,86 @@ async function checkForNewPDFs() {
 
     if (newPdfs.length > 0) {
       console.log(`[Offline Store] Found ${newPdfs.length} new PDFs in selected categories:`, savedCategories);
-      
+
+      const pdfUrls = newPdfs.map(getPdfUrl).filter(url => url !== null);
+
+      // Espaço em disco: quem já baixou o acervo inteiro é justamente quem
+      // mais provavelmente está sem folga. Sem checar antes, este download
+      // automático caía direto no mesmo padrão que `checkQuota` já resolveu
+      // para o download manual: `cache.put` falhando em silêncio, um PDF de
+      // cada vez, dentro do Service Worker.
+      //
+      // Não há `size` por PDF aqui (ao contrário das partes de ZIP do
+      // acervo) — usa uma estimativa deliberadamente generosa.
+      const bytesEstimados = pdfUrls.length * ESTIMATIVA_MEDIA_PDF_BYTES;
+      const espaco = await checkQuota(typeof navigator !== 'undefined' ? navigator : null, bytesEstimados);
+
+      if (!espaco.ok) {
+        console.warn('[Offline Store] Auto-download de PDFs novos adiado: sem espaço', espaco);
+        offlineState.update(s => ({ ...s, error: quotaErrorMessage({ faltam: espaco.faltam }) }));
+        markUpdateQuotaBlocked();
+        // Não grava `LAST_MANIFEST_HASH_KEY`: sem isso os PDFs que ficaram de
+        // fora seriam esquecidos — a próxima checagem trataria o manifesto
+        // como já visto, mesmo com eles nunca baixados.
+        return;
+      }
+
       // Auto-download new PDFs
       offlineState.update(s => ({ ...s, autoDownloading: true }));
-      
-      const pdfUrls = newPdfs.map(getPdfUrl).filter(url => url !== null);
+
       await startDownload(pdfUrls);
-      
+
       offlineState.update(s => ({ ...s, autoDownloading: false }));
+
+      // Espaço confirmado e download tentado: qualquer bloqueio anterior
+      // registrado para o aviso da tela /offline não se aplica mais.
+      clearUpdateQuotaBlocked();
     }
   }
 
   // Save current hash
   safeSet(LAST_MANIFEST_HASH_KEY, currentHash);
+}
+
+/**
+ * Remove do cache de PDFs tudo que o catálogo recebido não referencia mais.
+ *
+ * Chamado só quando a gravação do catálogo novo falha por falta de espaço
+ * (`louvores.js`, `fetchLouvoresManifestOnce`): antes de desistir, vale
+ * tentar liberar o que o próprio catálogo novo já descartou — um PDF que o
+ * servidor não lista mais não é conteúdo que a pessoa "escolheu manter".
+ *
+ * Compara contra o catálogo inteiro, não só as categorias salvas: um PDF de
+ * uma categoria não baixada não pode estar no cache de qualquer forma, então
+ * restringir aqui só arriscaria podar por engano algo que uma corrida com o
+ * download ainda em andamento acabou de gravar.
+ *
+ * @param {any[]} manifestData
+ * @returns {Promise<{ removidos: number }>}
+ */
+async function pruneObsoletePdfsFromCache(manifestData) {
+  if (!browser) return { removidos: 0 };
+  try {
+    const { PDF_CACHE_NAME } = await import('$lib/offline/sw/swCaches.js');
+    const { podarPdfsObsoletos } = await import('$lib/offline/storage/prunarPdfsObsoletos.js');
+
+    const caminhosValidos = new Set(
+      (Array.isArray(manifestData) ? manifestData : [])
+        .map((louvor) => getPdfUrl(louvor))
+        .filter((url) => url !== null)
+        .map((url) => PdfPathManager.normalizeForStorage(url))
+        .filter(Boolean)
+    );
+
+    const resultado = await podarPdfsObsoletos(PDF_CACHE_NAME, caminhosValidos);
+    if (resultado.removidos > 0) {
+      console.info(`[Offline Store] ${resultado.removidos} PDF(s) obsoleto(s) removido(s) para liberar espaço`);
+    }
+    return resultado;
+  } catch (e) {
+    console.warn('[Offline Store] pruneObsoletePdfsFromCache:', e);
+    return { removidos: 0 };
+  }
 }
 
 /**
@@ -1979,8 +2049,16 @@ async function downloadByCategories(categories) {
       downloading: false,
       error: quotaErrorMessage({ faltam: espaco.faltam })
     }));
+    markUpdateQuotaBlocked();
     return;
   }
+
+  // Espaço confirmado para este download: se um aviso de bloqueio por cota
+  // ficou registrado de uma tentativa (automática) anterior, ele já não se
+  // aplica — este download vai usar boa parte dessa folga, mas a checagem
+  // que o aprovou já reserva o que a atualização do catálogo precisa depois
+  // (ver `RESERVA_ATUALIZACAO_BYTES`).
+  clearUpdateQuotaBlocked();
 
   const persistente = await ensurePersistentStorage(typeof navigator !== 'undefined' ? navigator : null);
   console.info(
@@ -2029,6 +2107,71 @@ async function cancelDownload() {
 /**
  * Clear all cached data
  */
+/**
+ * Remove do cache só os PDFs de uma categoria (e variantes agregadas — ver
+ * `getCategoryVariants`), sem tocar no resto do acervo baixado.
+ *
+ * Antes desta função, a única forma de liberar espaço era `disableOffline`
+ * (desativa o modo offline inteiro e apaga tudo) — péssima troca para quem só
+ * queria espaço para a atualização do catálogo persistir e não abrir mão do
+ * resto do que baixou. Ver `podarPdfsObsoletos` para a poda automática (só
+ * remove o que o servidor já descartou); esta função é a escolha manual da
+ * pessoa sobre o que ela ainda quer.
+ *
+ * @param {string} category
+ * @returns {Promise<{ removidos: number }>}
+ */
+async function removeCategoryFromCache(category) {
+  if (!browser || !category) return { removidos: 0 };
+
+  const normalizedCategory = normalizeCategory(category);
+  const variants = getCategoryVariants(normalizedCategory);
+  /** @type {any[]} */
+  const louvoresData = get(louvores);
+  const categoryLouvores = louvoresData.filter((l) => variants.includes(l.categoria));
+
+  let removidos = 0;
+  try {
+    const cache = await openPdfCache();
+    for (const louvor of categoryLouvores) {
+      const pdfUrl = getPdfUrl(louvor);
+      if (!pdfUrl) continue;
+      const url = PdfPathManager.createRequestUrl(pdfUrl, window.location.origin);
+      if (!url) continue;
+      try {
+        if (await cache.delete(new Request(url))) removidos++;
+      } catch (e) {
+        console.warn(`[Offline Store] Falha ao remover PDF de "${category}":`, pdfUrl, e);
+      }
+    }
+  } catch (e) {
+    console.error('[Offline Store] removeCategoryFromCache:', e);
+  }
+
+  // Tira a categoria (e variantes) das listas de "selecionada"/"baixada" —
+  // senão o app segue achando que ela ainda está toda lá.
+  saveCategories(
+    getSavedCategories().filter((/** @type {string} */ c) => !variants.includes(c) && c !== normalizedCategory)
+  );
+  saveDownloadedCategories(
+    getDownloadedCategories().filter(
+      (/** @type {string} */ c) => !variants.includes(c) && c !== normalizedCategory
+    )
+  );
+
+  // Sem PDFs desta categoria, um progresso de download parcial dela não faz
+  // mais sentido — sem isto, um novo download a acharia "parcialmente pronta"
+  // com partes que já foram apagadas.
+  const storage = safeStorage();
+  for (const variant of variants) {
+    clearCompletedParts(storage, variant);
+  }
+
+  await loadCachedPdfsList(true);
+
+  return { removidos };
+}
+
 async function clearAllCache() {
   if (!browser) return;
 
@@ -2456,6 +2599,7 @@ export const offline = {
   downloadByCategories,
   cancelDownload,
   clearAllCache,
+  removeCategoryFromCache,
   showOfflineModal,
   hideOfflineModal,
   enableOffline,
@@ -2463,6 +2607,7 @@ export const offline = {
   clearError,
   loadCachedPdfsList,
   checkForNewPDFs,
+  pruneObsoletePdfsFromCache,
   getSavedCategories,
   saveCategories,
   getDownloadedCategories,
