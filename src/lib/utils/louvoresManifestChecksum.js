@@ -160,7 +160,17 @@ export function resetManifestSyncPenalty() {
   writeManifestSyncPenalty({ failStreak: 0, nextRetryAt: 0, cooldownUntil: 0 });
 }
 
-const TWENTY_FOUR_H_MS = 24 * 60 * 60 * 1000;
+/**
+ * Intervalo mínimo entre duas consultas ao checksum.
+ *
+ * Era 24 h, e isso fazia a atualização automática parecer inexistente: quem
+ * publicava o catálogo pela admin às 15h só o via chegar aos dispositivos no
+ * dia seguinte, porque cada um deles já tinha "conferido" naquela manhã. O GET
+ * do checksum tem 64 bytes e sai com `no-store`; o manifesto de 1,4 MB só é
+ * baixado quando o hash diverge. Consultar a cada abertura do app custa quase
+ * nada — a janela existe só para não repetir a consulta a cada troca de aba.
+ */
+export const CHECKSUM_POLL_MIN_INTERVAL_MS = 5 * 60 * 1000;
 
 /**
  * Baseline existe: automático pode comparar checksum.
@@ -171,7 +181,8 @@ export function hasLouvoresManifestBaseline() {
 }
 
 /**
- * Pode disparar GET do endpoint de checksum (24h desde último sucesso, só se online).
+ * Pode disparar GET do endpoint de checksum (janela mínima desde a última
+ * consulta bem-sucedida, só com baseline e online).
  * @param {number} now
  * @param {boolean} isOnline
  * @returns {boolean}
@@ -181,7 +192,7 @@ export function shouldFetchExpectedChecksum(now, isOnline) {
   if (!hasLouvoresManifestBaseline()) return false;
   const last = readChecksumLastOkAt();
   if (last == null) return true;
-  return now - last >= TWENTY_FOUR_H_MS;
+  return now - last >= CHECKSUM_POLL_MIN_INTERVAL_MS;
 }
 
 /**

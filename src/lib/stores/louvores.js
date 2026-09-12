@@ -496,6 +496,7 @@ export async function loadLouvores() {
       await ensureLouvoresManifestBodySha256Baseline({
         isCancelled: () => gen !== louvoresLoadGeneration
       });
+      if (gen === louvoresLoadGeneration) void maybeCheckLouvoresManifestFromServer();
       return;
     }
 
@@ -512,6 +513,13 @@ export async function loadLouvores() {
     louvoresLoaded.set(true);
     await afterManifestLoaded(enriched);
     if (gen !== louvoresLoadGeneration) return;
+
+    // A tela já está servida (quase sempre pelo cache protegido do Service
+    // Worker, que é cache-first e nunca expira sozinho). Só agora existe a
+    // baseline que a comparação com o servidor exige — o gatilho por
+    // `requestIdleCallback` do layout costuma disparar antes disto e sair
+    // sem fazer nada. Conferir aqui garante uma consulta por abertura do app.
+    void maybeCheckLouvoresManifestFromServer();
   } catch (error) {
     console.error('Error loading louvores:', error);
     if (gen === louvoresLoadGeneration) {
@@ -521,8 +529,10 @@ export async function loadLouvores() {
 }
 
 /**
- * GET do checksum no Worker (24h, só com baseline e online). Se o esperado ≠ hash local,
- * baixa o manifesto com no-store e só aplica se o SHA-256 do corpo for o esperado.
+ * GET do checksum no servidor (a cada abertura do app, respeitando
+ * `CHECKSUM_POLL_MIN_INTERVAL_MS`; só com baseline e online). Se o esperado ≠
+ * hash local, limpa o catálogo do cache protegido, baixa o manifesto com
+ * no-store e só aplica se o SHA-256 do corpo for o esperado.
  */
 export async function maybeCheckLouvoresManifestFromServer() {
   if (!browser) return;

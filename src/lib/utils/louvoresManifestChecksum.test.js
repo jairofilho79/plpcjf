@@ -1,11 +1,12 @@
 /**
- * Checksum do louvores-manifest.json: janela de 24 h e backoff.
+ * Checksum do louvores-manifest.json: janela mínima entre consultas e backoff.
  * Run: node --test src/lib/utils/louvoresManifestChecksum.test.js
  */
 
 import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  CHECKSUM_POLL_MIN_INTERVAL_MS,
   MANIFEST_SYNC_RETRY_DELAYS_MIN,
   clearManifestBodySha256,
   hasLouvoresManifestBaseline,
@@ -60,7 +61,7 @@ describe('louvoresManifestChecksum', () => {
     assert.equal(parseExpectedChecksumFromResponseBody(''), null);
   });
 
-  it('shouldFetchExpectedChecksum exige baseline, estar online e a janela de 24 h', async () => {
+  it('shouldFetchExpectedChecksum exige baseline, estar online e a janela mínima', async () => {
     const corpo = '[{"pdfId":"x"}]';
     writeManifestBodySha256(await sha256HexUtf8(corpo));
     const agora = 1_000_000_000_000;
@@ -70,7 +71,17 @@ describe('louvoresManifestChecksum', () => {
 
     writeChecksumLastOkAt(agora);
     assert.equal(shouldFetchExpectedChecksum(agora + 1, true), false);
-    assert.equal(shouldFetchExpectedChecksum(agora + 24 * 60 * 60 * 1000, true), true);
+    assert.equal(shouldFetchExpectedChecksum(agora + CHECKSUM_POLL_MIN_INTERVAL_MS - 1, true), false);
+    assert.equal(shouldFetchExpectedChecksum(agora + CHECKSUM_POLL_MIN_INTERVAL_MS, true), true);
+  });
+
+  it('a janela mínima é de minutos, não de horas: quem publica pela admin precisa ser visto na mesma abertura do app', () => {
+    // Em 11/09/2026 a janela era de 24 h: o catálogo publicado às 15h só chegava
+    // ao dispositivo no dia seguinte, e parecia que a atualização automática
+    // não existia. O GET tem 64 bytes; o manifesto de 1,4 MB só desce quando
+    // o hash diverge, então consultar a cada abertura custa quase nada.
+    assert.ok(CHECKSUM_POLL_MIN_INTERVAL_MS <= 5 * 60 * 1000);
+    assert.ok(CHECKSUM_POLL_MIN_INTERVAL_MS >= 60 * 1000);
   });
 
   it('recordManifestSyncFailure aplica 1–2–4–8–16 min e depois 24 h de espera', () => {
