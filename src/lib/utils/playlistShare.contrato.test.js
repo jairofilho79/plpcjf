@@ -187,7 +187,7 @@ describe('contrato do link curto (?s=&n=) — espelhado no app v2', () => {
   it('emite legado quando falta shortId em algum id', () => {
     const url = generatePlaylistShareUrl([ID_A, ID_B], 'X', [{ pdfId: ID_A, shortId: '0000' }]);
     assert.match(url, /^\/\?sharepdfs=/);
-    assert.equal(url.includes('s='), false);
+    assert.equal(new URL(url, 'https://plpcg.com').searchParams.has('s'), false);
   });
 
   it('lê o link curto: s vence os params legados presentes na mesma URL', () => {
