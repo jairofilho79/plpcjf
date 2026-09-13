@@ -1,3 +1,10 @@
+/**
+ * Normaliza linhas e descarta só o que é claramente inútil (sem pdfId válido).
+ * Nome vira string (inclui número/boolean do JSON) para não rejeitar dados válidos por tipo.
+ *
+ * @param {unknown} raw
+ * @returns {any[] | null} null se não houver nenhuma linha aplicável
+ */
 export function prepareLouvoresManifestPayload(raw) {
   if (!Array.isArray(raw) || raw.length === 0) return null;
   const out = [];

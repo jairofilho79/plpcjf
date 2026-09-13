@@ -65,13 +65,7 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-/**
- * Normaliza linhas e descarta só o que é claramente inútil (sem pdfId válido).
- * Nome vira string (inclui número/boolean do JSON) para não rejeitar dados válidos por tipo.
- *
- * @param {unknown} raw
- * @returns {any[] | null} null se não houver nenhuma linha aplicável
- */
+// Movida para utils/manifestPayload.js para ser testável sob node --test.
 export { prepareLouvoresManifestPayload } from '$lib/utils/manifestPayload.js';
 
 /**
