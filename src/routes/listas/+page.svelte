@@ -217,7 +217,7 @@
 
   async function handleShare(playlist, event) {
     event.stopPropagation();
-    const shareUrl = generatePlaylistShareUrl(playlist.pdfIds, playlist.nome);
+    const shareUrl = generatePlaylistShareUrl(playlist.pdfIds, playlist.nome, $louvores);
     
     try {
       const result = await sharePlaylistLink(shareUrl, playlist.nome);

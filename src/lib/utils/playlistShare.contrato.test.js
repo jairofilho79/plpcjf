@@ -18,7 +18,13 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { generatePlaylistShareUrl } from './playlistUtils.js';
-import { parseSharePdfIds, resolveKnownPdfIds, stripShareParams } from './playlistShare.js';
+import {
+  parseSharePdfIds,
+  parseShortShareIds,
+  resolveKnownPdfIds,
+  resolveShortIds,
+  stripShareParams
+} from './playlistShare.js';
 
 /** Dois pdfId reais do acervo (Base64 padrão do caminho em UTF-8). */
 const ID_A = 'MDQxMTIwMjUvQ29uaGXDp2Ftb3MgZSBwcm9zc2lnYW1vcy9DaWZyYS5wZGY=';
@@ -164,5 +170,35 @@ describe('§5.1 leitura do link', () => {
     assert.equal(restoParams.get('utm_source'), 'whatsapp');
     assert.equal(restoParams.get('pesquisa'), 'amor');
     assert.equal(restoParams.has('sharepdfs'), false);
+  });
+});
+
+describe('contrato do link curto (?s=&n=) — espelhado no app v2', () => {
+  const catalogo = [
+    { pdfId: ID_A, shortId: '0000' },
+    { pdfId: ID_B, shortId: '1a2f' }
+  ];
+
+  it('emite curto quando todos têm shortId: ids minúsculos com -, nome encodado', () => {
+    const url = generatePlaylistShareUrl([ID_B, ID_A], 'Culto de domingo', catalogo);
+    assert.equal(url, '/?s=1a2f-0000&n=Culto%20de%20domingo');
+  });
+
+  it('emite legado quando falta shortId em algum id', () => {
+    const url = generatePlaylistShareUrl([ID_A, ID_B], 'X', [{ pdfId: ID_A, shortId: '0000' }]);
+    assert.match(url, /^\/\?sharepdfs=/);
+    assert.equal(url.includes('s='), false);
+  });
+
+  it('lê o link curto: s vence os params legados presentes na mesma URL', () => {
+    const u = new URL('https://plpcg.com/?s=0000-1A2F-zzzz&n=Culto&sharepdfs=lixo&sharename=outro');
+    const ids = resolveShortIds(parseShortShareIds(u.searchParams.get('s')), catalogo);
+    assert.deepEqual(ids, [ID_A, ID_B]);
+    assert.equal(u.searchParams.get('n'), 'Culto');
+  });
+
+  it('"0000" atravessa como string com zeros', () => {
+    const url = generatePlaylistShareUrl([ID_A], 'x', catalogo);
+    assert.equal(url, '/?s=0000&n=x');
   });
 });
