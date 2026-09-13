@@ -126,8 +126,9 @@ export function parseShortShareIds(param) {
 }
 
 /**
- * `shortId → pdfId` pelo catálogo, na ordem pedida, sem repetição (a lista
- * salva não repete, como em `resolveKnownPdfIds`). Desconhecido é ignorado.
+ * `shortId → pdfId` pelo catálogo, na ordem pedida, sem repetição — a UI do
+ * plpcjf nunca repete louvor (`addToCarousel` recusa duplicata). Desconhecido
+ * é ignorado.
  * Comparação textual: um `shortId` numérico no catálogo não casa.
  * @param {string[]} shortIds
  * @param {Array<{pdfId?: string, shortId?: unknown}>} louvores

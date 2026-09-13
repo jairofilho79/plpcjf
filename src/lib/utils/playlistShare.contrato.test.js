@@ -33,8 +33,10 @@ const ID_A = 'MDQxMTIwMjUvQ29uaGXDp2Ftb3MgZSBwcm9zc2lnYW1vcy9DaWZyYS5wZGY=';
 const ID_B = 'MDQxMTIwMjUvQ29uaGXDp2Ftb3MgZSBwcm9zc2lnYW1vcy9HZXN0b3MgQ0lBcy5wZGY=';
 
 /**
- * Reproduz a leitura de src/routes/+page.svelte: `s` (curto) vence; sem `s`,
- * `sharepdfs` como sempre. Recebe o catálogo porque `s` precisa dele.
+ * Reproduz a leitura de src/routes/+page.svelte: `s` (curto) vence, mas só
+ * quando `n` também vem e não é vazio — os dois são obrigatórios no formato
+ * curto. Sem isso, `sharepdfs` como sempre. Recebe o catálogo porque `s`
+ * precisa dele.
  *
  * Tarefa 10: antes duplicava aqui a lógica de `split(',')` e um segundo
  * `decodeURIComponent(sharename)` — o próprio bug do URIError vivia nessa
@@ -47,9 +49,11 @@ const ID_B = 'MDQxMTIwMjUvQ29uaGXDp2Ftb3MgZSBwcm9zc2lnYW1vcy9HZXN0b3MgQ0lBcy5wZG
 function lerLinkDeLista(href, louvores = []) {
   const u = new URL(href, 'https://plpcg.com');
   const params = new URLSearchParams(u.search);
-  if (params.has(SHORT_SHARE_PARAM)) {
+  const nomeCurto = params.get(SHORT_SHARE_NAME_PARAM);
+  const temCurto = params.has(SHORT_SHARE_PARAM) && nomeCurto !== null && nomeCurto !== '';
+  if (temCurto) {
     const pdfIds = resolveShortIds(parseShortShareIds(params.get(SHORT_SHARE_PARAM)), louvores);
-    return { pdfIds, sharename: params.get(SHORT_SHARE_NAME_PARAM) };
+    return { pdfIds, sharename: nomeCurto };
   }
   const pdfIds = parseSharePdfIds(params.get('sharepdfs'));
   // URLSearchParams.get() já decodificou uma vez — sem decode extra (D-6).
@@ -214,5 +218,13 @@ describe('contrato do link curto (?s=&n=) — espelhado no app v2', () => {
     const lido = lerLinkDeLista('/?s=1a2f-0000&n=Culto%20de%20domingo', catalogo);
     assert.deepEqual(lido.pdfIds, [ID_B, ID_A]);
     assert.equal(lido.sharename, 'Culto de domingo');
+  });
+
+  it('s sem n não é share curto (n é obrigatório no contrato)', () => {
+    const lido = lerLinkDeLista('/?s=0000', catalogo);
+    assert.deepEqual(lido.pdfIds, []);
+    assert.equal(lido.sharename, null);
+    const vazio = lerLinkDeLista('/?s=0000&n=', catalogo);
+    assert.deepEqual(vazio.pdfIds, []);
   });
 });

@@ -8,6 +8,7 @@ describe('prepareLouvoresManifestPayload preserva shortId', () => {
       { pdfId: 'a', nome: 'A', shortId: '0000' },
       { pdfId: 'b', nome: 'B' }
     ]);
+    assert.ok(out);
     assert.equal(out[0].shortId, '0000');
     assert.equal(typeof out[0].shortId, 'string');
     assert.equal('shortId' in out[1], false);

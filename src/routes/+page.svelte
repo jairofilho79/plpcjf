@@ -12,6 +12,7 @@
   import { savedPlaylists } from '$lib/stores/savedPlaylists';
   import { bibliotecaItemsPerPage } from '$lib/stores/bibliotecaItemsPerPage';
   import { lerEstadoDaUrl, updateUrlParams } from '$lib/utils/urlSync';
+  import { showWarningSnackbar } from '$lib/utils/appSnackbar';
   import {
     parseSharePdfIds,
     parseShortShareIds,
@@ -221,7 +222,8 @@
 
   /**
    * Importa a lista compartilhada que veio na query — formato curto
-   * (`?s=<shortIds>&n=<nome>`) ou legado (`?sharepdfs=...&sharename=...`).
+   * (`?s=<shortIds>&n=<nome>`, os dois obrigatórios) ou legado
+   * (`?sharepdfs=...&sharename=...`).
    * `s` vence quando os dois vêm juntos. A URL é limpa sempre que algum
    * param de share existe, mesmo quando nada é importado.
    */
@@ -229,7 +231,8 @@
     if (sharedLinkProcessed) return;
 
     const urlParams = new URLSearchParams($page.url.search);
-    const temCurto = urlParams.has(SHORT_SHARE_PARAM);
+    const nomeCurto = urlParams.get(SHORT_SHARE_NAME_PARAM);
+    const temCurto = urlParams.has(SHORT_SHARE_PARAM) && nomeCurto !== null && nomeCurto !== '';
     if (!temCurto && !urlParams.has('sharepdfs')) return;
     // Sem catálogo não dá para resolver os ids: espera o manifesto (caso C2).
     if ($louvores.length === 0) return;
@@ -241,7 +244,7 @@
     if (temCurto) {
       // shortId → pdfId pelo catálogo; token desconhecido é ignorado.
       idsResolvidos = resolveShortIds(parseShortShareIds(urlParams.get(SHORT_SHARE_PARAM)), $louvores);
-      sharename = urlParams.get(SHORT_SHARE_NAME_PARAM);
+      sharename = nomeCurto;
     } else {
       const pdfIds = parseSharePdfIds(urlParams.get('sharepdfs'));
       // A lista salva guarda os mesmos ids que o carrossel mostra: ids fantasmas
@@ -262,6 +265,7 @@
       }
     } else {
       console.warn('[share] nenhum id do link foi encontrado no catálogo');
+      showWarningSnackbar('Não foi possível abrir a lista compartilhada. Abra o link novamente.');
     }
 
     // Limpa só os params do compartilhamento; utm_source/fbclid seguem vivos.

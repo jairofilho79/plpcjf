@@ -65,9 +65,6 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-// Movida para utils/manifestPayload.js para ser testável sob node --test.
-export { prepareLouvoresManifestPayload } from '$lib/utils/manifestPayload.js';
-
 /**
  * Hydrate louvores store from a local zip-mãe (offline-first import).
  * @param {unknown} raw
