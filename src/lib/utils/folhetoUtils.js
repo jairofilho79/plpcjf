@@ -168,7 +168,9 @@ export async function generateFolhetoImage(htmlString) {
     const target = /** @type {HTMLElement} */ (container.firstElementChild);
     if (!target) throw new Error('Elemento do folheto não renderizado');
     await Promise.all(
-      Array.from(container.querySelectorAll('img')).map(img => img.decode().catch(() => {}))
+      Array.from(container.querySelectorAll('img')).map(img =>
+        typeof img.decode === 'function' ? img.decode().catch(() => {}) : Promise.resolve()
+      )
     );
     const canvas = await html2canvas(target, {
       scale: 2,

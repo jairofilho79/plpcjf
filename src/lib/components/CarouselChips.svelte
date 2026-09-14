@@ -630,7 +630,13 @@
       const pdfIds = $carousel.map(l => l.pdfId);
       const playlistName = savedPlaylistMatch?.nome || generateDefaultPlaylistName();
       const shareUrl = generatePlaylistShareUrl(pdfIds, playlistName, $louvores);
-      const qrDataUrl = isShortShareUrl(shareUrl) ? await generateShareQrDataUrl(shareUrl) : null;
+      // QR é decoração; o folheto é o produto — falha no QR não pode derrubar o folheto.
+      const qrDataUrl = isShortShareUrl(shareUrl)
+        ? await generateShareQrDataUrl(shareUrl).catch(error => {
+            console.warn('Falha ao gerar QR do folheto; seguindo sem QR.', error);
+            return null;
+          })
+        : null;
       const html = generateFolhetoHtml(folhetoLouvores, { shareUrl, qrDataUrl });
       const imageBlob = await generateFolhetoImage(html);
       await shareFolheto(imageBlob, shareUrl, playlistName);
