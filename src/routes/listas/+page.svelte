@@ -6,8 +6,9 @@
   import { carousel } from '$lib/stores/carousel';
   import { louvores, loadLouvores } from '$lib/stores/louvores';
   import { goto } from '$app/navigation';
-  import { Play, Trash2, Share2, Edit2, Check, X, Star, Eye, BookOpen } from 'lucide-svelte';
+  import { Play, Trash2, Share2, Edit2, Check, X, Star, Eye, BookOpen, Link } from 'lucide-svelte';
   import { sharePlaylistLink, generatePlaylistShareUrl } from '$lib/utils/playlistUtils';
+  import { extractShareQueryFromText } from '$lib/utils/playlistShare';
   import { navigateLouvorToLeitor } from '$lib/utils/navigateLouvorToLeitor';
   import LouvorCard from '$lib/components/LouvorCard.svelte';
 
@@ -21,6 +22,15 @@
   let playlistToDelete = null;
   let showOnlyFavorites = false;
   let searchTerm = '';
+  // «Importar link»: no iOS um link tocado nunca abre no PWA instalado, então
+  // o usuário copia o link do WhatsApp e cola aqui (vale no Android também).
+  let showImportModal = false;
+  let importText = '';
+  let importError = '';
+  /**
+   * @type {HTMLTextAreaElement | null}
+   */
+  let importTextarea = null;
   /**
    * @type {HTMLElement | null}
    */
@@ -31,6 +41,45 @@
   let viewFavoriteButtonElement = null;
   let viewLeitorError = null;
   let openingLeitor = false;
+
+  function openImport() {
+    importText = '';
+    importError = '';
+    showImportModal = true;
+    tick().then(() => importTextarea && importTextarea.focus());
+  }
+
+  function closeImport() {
+    showImportModal = false;
+  }
+
+  async function pasteImportText() {
+    // readText só existe em contexto seguro e pode ser negado (iOS pede
+    // permissão no primeiro uso); se falhar, o usuário cola na mão.
+    if (!browser || !navigator.clipboard || !navigator.clipboard.readText) return;
+    try {
+      const texto = (await navigator.clipboard.readText()).trim();
+      if (texto) {
+        importText = texto;
+        importError = '';
+      }
+    } catch {
+      // Sem permissão: nada a fazer, o campo continua editável.
+    }
+  }
+
+  function confirmImport() {
+    const query = extractShareQueryFromText(importText);
+    if (!query) {
+      importError = 'Não encontrei um link de lista nesse texto. Cole o link inteiro (plpcg.com/?s=…).';
+      return;
+    }
+    showImportModal = false;
+    // A home é quem importa (handleSharedPlaylistLink): mesmo caminho do link
+    // clicado — resolve os ids, carrega o carrossel, salva sem duplicar e
+    // limpa a URL.
+    goto('/' + query);
+  }
 
   $: allPlaylists = $savedPlaylists;
   $: viewIdFromUrl = $page.url.searchParams.get('viewId');
@@ -510,15 +559,26 @@
       <!-- Conteúdo Normal da Página -->
       <div class="page-header">
         <h1 class="page-title">Minhas Playlists</h1>
-        <button
-          class="favorite-filter-button"
-          class:active={showOnlyFavorites}
-          on:click={() => showOnlyFavorites = !showOnlyFavorites}
-          title={showOnlyFavorites ? 'Mostrar todas as playlists' : 'Mostrar apenas favoritas'}
-          bind:this={filterButtonElement}
-        >
-          <Star class="star-icon" />
-        </button>
+        <div class="page-header-actions">
+          <button
+            type="button"
+            class="import-link-button"
+            on:click={openImport}
+            title="Importar lista a partir de um link compartilhado"
+            aria-label="Importar link"
+          >
+            <Link class="import-link-icon" />
+          </button>
+          <button
+            class="favorite-filter-button"
+            class:active={showOnlyFavorites}
+            on:click={() => showOnlyFavorites = !showOnlyFavorites}
+            title={showOnlyFavorites ? 'Mostrar todas as playlists' : 'Mostrar apenas favoritas'}
+            bind:this={filterButtonElement}
+          >
+            <Star class="star-icon" />
+          </button>
+        </div>
       </div>
 
       <div class="search-section">
@@ -702,6 +762,47 @@
   </div>
 {/if}
 
+<!-- Import Shared Link Modal -->
+{#if showImportModal}
+  <div class="modal-overlay" on:click={closeImport} on:keydown={(e) => e.key === 'Escape' && closeImport()}>
+    <div class="modal-content" on:click|stopPropagation role="dialog" aria-labelledby="import-modal-title">
+      <h3 class="modal-title" id="import-modal-title">Importar link</h3>
+      <p class="modal-message">
+        Cole o link da lista que você recebeu (por exemplo, no WhatsApp).
+      </p>
+      <textarea
+        class="import-textarea"
+        class:has-error={importError !== ''}
+        rows="3"
+        placeholder="https://plpcg.com/?s=…&n=…"
+        bind:value={importText}
+        bind:this={importTextarea}
+        on:input={() => (importError = '')}
+        on:keydown={(e) => {
+          if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            confirmImport();
+          }
+        }}
+      ></textarea>
+      {#if importError}
+        <p class="import-error" role="alert">{importError}</p>
+      {/if}
+      <div class="modal-actions">
+        <button type="button" class="modal-button cancel-button" on:click={pasteImportText}>
+          Colar
+        </button>
+        <button type="button" class="modal-button cancel-button" on:click={closeImport}>
+          Cancelar
+        </button>
+        <button type="button" class="modal-button import-button" on:click={confirmImport}>
+          Importar
+        </button>
+      </div>
+    </div>
+  </div>
+{/if}
+
 <style>
   .max-w-4xl {
     max-width: 56rem;
@@ -730,6 +831,70 @@
     font-weight: 700;
     color: var(--text-light);
     margin: 0;
+  }
+
+  .page-header-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+  }
+
+  .import-link-button {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 2.5rem;
+    height: 2.5rem;
+    background: none;
+    border: none;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    padding: 0;
+  }
+
+  .import-link-button:hover {
+    transform: translateY(-1px);
+  }
+
+  .import-link-button :global(.import-link-icon) {
+    width: 1.5rem;
+    height: 1.5rem;
+    color: var(--gold-color);
+  }
+
+  .import-textarea {
+    width: 100%;
+    box-sizing: border-box;
+    resize: vertical;
+    font: inherit;
+    font-size: 0.9375rem;
+    padding: 0.75rem;
+    border: 2px solid var(--gold-color);
+    border-radius: 0.5rem;
+    background-color: var(--card-color);
+    color: var(--text-dark);
+    margin-bottom: 1rem;
+  }
+
+  .import-textarea.has-error {
+    border-color: #dc3545;
+  }
+
+  .import-error {
+    color: #dc3545;
+    font-size: 0.875rem;
+    margin: -0.5rem 0 1rem 0;
+  }
+
+  .modal-button.import-button {
+    background-color: var(--gold-color);
+    color: var(--title-color);
+    border-color: var(--gold-color);
+  }
+
+  .modal-button.import-button:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 2px 4px rgba(212, 175, 55, 0.4);
   }
 
   .favorite-filter-button {

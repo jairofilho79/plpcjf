@@ -75,6 +75,57 @@ export function stripShareParams(search) {
 }
 
 /**
+ * Lê um link/texto colado pelo usuário («Importar link» em /listas) e devolve
+ * a query só com os params de share, pronta para `goto('/' + query)` — a
+ * home então importa pelo mesmo caminho do link clicado.
+ *
+ * Aceita a URL inteira, a query solta (com ou sem `?`) ou o texto que o
+ * WhatsApp cola junto com o link (legenda + link). Tenta o texto inteiro,
+ * depois cada linha, depois cada palavra: a primeira leitura válida vence.
+ * Válido = `s` e `n` não vazios (`s` vence) ou `sharepdfs` não vazio.
+ * @param {unknown} texto
+ * @returns {string | null} `'?s=...&n=...'`, `'?sharepdfs=...&sharename=...'` ou `null`
+ */
+export function extractShareQueryFromText(texto) {
+  if (typeof texto !== 'string') return null;
+  const inteiro = texto.trim();
+  if (inteiro === '') return null;
+
+  const candidatos = [inteiro, ...inteiro.split(/\r?\n/), ...inteiro.split(/\s+/)];
+  for (const candidato of candidatos) {
+    const query = shareQueryDoTrecho(candidato);
+    if (query) return query;
+  }
+  return null;
+}
+
+/**
+ * @param {string} trecho
+ * @returns {string | null}
+ */
+function shareQueryDoTrecho(trecho) {
+  const semFragmento = trecho.split('#')[0];
+  const interrogacao = semFragmento.indexOf('?');
+  const bruto = interrogacao >= 0 ? semFragmento.slice(interrogacao + 1) : semFragmento;
+  if (!bruto.includes('=')) return null;
+
+  const params = new URLSearchParams(bruto);
+  const s = params.get(SHORT_SHARE_PARAM);
+  const n = params.get(SHORT_SHARE_NAME_PARAM);
+  const soShare = new URLSearchParams();
+  if (s && n) {
+    soShare.set(SHORT_SHARE_PARAM, s);
+    soShare.set(SHORT_SHARE_NAME_PARAM, n);
+  } else if (params.get('sharepdfs')) {
+    soShare.set('sharepdfs', /** @type {string} */ (params.get('sharepdfs')));
+    soShare.set('sharename', params.get('sharename') || '');
+  } else {
+    return null;
+  }
+  return `?${soShare.toString()}`;
+}
+
+/**
  * Filtra os ids que o catálogo realmente conhece, preservando a ordem pedida.
  * Mesmo critério de `carousel.loadPlaylist`: casar por `pdfId`.
  * @param {string[]} pdfIds
