@@ -59,6 +59,10 @@ const DIAS_SEMANA = [
  * apara ~3% da borda da imagem quando ela é enviada junto com legenda, e essa
  * margem evita que o corte alcance o conteúdo do folheto.
  *
+ * Só esse wrapper (o alvo do html2canvas) pode ser `display:inline-block`:
+ * o html2canvas 1.4.1 não pinta os descendentes de um inline-block aninhado
+ * — o folheto saía só com a moldura e o QR como caixa branca.
+ *
  * @param {LouvorEntry[]} louvores
  * @param {FolhetoShareOptions} [options]
  * @returns {string}
@@ -88,7 +92,7 @@ export function generateFolhetoHtml(louvores, { shareUrl = null, qrDataUrl = nul
 
   const bandaQr = shareUrl && qrDataUrl
     ? `<div style="background:#4B2D2B;padding:12px 28px;text-align:center;border-top:2px solid #D4AF37;">
-      <div style="display:inline-block;padding:6px;background:#FFFFFF;border:1px solid #D4AF37;border-radius:6px;line-height:0;">
+      <div style="display:block;width:150px;margin:0 auto;padding:6px;background:#FFFFFF;border:1px solid #D4AF37;border-radius:6px;line-height:0;">
         <img src="${qrDataUrl}" width="150" height="150" alt="QR code do link da lista" style="display:block;width:150px;height:150px;" />
       </div>
       <div style="margin-top:6px;font-size:12px;font-weight:700;color:#D4AF37;letter-spacing:1px;">Abrir lista no PLPCG</div>
@@ -97,7 +101,7 @@ export function generateFolhetoHtml(louvores, { shareUrl = null, qrDataUrl = nul
     : '';
 
   return `<div style="padding:16px;background:#4B2D2B;display:inline-block;"><div style="
-    display:inline-block;
+    display:block;
     border:4px solid #D4AF37;
     padding:0;
     font-family:'Georgia','Times New Roman',serif;
@@ -151,6 +155,26 @@ export function generateFolhetoHtml(louvores, { shareUrl = null, qrDataUrl = nul
 }
 
 /**
+ * Espera as imagens do folheto terminarem de carregar (ou falhar) antes da
+ * captura. É `load`, não `img.decode()`: o Chrome adia o decode em aba oculta
+ * e a promise fica pendente para sempre — o folheto nunca saía.
+ * @param {HTMLImageElement[]} imgs
+ * @returns {Promise<void>}
+ */
+export async function aguardarImagens(imgs) {
+  await Promise.all(
+    imgs.map(img =>
+      img.complete && img.naturalWidth > 0
+        ? Promise.resolve()
+        : new Promise(resolve => {
+            img.onload = () => resolve(undefined);
+            img.onerror = () => resolve(undefined);
+          })
+    )
+  );
+}
+
+/**
  * @param {string} htmlString
  * @returns {Promise<Blob>}
  */
@@ -167,11 +191,7 @@ export async function generateFolhetoImage(htmlString) {
     const html2canvas = (await import('html2canvas')).default;
     const target = /** @type {HTMLElement} */ (container.firstElementChild);
     if (!target) throw new Error('Elemento do folheto não renderizado');
-    await Promise.all(
-      Array.from(container.querySelectorAll('img')).map(img =>
-        typeof img.decode === 'function' ? img.decode().catch(() => {}) : Promise.resolve()
-      )
-    );
+    await aguardarImagens(Array.from(container.querySelectorAll('img')));
     const canvas = await html2canvas(target, {
       scale: 2,
       useCORS: true,
