@@ -17,7 +17,13 @@
     openPdfNewTabOfflineFirst 
   } from '$lib/utils/pdfUtils';
   import { sharePlaylistLink, generatePlaylistShareUrl } from '$lib/utils/playlistUtils';
-  import { generateFolhetoHtml, generateFolhetoImage, shareFolheto } from '$lib/utils/folhetoUtils';
+  import {
+    generateFolhetoHtml,
+    generateFolhetoImage,
+    shareFolheto,
+    isShortShareUrl,
+    generateShareQrDataUrl
+  } from '$lib/utils/folhetoUtils';
   import {
     navigateLouvorToLeitor,
     ERRO_IDENTIFICADOR_INVALIDO
@@ -621,11 +627,12 @@
 
     try {
       const folhetoLouvores = $carousel.map(l => ({ nome: l.nome, numero: l.numero }));
-      const playlistName = savedPlaylistMatch?.nome || generateDefaultPlaylistName();
-      const html = generateFolhetoHtml(folhetoLouvores);
-      const imageBlob = await generateFolhetoImage(html);
       const pdfIds = $carousel.map(l => l.pdfId);
+      const playlistName = savedPlaylistMatch?.nome || generateDefaultPlaylistName();
       const shareUrl = generatePlaylistShareUrl(pdfIds, playlistName, $louvores);
+      const qrDataUrl = isShortShareUrl(shareUrl) ? await generateShareQrDataUrl(shareUrl) : null;
+      const html = generateFolhetoHtml(folhetoLouvores, { shareUrl, qrDataUrl });
+      const imageBlob = await generateFolhetoImage(html);
       await shareFolheto(imageBlob, shareUrl, playlistName);
     } catch (error) {
       console.error('Erro ao gerar folheto:', error);
