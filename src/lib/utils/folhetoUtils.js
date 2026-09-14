@@ -2,6 +2,44 @@
  * @typedef {{ nome?: string; numero?: string | number; pdfId?: string; }} LouvorEntry
  */
 
+/**
+ * @typedef {{ shareUrl?: string | null; qrDataUrl?: string | null }} FolhetoShareOptions
+ */
+
+/**
+ * @param {string} url
+ * @returns {boolean} `true` só para o formato curto (`?s=…`, spec short-id-share D7).
+ */
+export function isShortShareUrl(url) {
+  if (!url) return false;
+  try {
+    return new URL(url, 'https://plpcg.com').searchParams.has('s');
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * URL impressa sob o QR: sem esquema e sem `&n=…` (o nome já está no folheto).
+ * @param {string} shareUrl
+ * @returns {string}
+ */
+export function folhetoDisplayUrl(shareUrl) {
+  const semEsquema = shareUrl.replace(/^https?:\/\//, '');
+  const i = semEsquema.indexOf('&n=');
+  return i === -1 ? semEsquema : semEsquema.slice(0, i);
+}
+
+/**
+ * Data-URL PNG do QR do link curto (import dinâmico: só quem gera folheto paga).
+ * @param {string} shareUrl
+ * @returns {Promise<string>}
+ */
+export async function generateShareQrDataUrl(shareUrl) {
+  const QRCode = (await import('qrcode')).default;
+  return QRCode.toDataURL(shareUrl, { errorCorrectionLevel: 'M', margin: 0, width: 300 });
+}
+
 const DIAS_SEMANA = [
   'DOMINGO',
   'SEGUNDA-FEIRA',
@@ -13,10 +51,19 @@ const DIAS_SEMANA = [
 ];
 
 /**
+ * Monta o HTML do folheto de louvores. Quando `shareUrl` e `qrDataUrl` vêm
+ * preenchidos, acrescenta uma banda com o QR code do link curto e a URL
+ * exibida por extenso (paridade com o app v2).
+ *
+ * O retorno vem envolvido por um `<div>` com 16px de padding: o WhatsApp iOS
+ * apara ~3% da borda da imagem quando ela é enviada junto com legenda, e essa
+ * margem evita que o corte alcance o conteúdo do folheto.
+ *
  * @param {LouvorEntry[]} louvores
+ * @param {FolhetoShareOptions} [options]
  * @returns {string}
  */
-export function generateFolhetoHtml(louvores) {
+export function generateFolhetoHtml(louvores, { shareUrl = null, qrDataUrl = null } = {}) {
   const agora = new Date();
   const diaSemana = DIAS_SEMANA[agora.getDay()];
   const dia = String(agora.getDate()).padStart(2, '0');
@@ -39,7 +86,17 @@ export function generateFolhetoHtml(louvores) {
     })
     .join('');
 
-  return `<div style="
+  const bandaQr = shareUrl && qrDataUrl
+    ? `<div style="background:#4B2D2B;padding:12px 28px;text-align:center;border-top:2px solid #D4AF37;">
+      <div style="display:inline-block;padding:6px;background:#FFFFFF;border:1px solid #D4AF37;border-radius:6px;line-height:0;">
+        <img src="${qrDataUrl}" width="150" height="150" alt="QR code do link da lista" style="display:block;width:150px;height:150px;" />
+      </div>
+      <div style="margin-top:6px;font-size:12px;font-weight:700;color:#D4AF37;letter-spacing:1px;">Abrir lista no PLPCG</div>
+      <div style="margin-top:4px;font-size:11px;color:#A89080;letter-spacing:0.5px;">${folhetoDisplayUrl(shareUrl)}</div>
+    </div>`
+    : '';
+
+  return `<div style="padding:16px;background:#4B2D2B;display:inline-block;"><div style="
     display:inline-block;
     border:4px solid #D4AF37;
     padding:0;
@@ -64,6 +121,7 @@ export function generateFolhetoHtml(louvores) {
       <div style="flex:1;padding:14px 24px;font-weight:700;color:#D4AF37;font-size:14px;text-transform:uppercase;letter-spacing:1.5px;">Nome do Hino</div>
     </div>
     ${linhas}
+    ${bandaQr}
     <div style="
       background:#4B2D2B;
       height:6px;
@@ -89,7 +147,7 @@ export function generateFolhetoHtml(louvores) {
         letter-spacing:1px;
       ">Bom culto!</div>
     </div>
-  </div>`;
+  </div></div>`;
 }
 
 /**
@@ -109,6 +167,11 @@ export async function generateFolhetoImage(htmlString) {
     const html2canvas = (await import('html2canvas')).default;
     const target = /** @type {HTMLElement} */ (container.firstElementChild);
     if (!target) throw new Error('Elemento do folheto não renderizado');
+    await Promise.all(
+      Array.from(container.querySelectorAll('img')).map(img =>
+        typeof img.decode === 'function' ? img.decode().catch(() => {}) : Promise.resolve()
+      )
+    );
     const canvas = await html2canvas(target, {
       scale: 2,
       useCORS: true,
@@ -126,6 +189,10 @@ export async function generateFolhetoImage(htmlString) {
 }
 
 /**
+ * Compartilha a imagem do folheto. Quando `shareUrl` é o formato curto
+ * (`?s=…`), a legenda (`text`) traz o nome da playlist e a URL, para que o
+ * app de destino (ex.: WhatsApp) a exiba junto da imagem.
+ *
  * @param {Blob} imageBlob
  * @param {string} shareUrl
  * @param {string} playlistName
@@ -134,8 +201,11 @@ export async function generateFolhetoImage(htmlString) {
 export async function shareFolheto(imageBlob, shareUrl, playlistName) {
   try {
     const file = new File([imageBlob], `folheto-${playlistName.replace(/[^a-z0-9]/gi, '_')}.png`, { type: 'image/png' });
-    if (navigator.canShare && navigator.canShare({ files: [file] }) && navigator.share) {
-      await navigator.share({ files: [file], title: 'Folheto de Louvores' });
+    /** @type {{ files: File[]; title: string; text?: string }} */
+    const shareData = { files: [file], title: 'Folheto de Louvores' };
+    if (isShortShareUrl(shareUrl)) shareData.text = `${playlistName}\n\n${shareUrl}`;
+    if (navigator.canShare && navigator.canShare(shareData) && navigator.share) {
+      await navigator.share(shareData);
       return;
     }
   } catch (e) {
