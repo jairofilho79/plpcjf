@@ -3,8 +3,13 @@ import { describe, it } from 'node:test';
 import { generatePlaylistShareUrl } from './playlistUtils.js';
 import {
   encodeSharePdfIds,
+  encodeShortShareIds,
+  isShortId,
   parseSharePdfIds,
+  parseShortShareIds,
   resolveKnownPdfIds,
+  resolveShortIds,
+  shortIdsForPdfIds,
   stripShareParams
 } from './playlistShare.js';
 
@@ -103,5 +108,77 @@ describe('generatePlaylistShareUrl', () => {
     } finally {
       delete globalThis.window;
     }
+  });
+});
+
+const CATALOGO = [
+  { pdfId: ID_CIFRA, shortId: '0000', nome: 'A' },
+  { pdfId: ID_GESTOS, shortId: '1a2f', nome: 'B' },
+  { pdfId: 'sem-short', nome: 'C' }
+];
+
+describe('isShortId', () => {
+  it('aceita 4 a 8 hex minúsculos, inclusive "0000"', () => {
+    assert.equal(isShortId('0000'), true);
+    assert.equal(isShortId('1a2f'), true);
+    assert.equal(isShortId('10000'), true);
+  });
+  it('recusa número, maiúscula, curto, longo, vazio', () => {
+    assert.equal(isShortId(0), false);
+    assert.equal(isShortId('1A2F'), false);
+    assert.equal(isShortId('abc'), false);
+    assert.equal(isShortId('123456789'), false);
+    assert.equal(isShortId(''), false);
+  });
+});
+
+describe('encodeShortShareIds / parseShortShareIds', () => {
+  it('ida e volta preserva ordem, repetição e zeros à esquerda', () => {
+    const s = encodeShortShareIds(['0000', '1a2f', '0000']);
+    assert.equal(s, '0000-1a2f-0000');
+    const url = new URL(`https://plpcg.com/?s=${s}&n=x`);
+    assert.deepEqual(parseShortShareIds(url.searchParams.get('s')), ['0000', '1a2f', '0000']);
+  });
+  it('emite minúsculo e descarta inválidos', () => {
+    assert.equal(encodeShortShareIds(['00AB', 'zz', '', 7]), '00ab');
+  });
+  it('leitura normaliza maiúsculas e ignora tokens fora do padrão', () => {
+    assert.deepEqual(parseShortShareIds('00AB-zz--1a2f-123456789'), ['00ab', '1a2f']);
+  });
+  it('param ausente ou vazio → []', () => {
+    assert.deepEqual(parseShortShareIds(null), []);
+    assert.deepEqual(parseShortShareIds(''), []);
+  });
+});
+
+describe('resolveShortIds', () => {
+  it('resolve para pdfIds na ordem pedida, ignorando desconhecidos', () => {
+    assert.deepEqual(resolveShortIds(['1a2f', 'ffff', '0000'], CATALOGO), [ID_GESTOS, ID_CIFRA]);
+  });
+  it('deduplica como resolveKnownPdfIds (a lista salva não repete)', () => {
+    assert.deepEqual(resolveShortIds(['0000', '0000'], CATALOGO), [ID_CIFRA]);
+  });
+  it('compara como string: "0000" não casa com 0', () => {
+    assert.deepEqual(resolveShortIds(['0000'], [{ pdfId: 'x', shortId: 0 }]), []);
+  });
+});
+
+describe('shortIdsForPdfIds', () => {
+  it('devolve os shortIds na ordem quando todos existem', () => {
+    assert.deepEqual(shortIdsForPdfIds([ID_GESTOS, ID_CIFRA], CATALOGO), ['1a2f', '0000']);
+  });
+  it('null se algum pdfId não tem shortId ou não está no catálogo', () => {
+    assert.equal(shortIdsForPdfIds([ID_CIFRA, 'sem-short'], CATALOGO), null);
+    assert.equal(shortIdsForPdfIds([ID_CIFRA, 'nunca-vi'], CATALOGO), null);
+  });
+  it('lista vazia → null (não há o que encurtar)', () => {
+    assert.equal(shortIdsForPdfIds([], CATALOGO), null);
+  });
+});
+
+describe('stripShareParams com o formato curto', () => {
+  it('remove s e n e preserva o resto', () => {
+    assert.equal(stripShareParams('?s=0000-1a2f&n=Culto&utm_source=wa'), '?utm_source=wa');
+    assert.equal(stripShareParams('?s=0000&n=x'), '');
   });
 });

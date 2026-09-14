@@ -18,28 +18,46 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { generatePlaylistShareUrl } from './playlistUtils.js';
-import { parseSharePdfIds, resolveKnownPdfIds, stripShareParams } from './playlistShare.js';
+import {
+  parseSharePdfIds,
+  parseShortShareIds,
+  resolveKnownPdfIds,
+  resolveShortIds,
+  SHORT_SHARE_PARAM,
+  SHORT_SHARE_NAME_PARAM,
+  stripShareParams
+} from './playlistShare.js';
 
 /** Dois pdfId reais do acervo (Base64 padrão do caminho em UTF-8). */
 const ID_A = 'MDQxMTIwMjUvQ29uaGXDp2Ftb3MgZSBwcm9zc2lnYW1vcy9DaWZyYS5wZGY=';
 const ID_B = 'MDQxMTIwMjUvQ29uaGXDp2Ftb3MgZSBwcm9zc2lnYW1vcy9HZXN0b3MgQ0lBcy5wZGY=';
 
 /**
- * Reproduz a leitura de src/routes/+page.svelte.
+ * Reproduz a leitura de src/routes/+page.svelte: `s` (curto) vence, mas só
+ * quando `n` também vem e não é vazio — os dois são obrigatórios no formato
+ * curto. Sem isso, `sharepdfs` como sempre. Recebe o catálogo porque `s`
+ * precisa dele.
  *
  * Tarefa 10: antes duplicava aqui a lógica de `split(',')` e um segundo
  * `decodeURIComponent(sharename)` — o próprio bug do URIError vivia nessa
  * duplicação. Agora chama a função de produção extraída (`parseSharePdfIds`)
  * e não decodifica `sharename` de novo, então este helper exercita o mesmo
  * código que roda no navegador, não uma cópia dele.
+ * @param {string} href
+ * @param {Array<{pdfId?: string, shortId?: unknown}>} [louvores]
  */
-function lerLinkDeLista(href) {
+function lerLinkDeLista(href, louvores = []) {
   const u = new URL(href, 'https://plpcg.com');
   const params = new URLSearchParams(u.search);
+  const nomeCurto = params.get(SHORT_SHARE_NAME_PARAM);
+  const temCurto = params.has(SHORT_SHARE_PARAM) && nomeCurto !== null && nomeCurto !== '';
+  if (temCurto) {
+    const pdfIds = resolveShortIds(parseShortShareIds(params.get(SHORT_SHARE_PARAM)), louvores);
+    return { pdfIds, sharename: nomeCurto };
+  }
   const pdfIds = parseSharePdfIds(params.get('sharepdfs'));
   // URLSearchParams.get() já decodificou uma vez — sem decode extra (D-6).
-  const nome = params.get('sharename') || undefined;
-  return { pdfIds, nome };
+  return { pdfIds, sharename: params.get('sharename') };
 }
 
 describe('§5.1 escrita do link', () => {
@@ -108,17 +126,17 @@ describe('§5.1 leitura do link', () => {
     // carrossel já ter carregado e ANTES de savedPlaylists.savePlaylist: a
     // lista abria mas não era salva, e a URL ficava suja (D-6). Passa a ser:
     // sem o segundo decode, o nome chega legível e a lista é salva.
-    assert.equal(lerLinkDeLista(generatePlaylistShareUrl([ID_A], 'Louvor 100%')).nome, 'Louvor 100%');
+    assert.equal(lerLinkDeLista(generatePlaylistShareUrl([ID_A], 'Louvor 100%')).sharename, 'Louvor 100%');
     assert.equal(
-      lerLinkDeLista(generatePlaylistShareUrl([ID_A], 'Culto 50%off')).nome,
+      lerLinkDeLista(generatePlaylistShareUrl([ID_A], 'Culto 50%off')).sharename,
       'Culto 50%off'
     );
   });
 
   it('C8: nomes sem % passam ilesos', () => {
-    assert.equal(lerLinkDeLista(generatePlaylistShareUrl([ID_A], 'Ação de Graças')).nome, 'Ação de Graças');
+    assert.equal(lerLinkDeLista(generatePlaylistShareUrl([ID_A], 'Ação de Graças')).sharename, 'Ação de Graças');
     assert.equal(
-      lerLinkDeLista(generatePlaylistShareUrl([ID_A], 'lista 04/11/2025 10:20:30')).nome,
+      lerLinkDeLista(generatePlaylistShareUrl([ID_A], 'lista 04/11/2025 10:20:30')).sharename,
       'lista 04/11/2025 10:20:30'
     );
   });
@@ -128,7 +146,7 @@ describe('§5.1 leitura do link', () => {
     // segunda decodificação, corrompendo-o num espaço. Passa a ser: só o
     // decode do URLSearchParams.get() roda, e o '%20' literal volta intacto.
     assert.equal(
-      lerLinkDeLista(generatePlaylistShareUrl([ID_A], 'Ensaio %20 teste')).nome,
+      lerLinkDeLista(generatePlaylistShareUrl([ID_A], 'Ensaio %20 teste')).sharename,
       'Ensaio %20 teste'
     );
   });
@@ -164,5 +182,49 @@ describe('§5.1 leitura do link', () => {
     assert.equal(restoParams.get('utm_source'), 'whatsapp');
     assert.equal(restoParams.get('pesquisa'), 'amor');
     assert.equal(restoParams.has('sharepdfs'), false);
+  });
+});
+
+describe('contrato do link curto (?s=&n=) — espelhado no app v2', () => {
+  const catalogo = [
+    { pdfId: ID_A, shortId: '0000' },
+    { pdfId: ID_B, shortId: '1a2f' }
+  ];
+
+  it('emite curto quando todos têm shortId: ids minúsculos com -, nome encodado', () => {
+    const url = generatePlaylistShareUrl([ID_B, ID_A], 'Culto de domingo', catalogo);
+    assert.equal(url, '/?s=1a2f-0000&n=Culto%20de%20domingo');
+  });
+
+  it('emite legado quando falta shortId em algum id', () => {
+    const url = generatePlaylistShareUrl([ID_A, ID_B], 'X', [{ pdfId: ID_A, shortId: '0000' }]);
+    assert.match(url, /^\/\?sharepdfs=/);
+    assert.equal(new URL(url, 'https://plpcg.com').searchParams.has('s'), false);
+  });
+
+  it('lê o link curto: s vence os params legados presentes na mesma URL', () => {
+    const u = new URL('https://plpcg.com/?s=0000-1A2F-zzzz&n=Culto&sharepdfs=lixo&sharename=outro');
+    const ids = resolveShortIds(parseShortShareIds(u.searchParams.get('s')), catalogo);
+    assert.deepEqual(ids, [ID_A, ID_B]);
+    assert.equal(u.searchParams.get('n'), 'Culto');
+  });
+
+  it('"0000" atravessa como string com zeros', () => {
+    const url = generatePlaylistShareUrl([ID_A], 'x', catalogo);
+    assert.equal(url, '/?s=0000&n=x');
+  });
+
+  it('leitura: link curto resolve pelo catálogo e usa n como nome', () => {
+    const lido = lerLinkDeLista('/?s=1a2f-0000&n=Culto%20de%20domingo', catalogo);
+    assert.deepEqual(lido.pdfIds, [ID_B, ID_A]);
+    assert.equal(lido.sharename, 'Culto de domingo');
+  });
+
+  it('s sem n não é share curto (n é obrigatório no contrato)', () => {
+    const lido = lerLinkDeLista('/?s=0000', catalogo);
+    assert.deepEqual(lido.pdfIds, []);
+    assert.equal(lido.sharename, null);
+    const vazio = lerLinkDeLista('/?s=0000&n=', catalogo);
+    assert.deepEqual(vazio.pdfIds, []);
   });
 });

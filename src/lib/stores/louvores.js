@@ -8,6 +8,7 @@ import {
   quotaErrorMessage
 } from '$lib/offline/storage/storageQuota.js';
 import { dismissSnackbar, showErrorSnackbar, showInfoSnackbar, showSuccessSnackbar } from '$lib/utils/appSnackbar.js';
+import { prepareLouvoresManifestPayload } from '$lib/utils/manifestPayload.js';
 import {
   LOUVORES_MANIFEST_CHECKSUM_URL,
   isManifestSyncBlocked,
@@ -62,47 +63,6 @@ const MANIFEST_RETRY_BASE_MS = 450;
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-/**
- * Normaliza linhas e descarta só o que é claramente inútil (sem pdfId válido).
- * Nome vira string (inclui número/boolean do JSON) para não rejeitar dados válidos por tipo.
- *
- * @param {unknown} raw
- * @returns {any[] | null} null se não houver nenhuma linha aplicável
- */
-export function prepareLouvoresManifestPayload(raw) {
-  if (!Array.isArray(raw) || raw.length === 0) return null;
-  const out = [];
-  for (const item of raw) {
-    if (!item || typeof item !== 'object') continue;
-    const pid = /** @type {{ pdfId?: unknown }} */ (item).pdfId;
-    if (pid === null || pid === undefined) continue;
-    if (typeof pid === 'string') {
-      if (pid.trim() === '') continue;
-    } else if (typeof pid === 'number') {
-      if (!Number.isFinite(pid)) continue;
-    } else {
-      continue;
-    }
-
-    let nome = '';
-    try {
-      const nomeRaw = /** @type {{ nome?: unknown }} */ (item).nome;
-      if (nomeRaw === null || nomeRaw === undefined) {
-        nome = '';
-      } else if (typeof nomeRaw === 'string') {
-        nome = nomeRaw;
-      } else {
-        nome = String(nomeRaw);
-      }
-    } catch {
-      continue;
-    }
-
-    out.push({ ...item, nome, pdfId: pid });
-  }
-  return out.length > 0 ? out : null;
 }
 
 /**

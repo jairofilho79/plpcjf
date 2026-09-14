@@ -5,6 +5,7 @@
   import { carousel } from '$lib/stores/carousel';
   import { pdfViewer } from '$lib/stores/pdfViewer';
   import { savedPlaylists } from '$lib/stores/savedPlaylists';
+  import { louvores } from '$lib/stores/louvores';
   import { getPdfRelPath } from '$lib/utils/pathUtils';
   import GestureButton from '$lib/components/GestureButton.svelte';
   import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
@@ -535,8 +536,8 @@
     
     const pdfIds = $carousel.map(/** @type {{ pdfId: any; }} */ l => l.pdfId);
     const playlistName = savedPlaylistMatch?.nome || generateDefaultPlaylistName();
-    const shareUrl = generatePlaylistShareUrl(pdfIds, playlistName);
-    
+    const shareUrl = generatePlaylistShareUrl(pdfIds, playlistName, $louvores);
+
     try {
       // @ts-ignore – sharePlaylistLink can return { copied: boolean } despite void typing
       const result = await sharePlaylistLink(shareUrl, playlistName);
@@ -619,12 +620,12 @@
     isGeneratingFolheto = true;
 
     try {
-      const louvores = $carousel.map(l => ({ nome: l.nome, numero: l.numero }));
+      const folhetoLouvores = $carousel.map(l => ({ nome: l.nome, numero: l.numero }));
       const playlistName = savedPlaylistMatch?.nome || generateDefaultPlaylistName();
-      const html = generateFolhetoHtml(louvores);
+      const html = generateFolhetoHtml(folhetoLouvores);
       const imageBlob = await generateFolhetoImage(html);
       const pdfIds = $carousel.map(l => l.pdfId);
-      const shareUrl = generatePlaylistShareUrl(pdfIds, playlistName);
+      const shareUrl = generatePlaylistShareUrl(pdfIds, playlistName, $louvores);
       await shareFolheto(imageBlob, shareUrl, playlistName);
     } catch (error) {
       console.error('Erro ao gerar folheto:', error);

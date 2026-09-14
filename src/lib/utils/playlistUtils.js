@@ -1,4 +1,10 @@
-import { encodeSharePdfIds } from './playlistShare.js';
+import {
+  encodeSharePdfIds,
+  encodeShortShareIds,
+  SHORT_SHARE_NAME_PARAM,
+  SHORT_SHARE_PARAM,
+  shortIdsForPdfIds
+} from './playlistShare.js';
 
 /**
  * Share playlist link using Web Share API or clipboard fallback
@@ -50,17 +56,26 @@ export async function sharePlaylistLink(url, title) {
 }
 
 /**
- * Generate share URL for a playlist
+ * Generate share URL for a playlist.
+ *
+ * Formato curto (`?s=…&n=…`) quando todos os pdfIds têm `shortId` no
+ * catálogo; senão o legado `?sharepdfs=…&sharename=…`, que todo receptor
+ * antigo já lê. Sem `louvores` cai sempre no legado.
  * @param {string[]} pdfIds - Array of PDF IDs in order
  * @param {string} nome - Playlist name
+ * @param {Array<{pdfId?: string, shortId?: unknown}>} [louvores] - catálogo
  * @returns {string}
  */
-export function generatePlaylistShareUrl(pdfIds, nome) {
+export function generatePlaylistShareUrl(pdfIds, nome, louvores = []) {
   const baseUrl = typeof window !== 'undefined' ? window.location.origin : '';
+  const nameParam = encodeURIComponent(nome);
+  const shortIds = shortIdsForPdfIds(pdfIds, louvores);
+  if (shortIds) {
+    return `${baseUrl}/?${SHORT_SHARE_PARAM}=${encodeShortShareIds(shortIds)}&${SHORT_SHARE_NAME_PARAM}=${nameParam}`;
+  }
   // Cada id é codificado à parte para proteger o `+` do base64 (§2.4b da
   // investigação). A leitura continua aceitando o formato cru dos links antigos.
   const pdfIdsParam = encodeSharePdfIds(pdfIds);
-  const nameParam = encodeURIComponent(nome);
   return `${baseUrl}/?sharepdfs=${pdfIdsParam}&sharename=${nameParam}`;
 }
 
