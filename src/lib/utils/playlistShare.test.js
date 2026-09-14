@@ -4,6 +4,7 @@ import { generatePlaylistShareUrl } from './playlistUtils.js';
 import {
   encodeSharePdfIds,
   encodeShortShareIds,
+  extractShareQueryFromText,
   isShortId,
   parseSharePdfIds,
   parseShortShareIds,
@@ -180,5 +181,58 @@ describe('stripShareParams com o formato curto', () => {
   it('remove s e n e preserva o resto', () => {
     assert.equal(stripShareParams('?s=0000-1a2f&n=Culto&utm_source=wa'), '?utm_source=wa');
     assert.equal(stripShareParams('?s=0000&n=x'), '');
+  });
+});
+
+describe('extractShareQueryFromText', () => {
+  it('aceita o link curto completo e devolve só os params de share', () => {
+    assert.equal(
+      extractShareQueryFromText('https://plpcg.com/?s=00c0-0013&n=Culto%20de%20domingo'),
+      '?s=00c0-0013&n=Culto+de+domingo'
+    );
+  });
+
+  it('aceita a query solta, com ou sem ?', () => {
+    assert.equal(extractShareQueryFromText('?s=00c0&n=Teste'), '?s=00c0&n=Teste');
+    assert.equal(extractShareQueryFromText('s=00c0&n=Teste'), '?s=00c0&n=Teste');
+  });
+
+  it('acha o link no meio do texto colado do WhatsApp (legenda + link)', () => {
+    const colado = 'Culto de domingo\n\nhttps://plpcg.com/?s=00c0-0013&n=Culto%20de%20domingo\n';
+    assert.equal(extractShareQueryFromText(colado), '?s=00c0-0013&n=Culto+de+domingo');
+  });
+
+  it('descarta utm/fragmento e mantém só s e n', () => {
+    assert.equal(
+      extractShareQueryFromText('https://plpcg.com/?utm_source=wa&s=00c0&n=X#topo'),
+      '?s=00c0&n=X'
+    );
+  });
+
+  it('s vence quando o texto traz os dois formatos', () => {
+    assert.equal(
+      extractShareQueryFromText(`https://plpcg.com/?sharepdfs=${ID_CIFRA}&sharename=Velho&s=00c0&n=Novo`),
+      '?s=00c0&n=Novo'
+    );
+  });
+
+  it('aceita o formato legado e preserva o + dos ids', () => {
+    const q = extractShareQueryFromText(
+      `https://plpcg.com/?sharepdfs=${encodeSharePdfIds([ID_COM_MAIS])}&sharename=Lista`
+    );
+    assert.ok(q);
+    const params = new URLSearchParams(q);
+    assert.deepEqual(parseSharePdfIds(params.get('sharepdfs')), [ID_COM_MAIS]);
+    assert.equal(params.get('sharename'), 'Lista');
+  });
+
+  it('devolve null sem params de share, com s sem n, ou com nome vazio', () => {
+    assert.equal(extractShareQueryFromText(''), null);
+    assert.equal(extractShareQueryFromText('   '), null);
+    assert.equal(extractShareQueryFromText('Culto de domingo'), null);
+    assert.equal(extractShareQueryFromText('https://plpcg.com/?viewId=abc'), null);
+    assert.equal(extractShareQueryFromText('https://plpcg.com/?s=00c0'), null);
+    assert.equal(extractShareQueryFromText('https://plpcg.com/?s=00c0&n='), null);
+    assert.equal(extractShareQueryFromText(42), null);
   });
 });
